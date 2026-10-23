@@ -1,0 +1,44 @@
+name: Test and build PayPamin Flow
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install Tkinter on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+      - name: Install application and build dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Verify desktop imports
+        run: python -c "import tkinter; import fitz; import reportlab; import PIL; import paypamin_flow"
+      - name: Build native application
+        run: pyinstaller paypamin_flow.spec --clean --noconfirm
+      - name: Upload native application
+        uses: actions/upload-artifact@v4
+        with:
+          name: PayPamin-Flow-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error

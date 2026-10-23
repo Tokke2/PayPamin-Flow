@@ -1,0 +1,12 @@
+"""Central product information for PayPamin Flow."""
+
+APP_NAME = "PayPamin Flow"
+APP_SLUG = "paypamin-flow"
+APP_ID = "se.paypamin.flow"
+APP_VERSION = "0.5.0"
+APP_AUTHOR = "Rickard Länkvist"
+COPYRIGHT_YEAR = "2026"
+APP_COPYRIGHT = f"Copyright © {COPYRIGHT_YEAR} {APP_AUTHOR}"
+APP_DESCRIPTION = "Local invoice and payment reminder app"
+APP_DESCRIPTION_SV = "Lokal app för fakturor och betalningspåminnelser"
+SUPPORTED_PLATFORMS = "Windows · macOS · Linux"
