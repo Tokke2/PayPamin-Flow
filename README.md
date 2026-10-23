@@ -18,6 +18,7 @@ Lokal skrivbordsapp för **Windows, macOS och Linux** som läser enskilda Fortno
 - Samma egen applikationsikon i fönster, dialoger, Windows-exe, macOS-app och Linux-programmeny.
 - **Autostart vid inloggning** på Windows, macOS och Linux. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
+- **Uppdateringskontroll mot GitHub Releases** vid start och via en manuell knapp, med länk till nedladdning när en nyare stabil version finns.
 - PDF sparas lokalt och öppnas i datorns standardprogram. Fellogg öppnas via **Visa fellogg**.
 
 ## Starta från källkod
@@ -78,6 +79,14 @@ python -m pip install -r requirements.txt
 Välj **Inställningar → Språk → Svenska / English** och spara. Språkbytet sker direkt utan omstart och sparas i den lokala databasen. Svenska är standard vid första starten.
 
 Språkvalet gäller huvudfönster, filter, statusar, formulär, PDF-förhandsgranskning, felmeddelanden, belopp och datum samt nya påminnelse-PDF:er. Befintliga fakturor, PDF-mallar, logotypval och autostart fungerar med båda språken. Redan skapade PDF-filer ändras inte i efterhand.
+
+## Uppdateringar
+
+Appen kontrollerar automatiskt den senaste stabila GitHub-releasen en kort stund efter start. Du kan även klicka **Sök efter uppdateringar** i huvudfönstrets överkant. Om en nyare version finns visas installerad och tillgänglig version samt en knapp som öppnar release-sidan.
+
+Kontrollen använder GitHubs publika API och skickar inga faktura-, kund- eller inställningsuppgifter. Om nätverket eller GitHub inte kan nås fortsätter appen att fungera; ett automatiskt fel loggas utan popup, medan en manuell kontroll visar ett felmeddelande.
+
+**Uppdateringar laddas inte ner eller installeras automatiskt.** Öppna release-sidan, ladda ner önskad version och installera den enligt instruktionerna för ditt operativsystem. Säkerhetskopiera den lokala databasen före uppdatering.
 
 ## Valuta / Currency
 

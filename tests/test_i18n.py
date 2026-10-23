@@ -9,7 +9,12 @@ from i18n import _, format_long_date, format_money, get_language, language_code,
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TRANSLATED_MODULES = [ROOT / "paypamin_flow.py", ROOT / "autostart.py", ROOT / "invoice_parser.py"]
+TRANSLATED_MODULES = [
+    ROOT / "paypamin_flow.py",
+    ROOT / "autostart.py",
+    ROOT / "invoice_parser.py",
+    ROOT / "update_checker.py",
+]
 
 
 def format_fields(text):

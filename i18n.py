@@ -83,6 +83,27 @@ _ENGLISH = {
     "Status / nästa steg": "Status / next step",
     "Påminnelseavgift": "Reminder fee",
 
+    # GitHub release update checks
+    "Sök efter uppdateringar": "Check for updates",
+    "Söker…": "Checking…",
+    "Uppdateringskontroll": "Update check",
+    "En uppdateringskontroll pågår redan.": "An update check is already running.",
+    "Kunde inte söka efter uppdateringar": "Could not check for updates",
+    "Ett oväntat fel uppstod vid uppdateringskontrollen.": "An unexpected error occurred during the update check.",
+    "Ingen uppdatering tillgänglig": "No update available",
+    "Ingen nyare version finns.\n\nInstallerad version: {current}\nSenaste release: {latest}": "No newer version is available.\n\nInstalled version: {current}\nLatest release: {latest}",
+    "Uppdatering tillgänglig": "Update available",
+    "Version {version} är tillgänglig": "Version {version} is available",
+    "Installerad version: {current}\nSenaste release: {latest}\n\nUppdateringen laddas inte ner eller installeras automatiskt.": "Installed version: {current}\nLatest release: {latest}\n\nThe update is not downloaded or installed automatically.",
+    "Öppna nedladdningssida": "Open download page",
+    "Kunde inte öppna webbläsaren": "Could not open the browser",
+    "Öppna nedladdningssidan manuellt:\n{url}": "Open the download page manually:\n{url}",
+    "Ingen publicerad stabil release hittades på GitHub.": "No published stable release was found on GitHub.",
+    "GitHub tillåter inte fler uppdateringskontroller just nu. Försök igen senare.": "GitHub is not allowing more update checks right now. Try again later.",
+    "GitHub returnerade HTTP {status} vid uppdateringskontrollen.": "GitHub returned HTTP {status} during the update check.",
+    "Kunde inte kontakta GitHub. Kontrollera internetanslutningen och försök igen.": "Could not contact GitHub. Check your internet connection and try again.",
+    "GitHub returnerade ett oväntat svar vid uppdateringskontrollen.": "GitHub returned an unexpected response during the update check.",
+
     # Dependencies and startup
     "Förbereder appen": "Preparing the app",
     "Installerar saknade Python-tillägg": "Installing missing Python add-ons",

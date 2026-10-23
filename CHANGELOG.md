@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added automatic GitHub release checks shortly after startup and a **Check for updates** button in the main window.
+- Added numeric stable-version comparison, bilingual progress/result/error dialogs and a download-page button when a newer release exists.
+- Kept update installation manual and made automatic network failures unobtrusive; no invoice or customer data is sent with the public API request.
+- Added headless tests for release responses, version ordering, network/HTTP failures and release URL validation.
+
 ## 0.5.0 — 2026-10-23
 
 - Published release v0.5.0 with per-invoice currencies, Swedish and English interfaces, localized reminder PDFs, native per-user autostart and Windows/macOS/Linux build support.
