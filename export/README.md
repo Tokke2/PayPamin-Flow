@@ -1,0 +1,1 @@
+Generated reminder PDFs are saved here locally. Do not commit exported customer reminders.

@@ -1,0 +1,1 @@
+Place SVG logos here locally. The directory is scanned by the app dropdown. Do not commit brand/customer logos unless you have permission and intend to publish them.

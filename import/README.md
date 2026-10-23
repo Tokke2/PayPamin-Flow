@@ -1,0 +1,1 @@
+Put individual invoice PDFs here, then choose **Skanna importmapp** in the app. Do not commit customer invoices.
