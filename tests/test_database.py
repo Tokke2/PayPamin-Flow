@@ -58,6 +58,7 @@ class DatabaseTests(unittest.TestCase):
 
                 app.init_db()
                 app.init_db()  # Migration must also be safe on subsequent starts.
+                self.assertEqual(app.setting('update_auto'), '1')
 
                 with sqlite3.connect(database_path) as db:
                     columns = {row[1] for row in db.execute("PRAGMA table_info(invoices)")}

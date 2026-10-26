@@ -20,7 +20,8 @@ from autostart import AutostartError, autostart_location, set_autostart
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
 from invoice_parser import extract_pdf, normalize_amount, normalize_date, parse_invoice_text
-from update_checker import UpdateCheckError, fetch_latest_release, is_newer_version
+from update_checker import UPDATE_CHECK_INTERVAL_MS, UpdateCheckError, fetch_latest_release, is_newer_version
+from update_installer import UpdateInstallError, launch_update, stage_update
 
 APP_DIR = Path.home() / ".paminnelseapp"
 APP_DIR.mkdir(parents=True,exist_ok=True)
@@ -92,7 +93,7 @@ def init_db():
             id INTEGER PRIMARY KEY, vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
             x0 REAL NOT NULL, y0 REAL NOT NULL, x1 REAL NOT NULL, y1 REAL NOT NULL, created TEXT NOT NULL)""")
         db.execute("CREATE TABLE IF NOT EXISTS vendor_logos (vendor TEXT PRIMARY KEY, logo_file TEXT NOT NULL DEFAULT '')")
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','language':'sv'}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','language':'sv'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
 
@@ -136,11 +137,11 @@ class ReminderApp(tk.Tk):
         set_language(setting('language') or 'sv')
         super().__init__(); self.title(APP_NAME); self.geometry('1180x700'); self.minsize(940,560)
         self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
-        self._update_check_running=False;self.update_button=None
+        self._update_check_running=False;self._update_install_running=False;self._update_helper_process=None;self.update_button=None
         self.build(); self.refresh()
         self.after(100,self.sync_autostart)
         self.after(250,self.check_python_addons)
-        self.after(2000,lambda:self.check_for_updates(manual=False))
+        self.after(2000,self._run_scheduled_update_check)
 
     def _configure_icons(self):
         """Use the same product icon for the window, dialogs and OS taskbar/dock."""
@@ -177,16 +178,26 @@ class ReminderApp(tk.Tk):
         ttk.Label(form,text=_('Skapare: {author}',author=APP_AUTHOR)).pack(pady=(4,0))
         ttk.Button(form,text=_('Stäng'),command=w.destroy,style='Accent.TButton').pack(pady=(20,0))
 
+    def _run_scheduled_update_check(self):
+        if setting('update_auto')=='1':self.check_for_updates(manual=False)
+        self.after(UPDATE_CHECK_INTERVAL_MS,self._run_scheduled_update_check)
+
     def _set_update_check_busy(self,busy):
         button=getattr(self,'update_button',None)
         if not button:return
         try:button.configure(text=_('Söker…') if busy else _('Sök efter uppdateringar'),state='disabled' if busy else 'normal')
         except tk.TclError:pass
 
+    def _set_update_install_busy(self,busy):
+        button=getattr(self,'update_button',None)
+        if not button:return
+        try:button.configure(text=_('Uppdaterar…') if busy else _('Sök efter uppdateringar'),state='disabled' if busy else 'normal')
+        except tk.TclError:pass
+
     def check_for_updates(self,manual=False):
         """Check GitHub in a worker thread and report back through Tk's event loop."""
-        if self._update_check_running:
-            if manual:messagebox.showinfo(_('Uppdateringskontroll'),_('En uppdateringskontroll pågår redan.'),parent=self)
+        if self._update_check_running or self._update_install_running:
+            if manual:messagebox.showinfo(_('Uppdateringskontroll'),_('En uppdateringskontroll eller installation pågår redan.'),parent=self)
             return
         self._update_check_running=True;self._set_update_check_busy(True)
         result_queue=queue.Queue()
@@ -210,15 +221,51 @@ class ReminderApp(tk.Tk):
         release=payload
         if is_newer_version(release.version,APP_VERSION):
             logger.info('New PayPamin Flow release available: current=%s latest=%s',APP_VERSION,release.version)
-            self.show_update_available(release);return
+            if manual:self.show_update_available(release)
+            elif setting('update_auto')=='1':self.start_update_installation(release,manual=False)
+            return
         logger.info('No newer PayPamin Flow release: current=%s latest=%s',APP_VERSION,release.version)
         if manual:messagebox.showinfo(_('Ingen uppdatering tillgänglig'),_('Ingen nyare version finns.\n\nInstallerad version: {current}\nSenaste release: {latest}',current=APP_VERSION,latest=release.version),parent=self)
+
+    def start_update_installation(self,release,manual=False):
+        if self._update_install_running:return
+        if not getattr(sys,'frozen',False):
+            error=UpdateInstallError(_('Automatisk installation kräver ett native-programpaket. Källkodskörning uppdateras manuellt.'))
+            logger.info('Automatic update skipped for source checkout: %s',error)
+            if manual:self._show_update_install_error(release,error)
+            return
+        self._update_install_running=True;self._set_update_install_busy(True)
+        result_queue=queue.Queue()
+        def install():
+            try:
+                plan=stage_update(release,log_path=APP_DIR/'update.log')
+                self._update_helper_process=launch_update(plan)
+                result_queue.put(('restart',manual,release,None))
+            except Exception as exc:result_queue.put(('error',manual,release,exc))
+        threading.Thread(target=install,daemon=True).start()
+        self.after(200,lambda:self._poll_update_installation(result_queue))
+
+    def _poll_update_installation(self,result_queue):
+        try:status,manual,release,error=result_queue.get_nowait()
+        except queue.Empty:
+            self.after(200,lambda:self._poll_update_installation(result_queue));return
+        if status=='restart':
+            logger.info('Update helper started; closing app for silent restart to %s',release.version)
+            self.destroy();return
+        self._update_install_running=False;self._set_update_install_busy(False)
+        logger.error('Automatic update installation failed: %s',error)
+        if manual:self._show_update_install_error(release,error)
+
+    def _show_update_install_error(self,release,error):
+        details=str(error) if isinstance(error,UpdateInstallError) else _('Ett oväntat fel uppstod vid installationen.')
+        messagebox.showerror(_('Uppdateringen kunde inte installeras'),_('{error}\n\nDu kan ladda ner uppdateringen manuellt:\n{url}',error=details,url=release.url),parent=self)
 
     def show_update_available(self,release):
         w=tk.Toplevel(self);w.title(_('Uppdatering tillgänglig'));w.transient(self);w.resizable(False,False);w.configure(bg='#f3f5f8')
         form=ttk.Frame(w,padding=24);form.pack()
         ttk.Label(form,text=_('Version {version} är tillgänglig',version=release.version),style='Title.TLabel').pack(anchor='w')
-        ttk.Label(form,text=_('Installerad version: {current}\nSenaste release: {latest}\n\nUppdateringen laddas inte ner eller installeras automatiskt.',current=APP_VERSION,latest=release.version),justify='left').pack(anchor='w',pady=(8,18))
+        ttk.Label(form,text=_('Installerad version: {current}\nSenaste release: {latest}\n\nLokala fakturor, inställningar och mallar påverkas inte.',current=APP_VERSION,latest=release.version),justify='left').pack(anchor='w',pady=(8,12))
+        if not getattr(sys,'frozen',False):ttk.Label(form,text=_('Automatisk installation kräver ett native-programpaket. Källkodskörning uppdateras manuellt.'),style='Sub.TLabel',wraplength=420).pack(anchor='w',pady=(0,12))
         def open_download():
             try:
                 if not webbrowser.open(release.url,new=2):raise RuntimeError('No web browser available')
@@ -226,9 +273,12 @@ class ReminderApp(tk.Tk):
                 logger.exception('Could not open GitHub release download page')
                 messagebox.showerror(_('Kunde inte öppna webbläsaren'),_('Öppna nedladdningssidan manuellt:\n{url}',url=release.url),parent=w);return
             w.destroy()
-        buttons=ttk.Frame(form);buttons.pack(fill='x')
+        def install_now():
+            w.destroy();self.start_update_installation(release,manual=True)
+        buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(8,0))
+        if getattr(sys,'frozen',False):ttk.Button(buttons,text=_('Installera och starta om'),command=install_now,style='Accent.TButton').pack(side='left')
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='right')
-        ttk.Button(buttons,text=_('Öppna nedladdningssida'),command=open_download,style='Accent.TButton').pack(side='right',padx=(0,8))
+        ttk.Button(buttons,text=_('Öppna nedladdningssida'),command=open_download).pack(side='right',padx=(0,8))
 
     def rebuild_ui(self):
         """Rebuild the main window without interrupting background child windows."""
@@ -311,7 +361,8 @@ class ReminderApp(tk.Tk):
         ttk.Button(header,text=_('Om {app_name}',app_name=APP_NAME),command=self.show_about).pack(side='right',padx=(0,7))
         self.update_button=ttk.Button(header,text=_('Sök efter uppdateringar'),command=lambda:self.check_for_updates(manual=True))
         self.update_button.pack(side='right',padx=(0,7))
-        if self._update_check_running:self._set_update_check_busy(True)
+        if self._update_install_running:self._set_update_install_busy(True)
+        elif self._update_check_running:self._set_update_check_busy(True)
         bar=ttk.Frame(self,padding=(22,5,22,12)); bar.pack(fill='x')
         for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
             ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
@@ -837,12 +888,14 @@ class ReminderApp(tk.Tk):
         autostart_var=tk.BooleanVar(value=setting('autostart')=='1')
         ttk.Checkbutton(form,text=_('Starta {app_name} automatiskt när jag loggar in',app_name=APP_NAME),variable=autostart_var).grid(row=len(fields)+2,column=0,columnspan=3,sticky='w',pady=(10,3))
         ttk.Label(form,text=_('Autostart för din användare · {platforms}',platforms=SUPPORTED_PLATFORMS),style='Sub.TLabel').grid(row=len(fields)+3,column=0,columnspan=3,sticky='w')
+        automatic_updates_var=tk.BooleanVar(value=setting('update_auto')=='1')
+        ttk.Checkbutton(form,text=_('Sök efter och installera uppdateringar automatiskt två gånger per dygn'),variable=automatic_updates_var).grid(row=len(fields)+4,column=0,columnspan=3,sticky='w',pady=(10,3))
         locked=tk.BooleanVar(value=setting('fee_locked')=='1')
         def toggle_lock():
             entries['fee'].configure(state='disabled' if locked.get() else 'normal')
-        ttk.Checkbutton(form,text=_('Lås påminnelseavgiften (förhindra oavsiktlig ändring)'),variable=locked,command=toggle_lock).grid(row=len(fields)+4,column=0,columnspan=3,sticky='w',pady=(10,4))
-        ttk.Label(form,text=_('Låset skyddar inställningen i appen; lås upp här för att ändra avgiften.'),style='Sub.TLabel').grid(row=len(fields)+5,column=0,columnspan=3,sticky='w')
-        ttk.Label(form,text=_('Obs: påminnelseavgiften använder fakturans valuta. Kontrollera att avgift, ränta och villkor gäller för era kunder.'),style='Sub.TLabel').grid(row=len(fields)+6,column=0,columnspan=3,sticky='w',pady=(8,0))
+        ttk.Checkbutton(form,text=_('Lås påminnelseavgiften (förhindra oavsiktlig ändring)'),variable=locked,command=toggle_lock).grid(row=len(fields)+5,column=0,columnspan=3,sticky='w',pady=(10,4))
+        ttk.Label(form,text=_('Låset skyddar inställningen i appen; lås upp här för att ändra avgiften.'),style='Sub.TLabel').grid(row=len(fields)+6,column=0,columnspan=3,sticky='w')
+        ttk.Label(form,text=_('Obs: påminnelseavgiften använder fakturans valuta. Kontrollera att avgift, ränta och villkor gäller för era kunder.'),style='Sub.TLabel').grid(row=len(fields)+7,column=0,columnspan=3,sticky='w',pady=(8,0))
         def save():
             try:
                 for k,e in entries.items():
@@ -860,13 +913,14 @@ class ReminderApp(tk.Tk):
             language_changed=new_language!=get_language()
             set_setting('fee_locked','1' if locked.get() else '0')
             set_setting('autostart','1' if autostart_var.get() else '0')
+            set_setting('update_auto','1' if automatic_updates_var.get() else '0')
             set_setting('language',new_language)
             set_language(new_language)
-            logger.info('Settings saved; fee_locked=%s autostart=%s language=%s',bool(locked.get()),bool(autostart_var.get()),new_language)
+            logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),new_language)
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()
-        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+7,column=1,sticky='e',pady=(15,0))
+        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+8,column=1,sticky='e',pady=(15,0))
 
 def main():
     init_db()

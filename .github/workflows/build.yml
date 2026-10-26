@@ -5,6 +5,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -16,7 +18,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: macos-latest
+            platform: macos
+          - os: ubuntu-latest
+            platform: linux
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,9 +44,37 @@ jobs:
         run: python -c "import tkinter; import fitz; import reportlab; import PIL; import paypamin_flow"
       - name: Build native application
         run: pyinstaller paypamin_flow.spec --clean --noconfirm
+      - name: Package native application and SHA-256
+        run: python packaging/package_release.py --platform "${{ matrix.platform }}" --dist dist --output release-assets
       - name: Upload native application
         uses: actions/upload-artifact@v4
         with:
-          name: PayPamin-Flow-${{ matrix.os }}
+          name: PayPamin-Flow-native-${{ matrix.os }}
           path: dist/
           if-no-files-found: error
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PayPamin-Flow-release-${{ matrix.platform }}
+          path: release-assets/
+          if-no-files-found: error
+
+  publish-release-packages:
+    name: Publish release packages
+    if: github.event_name == 'release'
+    needs: desktop
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: PayPamin-Flow-release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Attach packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber

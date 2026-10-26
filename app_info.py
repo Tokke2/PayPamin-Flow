@@ -12,4 +12,9 @@ APP_DESCRIPTION_SV = "Lokal app för fakturor och betalningspåminnelser"
 APP_REPOSITORY = "Tokke2/PayPamin-Flow"
 APP_RELEASES_URL = f"https://github.com/{APP_REPOSITORY}/releases"
 APP_LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
+RELEASE_ASSET_NAMES = {
+    "windows": "PayPamin-Flow-Windows.zip",
+    "macos": "PayPamin-Flow-macOS.zip",
+    "linux": "PayPamin-Flow-Linux.tar.gz",
+}
 SUPPORTED_PLATFORMS = "Windows · macOS · Linux"

@@ -5,6 +5,7 @@ from urllib.error import HTTPError, URLError
 from app_info import APP_LATEST_RELEASE_API, APP_RELEASES_URL
 from i18n import set_language
 from update_checker import (
+    UPDATE_CHECK_INTERVAL_MS,
     UpdateCheckError,
     canonical_version,
     fetch_latest_release,
@@ -73,6 +74,17 @@ class UpdateCheckerTests(unittest.TestCase):
     def test_rejects_prerelease_response(self):
         with self.assertRaises(UpdateCheckError):
             fetch_latest_release(opener=lambda request, timeout: FakeResponse(payload(prerelease=True)))
+
+    def test_release_assets_are_read(self):
+        assets = [
+            {"name": "PayPamin-Flow-Linux.tar.gz", "browser_download_url": "https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/PayPamin-Flow-Linux.tar.gz"},
+            {"name": "PayPamin-Flow-Linux.tar.gz.sha256", "browser_download_url": "https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/PayPamin-Flow-Linux.tar.gz.sha256"},
+        ]
+        release = fetch_latest_release(opener=lambda request, timeout: FakeResponse(payload(assets=assets)))
+        self.assertEqual([asset.name for asset in release.assets], [asset["name"] for asset in assets])
+
+    def test_automatic_checks_run_twice_per_day(self):
+        self.assertEqual(UPDATE_CHECK_INTERVAL_MS, 12 * 60 * 60 * 1000)
 
     def test_missing_release_has_translated_error(self):
         set_language("en")

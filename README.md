@@ -18,7 +18,7 @@ Lokal skrivbordsapp för **Windows, macOS och Linux** som läser enskilda Fortno
 - Samma egen applikationsikon i fönster, dialoger, Windows-exe, macOS-app och Linux-programmeny.
 - **Autostart vid inloggning** på Windows, macOS och Linux. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
-- **Uppdateringskontroll mot GitHub Releases** vid start och via en manuell knapp, med länk till nedladdning när en nyare stabil version finns.
+- **Automatiska uppdateringar mot GitHub Releases** två gånger per dygn, med verifierade native-paket och tyst omstart. Manuell sökning och nedladdning finns också.
 - PDF sparas lokalt och öppnas i datorns standardprogram. Fellogg öppnas via **Visa fellogg**.
 
 ## Starta från källkod
@@ -82,11 +82,21 @@ Språkvalet gäller huvudfönster, filter, statusar, formulär, PDF-förhandsgra
 
 ## Uppdateringar
 
-Appen kontrollerar automatiskt den senaste stabila GitHub-releasen en kort stund efter start. Du kan även klicka **Sök efter uppdateringar** i huvudfönstrets överkant. Om en nyare version finns visas installerad och tillgänglig version samt en knapp som öppnar release-sidan.
+Appen kontrollerar den senaste stabila GitHub-releasen en kort stund efter start och därefter **var 12:e timme medan appen är öppen**. Automatiska uppdateringar är aktiverade som standard och kan stängas av under **Inställningar → Sök efter och installera uppdateringar automatiskt två gånger per dygn**.
 
-Kontrollen använder GitHubs publika API och skickar inga faktura-, kund- eller inställningsuppgifter. Om nätverket eller GitHub inte kan nås fortsätter appen att fungera; ett automatiskt fel loggas utan popup, medan en manuell kontroll visar ett felmeddelande.
+När en nyare version finns hämtar en native-installation automatiskt rätt paket för Windows, macOS eller Linux. Paketets SHA-256-kontrollsumma verifieras före uppackning. Därefter stängs appen, programmet byts ut och startas igen utan konsolfönster. Den gamla installationen används som reserv under ombytet så att den kan återställas vid fel. Databas, fakturor, inställningar, mallar och företagslogotyper ingår inte i uppdateringen och lämnas orörda.
 
-**Uppdateringar laddas inte ner eller installeras automatiskt.** Öppna release-sidan, ladda ner önskad version och installera den enligt instruktionerna för ditt operativsystem. Säkerhetskopiera den lokala databasen före uppdatering.
+Knappen **Sök efter uppdateringar** gör en manuell kontroll. Vid en nyare version kan du välja **Installera och starta om** eller **Öppna nedladdningssida**. Körning direkt från källkod skrivs inte över automatiskt; använd release-sidan eller uppdatera källkoden manuellt.
+
+Kontrollen använder GitHubs publika API och skickar inga faktura-, kund- eller inställningsuppgifter. Automatiska nätverks- och installationsfel loggas utan popup och provas igen vid nästa schemalagda kontroll. Installationsmappen måste vara skrivbar för den aktuella användaren. Operativsystemets säkerhetsskydd, kodsigneringskrav eller saknade releasepaket kan kräva manuell installation. Tekniska installationsfel loggas i `update.log` under `~/.paminnelseapp`.
+
+GitHub Actions bygger och bifogar följande filer till nya publicerade releaser:
+
+- `PayPamin-Flow-Windows.zip` och `.sha256`
+- `PayPamin-Flow-macOS.zip` och `.sha256`
+- `PayPamin-Flow-Linux.tar.gz` och `.sha256`
+
+Säkerhetskopiera den lokala databasen regelbundet och innan en manuell ominstallation.
 
 ## Valuta / Currency
 
@@ -138,7 +148,7 @@ Resultat:
 - **macOS:** `dist/PayPamin Flow.app` med ICNS-ikon, bundle-id och copyrightmetadata.
 - **Linux:** `dist/paypamin-flow`. Installera programpost och ikon för den aktuella användaren med `./packaging/install_linux.sh`.
 
-GitHub Actions-workflöen i `.github/workflows/build.yml` kör tester och bygger paket för Windows, macOS och Linux. Paketen blir byggartefakter när workflöen körs.
+GitHub Actions-workflöen i `.github/workflows/build.yml` kör tester och bygger paket för Windows, macOS och Linux. Paketen blir byggartefakter när workflöen körs. När en release publiceras skapar `packaging/package_release.py` plattformspaketen och deras SHA-256-filer, som därefter bifogas releasen för automatiska uppdateringar.
 
 ## Fakturor, logotyper och OCR
 

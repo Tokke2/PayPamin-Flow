@@ -2,10 +2,12 @@
 
 ## Unreleased
 
-- Added automatic GitHub release checks shortly after startup and a **Check for updates** button in the main window.
-- Added numeric stable-version comparison, bilingual progress/result/error dialogs and a download-page button when a newer release exists.
-- Kept update installation manual and made automatic network failures unobtrusive; no invoice or customer data is sent with the public API request.
-- Added headless tests for release responses, version ordering, network/HTTP failures and release URL validation.
+- Added silent GitHub release checks shortly after startup and every 12 hours while the app is open, plus a **Check for updates** button and an automatic-update setting.
+- Added automatic download, SHA-256 verification, safe extraction, native installation and silent restart for newer stable releases on Windows, macOS and Linux.
+- Added manual **Install and restart** and **Open download page** choices; source checkouts and automatic failures retain a manual update path.
+- Preserved invoice data, settings and templates, added rollback during native replacement and kept automatic failures unobtrusive.
+- Added release packaging for all three desktop platforms and per-package SHA-256 assets, uploaded by a restricted GitHub Actions release job.
+- Added headless tests for release responses, scheduling, checksum verification, archive safety, native packaging, update UI behavior and a real synthetic Linux replacement/restart.
 
 ## 0.5.0 — 2026-10-23
 

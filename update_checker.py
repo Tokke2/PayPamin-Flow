@@ -15,9 +15,17 @@ from urllib.request import Request, urlopen
 from app_info import APP_LATEST_RELEASE_API, APP_NAME, APP_RELEASES_URL, APP_VERSION
 from i18n import _
 
+UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
+
 
 class UpdateCheckError(Exception):
     """A user-presentable update-check failure."""
+
+
+@dataclass(frozen=True)
+class ReleaseAsset:
+    name: str
+    url: str
 
 
 @dataclass(frozen=True)
@@ -25,6 +33,7 @@ class ReleaseInfo:
     version: str
     tag_name: str
     url: str
+    assets: tuple[ReleaseAsset, ...] = ()
 
 
 def version_key(value: str) -> tuple[int, int, int]:
@@ -72,10 +81,23 @@ def fetch_latest_release(timeout: int = 8, opener=None) -> ReleaseInfo:
         tag_name = str(payload.get("tag_name") or "").strip()
         if not tag_name:
             raise ValueError("Release tag is missing")
+        raw_assets = payload.get("assets") or []
+        if not isinstance(raw_assets, list):
+            raise ValueError("Release assets are not a list")
+        assets = []
+        for item in raw_assets:
+            if not isinstance(item, dict):
+                raise ValueError("Invalid release asset")
+            name = str(item.get("name") or "").strip()
+            url = str(item.get("browser_download_url") or "").strip()
+            if not name or not url:
+                raise ValueError("Release asset name or URL is missing")
+            assets.append(ReleaseAsset(name=name, url=_validated_release_url(url)))
         return ReleaseInfo(
             version=canonical_version(tag_name),
             tag_name=tag_name,
             url=_validated_release_url(str(payload.get("html_url") or "")),
+            assets=tuple(assets),
         )
     except HTTPError as exc:
         if exc.code == 404:
