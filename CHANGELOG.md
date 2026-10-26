@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Prevented duplicate invoice imports and manual entries using normalized invoice numbers and PDF content hashes, including renamed files; added bilingual warnings and duplicate counts in folder-scan results.
 - Added silent GitHub release checks shortly after startup and every 12 hours while the app is open, plus a **Check for updates** button and an automatic-update setting.
 - Added automatic download, SHA-256 verification, safe extraction, native installation and silent restart for newer stable releases on Windows, macOS and Linux.
 - Added manual **Install and restart** and **Open download page** choices; source checkouts and automatic failures retain a manual update path.

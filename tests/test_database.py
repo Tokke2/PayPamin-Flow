@@ -66,6 +66,7 @@ class DatabaseTests(unittest.TestCase):
                         "SELECT amount,paid,currency FROM invoices WHERE invoice_no='6258'"
                     ).fetchone()
                     self.assertIn("currency", columns)
+                    self.assertIn("source_hash", columns)
                     self.assertEqual(existing, (6563.0, 1000.0, "SEK"))
 
                     db.execute(

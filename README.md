@@ -11,7 +11,7 @@ Lokal skrivbordsapp för **Windows, macOS och Linux** som läser enskilda Fortno
 
 - Läser enskilda faktura-PDF:er och föreslår kund, fakturanummer, datum, belopp efter **ATT BETALA** och fakturatext.
 - **Valuta per faktura** med SEK som standard och redigerbara koder med tre bokstäver, exempelvis EUR, USD, NOK och DKK. Belopp växlas inte mellan valutor.
-- Importmapp och knapp för att skanna nya PDF-filer. Varje fil granskas innan den sparas; redan importerade filer hoppas över.
+- Importmapp och knapp för att skanna nya PDF-filer. Varje ny faktura granskas innan den sparas. Dubbletter stoppas via fakturanummer eller identiskt PDF-innehåll, även om filen döpts om, och användaren får ett tydligt meddelande.
 - PDF-förhandsgranskning med markerbara fältområden och återanvändbara leverantörsmallar.
 - SVG-logotyp kan kopplas till en leverantörsmall och återanvändas vid export.
 - Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta.

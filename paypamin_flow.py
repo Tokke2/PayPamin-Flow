@@ -7,7 +7,7 @@ OCR för skannade PDF: se README.
 Copyright © 2026 Rickard Länkvist. Skapare: Rickard Länkvist.
 """
 from __future__ import annotations
-import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64
+import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib
 from logging.handlers import RotatingFileHandler
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -73,7 +73,7 @@ def init_db():
             id INTEGER PRIMARY KEY, customer TEXT NOT NULL, invoice_no TEXT NOT NULL,
             due_date TEXT NOT NULL, invoice_date TEXT DEFAULT '', template_vendor TEXT DEFAULT '', reviewed INTEGER NOT NULL DEFAULT 1,
             amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'SEK', paid REAL NOT NULL DEFAULT 0,
-            email TEXT DEFAULT '', source TEXT DEFAULT '', ignored INTEGER NOT NULL DEFAULT 0,
+            email TEXT DEFAULT '', source TEXT DEFAULT '', source_hash TEXT NOT NULL DEFAULT '', ignored INTEGER NOT NULL DEFAULT 0,
             note TEXT DEFAULT '', p1_date TEXT DEFAULT '', p2_date TEXT DEFAULT '', sent_count INTEGER NOT NULL DEFAULT 0,
             created TEXT NOT NULL)""")
         existing={row['name'] for row in db.execute('PRAGMA table_info(invoices)').fetchall()}
@@ -81,6 +81,7 @@ def init_db():
         if 'template_vendor' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN template_vendor TEXT DEFAULT ''")
         if 'reviewed' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 1")
         if 'currency' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN currency TEXT NOT NULL DEFAULT 'SEK'")
+        if 'source_hash' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''")
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         db.execute("""CREATE TABLE IF NOT EXISTS pdf_zones (
             vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
@@ -107,6 +108,71 @@ def setting(key):
 def set_setting(key,value):
     with connect() as db:
         db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(key,str(value)))
+
+
+def normalize_invoice_number(value):
+    """Treat letter case and whitespace as formatting, not as a new invoice."""
+    return ''.join(str(value or '').split()).casefold()
+
+
+def file_sha256(path):
+    digest=hashlib.sha256()
+    with Path(path).open('rb') as source:
+        for chunk in iter(lambda:source.read(1024*1024),b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def find_duplicate_invoice(invoice_no='',source_hash='',exclude_id=None,db=None):
+    """Return an existing invoice matched by number or identical PDF content."""
+    own_connection=db is None
+    connection=db or connect()
+    invoice_key=normalize_invoice_number(invoice_no)
+    try:
+        rows=connection.execute('SELECT * FROM invoices').fetchall()
+        for existing in rows:
+            if exclude_id is not None and int(existing['id'])==int(exclude_id):
+                continue
+            if invoice_key and normalize_invoice_number(existing['invoice_no'])==invoice_key:
+                return existing
+            if source_hash and existing['source_hash'] and existing['source_hash']==source_hash:
+                return existing
+        return None
+    finally:
+        if own_connection:
+            connection.close()
+
+
+def save_invoice_record(values,row_id=None):
+    """Save inside a write transaction so another app instance cannot race the check."""
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        duplicate=find_duplicate_invoice(values['invoice_no'],values.get('source_hash',''),row_id,db)
+        if duplicate is None:
+            params=(
+                values['customer'],values['invoice_no'],values['invoice_date'],values['due_date'],
+                values['template_vendor'],values['amount'],values['currency'],values['paid'],
+                values['email'],values['source'],values.get('source_hash',''),values['note'],values['reviewed'],
+            )
+            if row_id is None:
+                db.execute('''INSERT INTO invoices(
+                    customer,invoice_no,invoice_date,due_date,template_vendor,amount,currency,paid,email,
+                    source,source_hash,note,reviewed,created
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',params+(datetime.now().isoformat(timespec='seconds'),))
+            else:
+                db.execute('''UPDATE invoices SET customer=?,invoice_no=?,invoice_date=?,due_date=?,
+                    template_vendor=?,amount=?,currency=?,paid=?,email=?,source_hash=?,note=?,reviewed=?
+                    WHERE id=?''',params[:9]+params[10:]+(row_id,))
+    return duplicate
+
+
+def show_duplicate_invoice(duplicate,parent=None):
+    messagebox.showwarning(
+        _('Dubblettfaktura'),
+        _('Faktura {invoice_no} för {customer} finns redan. Den har inte importerats eller sparats igen.',
+          invoice_no=duplicate['invoice_no'],customer=duplicate['customer']),
+        parent=parent,
+    )
 
 
 def money(x,currency='SEK'):
@@ -679,26 +745,37 @@ class ReminderApp(tk.Tk):
         files=sorted(p for p in IMPORT_DIR.glob('*.pdf') if p.is_file())
         if not files:
             messagebox.showinfo(_('Importmapp tom'),_('Lägg faktura-PDF:er i mappen:\n{folder}',folder=IMPORT_DIR),parent=self);return
-        imported=skipped=failed=0
+        imported=skipped=failed=duplicates=0
         for path in files:
             source=str(path.resolve())
-            with connect() as db: existing_sources=[row['source'] for row in db.execute('SELECT source FROM invoices').fetchall()]
-            if source in existing_sources or path.name in [Path(value).name for value in existing_sources if value]:skipped+=1;continue
+            with connect() as db:
+                existing_source=db.execute('SELECT 1 FROM invoices WHERE source=? LIMIT 1',(source,)).fetchone()
+            if existing_source:
+                duplicates+=1
+                logger.info('Duplicate import blocked by source path: file=%s',path.name)
+                continue
             try:
-                text=extract_pdf(str(path));guess=parse_invoice_text(text);vendor=self.guess_supplier(text)
+                source_hash=file_sha256(path)
+                text=extract_pdf(str(path));guess=parse_invoice_text(text)
+                duplicate=find_duplicate_invoice(guess.get('invoice_no',''),source_hash)
+                if duplicate:
+                    duplicates+=1
+                    logger.info('Duplicate import blocked: existing_id=%s file=%s',duplicate['id'],path.name)
+                    continue
+                vendor=self.guess_supplier(text)
                 guess['template_vendor']=vendor
                 guess=self.apply_saved_zones(str(path),vendor,guess)
                 guess=self.preview_invoice(str(path),guess,vendor)
-                self.add_invoice(source=source,guess=guess)
+                self.add_invoice(source=source,guess=guess,source_hash=source_hash)
                 with connect() as db:
                     saved=db.execute('SELECT 1 FROM invoices WHERE source=? LIMIT 1',(source,)).fetchone()
                 if saved:imported+=1
                 else:skipped+=1
             except Exception:
                 logger.exception('Import folder scan failed for %s',path.name);failed+=1
-        logger.info('Import folder scan complete: imported=%s skipped=%s failed=%s',imported,skipped,failed)
+        logger.info('Import folder scan complete: imported=%s duplicates=%s skipped=%s failed=%s',imported,duplicates,skipped,failed)
         self.refresh()
-        messagebox.showinfo(_('Skanning klar'),_('Importerade: {imported}\nRedan importerade/avbrutna: {skipped}\nFel: {failed}',imported=imported,skipped=skipped,failed=failed),parent=self)
+        messagebox.showinfo(_('Skanning klar'),_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,skipped=skipped,failed=failed),parent=self)
 
     def open_import_folder(self):
         IMPORT_DIR.mkdir(exist_ok=True)
@@ -709,7 +786,13 @@ class ReminderApp(tk.Tk):
         path=filedialog.askopenfilename(title=_('Välj faktura-PDF'),filetypes=[('PDF','*.pdf')])
         if not path:return
         try:
+            source_hash=file_sha256(path)
             text=extract_pdf(path); guess=parse_invoice_text(text)
+            duplicate=find_duplicate_invoice(guess.get('invoice_no',''),source_hash)
+            if duplicate:
+                logger.info('Duplicate import blocked: existing_id=%s',duplicate['id'])
+                show_duplicate_invoice(duplicate,parent=self)
+                return
             vendor=self.guess_supplier(text)
             guess['template_vendor']=vendor
             guess=self.apply_saved_zones(path,vendor,guess)
@@ -718,21 +801,22 @@ class ReminderApp(tk.Tk):
             logger.exception('Invoice PDF read failed: %s',path)
             messagebox.showerror(_('Kunde inte läsa PDF'),_(str(e)));return
         guess=self.preview_invoice(path,guess,vendor)
-        self.add_invoice(source=str(Path(path).resolve()),guess=guess)
+        self.add_invoice(source=str(Path(path).resolve()),guess=guess,source_hash=source_hash)
 
-    def add_invoice(self,source='',guess=None):
-        self.invoice_dialog('Lägg till faktura',source=source,guess=guess)
+    def add_invoice(self,source='',guess=None,source_hash=''):
+        self.invoice_dialog('Lägg till faktura',source=source,guess=guess,source_hash=source_hash)
 
     def edit_invoice(self):
         r=self.selected()
         if r:self.invoice_dialog('Redigera faktura',row=r)
 
-    def invoice_dialog(self,title,row=None,source='',guess=None):
+    def invoice_dialog(self,title,row=None,source='',guess=None,source_hash=''):
         w=tk.Toplevel(self);w.title(_(title));w.transient(self);w.grab_set();w.resizable(False,False);w.configure(bg='#f3f5f8')
         fields=[('Kundnamn','customer'),('Fakturanummer','invoice_no'),('Fakturadatum (ÅÅÅÅ-MM-DD)','invoice_date'),('Förfallodatum (ÅÅÅÅ-MM-DD)','due_date'),('Fakturabelopp','amount'),('Valuta (ISO-kod, t.ex. SEK/EUR)','currency'),('Redan betalt','paid'),('E-post','email'),('Fakturatext / Avser','note')]
         vals={k:(row[k] if row else (guess or {}).get(k,'')) for _,k in fields}
         vals['currency']=normalize_currency(vals.get('currency'))
         vals['source']=row['source'] if row else source
+        vals['source_hash']=row['source_hash'] if row else source_hash
         vals['template_vendor']=row['template_vendor'] if row else (guess or {}).get('template_vendor','')
         reviewed_var=tk.BooleanVar(value=bool(row['reviewed']) if row else not bool(source))
         entries={};form=ttk.Frame(w,padding=18);form.pack()
@@ -746,9 +830,16 @@ class ReminderApp(tk.Tk):
             currency=normalize_currency(v['currency'])
             try:amount=float(v['amount'].replace(' ','').replace(',','.')) if v['amount'] else 0;paid=float(v['paid'].replace(' ','').replace(',','.')) if v['paid'] else 0
             except ValueError:messagebox.showerror(_('Fel belopp'),_('Ange belopp som siffror.'),parent=w);return
-            with connect() as db:
-                if row:db.execute('UPDATE invoices SET customer=?,invoice_no=?,invoice_date=?,due_date=?,template_vendor=?,amount=?,currency=?,paid=?,email=?,note=?,reviewed=? WHERE id=?',(v['customer'],v['invoice_no'],v['invoice_date'],v['due_date'],vals['template_vendor'],amount,currency,paid,v['email'],v['note'],int(reviewed_var.get()),row['id']))
-                else:db.execute('INSERT INTO invoices(customer,invoice_no,due_date,invoice_date,template_vendor,amount,currency,paid,email,source,note,reviewed,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(v['customer'],v['invoice_no'],v['due_date'],v['invoice_date'],vals['template_vendor'],amount,currency,paid,v['email'],vals['source'],v['note'],int(reviewed_var.get()),datetime.now().isoformat(timespec='seconds')))
+            record=dict(v)
+            record.update(
+                template_vendor=vals['template_vendor'],amount=amount,currency=currency,paid=paid,
+                source=vals['source'],source_hash=vals['source_hash'],reviewed=int(reviewed_var.get()),
+            )
+            duplicate=save_invoice_record(record,row['id'] if row else None)
+            if duplicate:
+                logger.info('Duplicate invoice save blocked: existing_id=%s',duplicate['id'])
+                show_duplicate_invoice(duplicate,parent=w)
+                return
             logger.info('Invoice saved/edited: source_type=%s fields=customer,invoice_no,due_date,amount,currency,paid,email,note',Path(vals['source']).suffix.lower() if vals['source'] else 'manual')
             w.destroy();self.refresh()
         ttk.Button(form,text=_('Spara'),command=save,style='Accent.TButton').grid(row=len(fields)+1,column=1,sticky='e',pady=(12,0))
