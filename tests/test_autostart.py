@@ -15,7 +15,8 @@ class AutostartTests(unittest.TestCase):
         command = autostart.launch_command()
         self.assertGreaterEqual(len(command), 2)
         self.assertTrue(command[0])
-        self.assertTrue(command[1].endswith("paypamin_flow.py"))
+        expected_script = "paypamin_flow.pyw" if sys.platform.startswith("win") else "paypamin_flow.py"
+        self.assertTrue(command[1].endswith(expected_script))
         self.assertTrue(Path(command[1]).is_file())
 
     def test_linux_autostart_writes_and_removes_xdg_desktop_entry(self):
