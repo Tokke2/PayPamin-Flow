@@ -16,12 +16,27 @@ import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_NAME, APP_SLUG, APP_VERSION, SUPPORTED_PLATFORMS
+from app_backup import (
+    BackupError,
+    BackupPaths,
+    create_backup as create_local_backup,
+    restore_backup as restore_local_backup,
+    suggested_backup_filename,
+)
 from autostart import AutostartError, autostart_location, set_autostart
+from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
 from invoice_parser import extract_pdf, normalize_amount, normalize_date, parse_invoice_text
 from update_checker import UPDATE_CHECK_INTERVAL_MS, UpdateCheckError, fetch_latest_release, is_newer_version
-from update_installer import UpdateInstallError, launch_update, stage_update
+from update_installer import (
+    UpdateInstallError,
+    cleanup_update,
+    install_update,
+    restart_updated_app,
+    rollback_update,
+    stage_update,
+)
 
 APP_DIR = Path.home() / ".paminnelseapp"
 APP_DIR.mkdir(parents=True,exist_ok=True)
@@ -214,14 +229,90 @@ class ReminderApp(tk.Tk):
         super().__init__(); self.title(APP_NAME); self.geometry('1180x700'); self.minsize(940,560)
         self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
         self._update_check_running=False;self._update_install_running=False;self._update_helper_process=None;self.update_button=None
+        self.tray=None;self._quitting=False
         self.build(); self.refresh()
+        self.protocol('WM_DELETE_WINDOW',self.hide_to_tray)
+        self.start_tray()
         self.after(100,self.sync_autostart)
         self.after(250,self.check_python_addons)
         self.after(2000,self._run_scheduled_update_check)
 
+    def start_tray(self):
+        """Start the tray icon lazily so unsupported desktops can still run the app."""
+        if self.tray is not None and self.tray.running:return
+        self.tray=TrayController(
+            name=APP_NAME,identifier=APP_SLUG,icon_path=ICON_DIR/'paypamin_flow_256.png',
+            scheduler=lambda callback:self.after(0,callback),on_open=self.show_from_tray,
+            on_exit=self.quit_app,open_label=lambda:_('Öppna {app_name}',app_name=APP_NAME),
+            exit_label=lambda:_('Avsluta helt'),on_error=self.handle_tray_error)
+        try:
+            self.tray.start();self._configure_macos_dock_icon();logger.info('System tray icon started')
+        except TrayUnavailable as exc:
+            logger.warning('System tray is unavailable: %s',exc)
+
+    def handle_tray_error(self,error):
+        if self._quitting:return
+        logger.error('System tray stopped unexpectedly: %s',error)
+        if self.tray is not None:self.tray.stop()
+        self.deiconify()
+        messagebox.showwarning(_('Systemfältet är inte tillgängligt'),_('Systemfältet slutade fungera. Fönstret visas igen.'),parent=self)
+
+    def show_from_tray(self):
+        self.deiconify();self.lift()
+        try:self.focus_force()
+        except tk.TclError:pass
+
+    def hide_to_tray(self):
+        """Close hides the window; background checks continue until full exit."""
+        if self._quitting:return
+        if self.tray is None or not self.tray.running:self.start_tray()
+        if self.tray is None or not self.tray.running:
+            if messagebox.askyesno(_('Systemfältet är inte tillgängligt'),_('Fönstret kan inte döljas i systemfältet på den här datorn. Vill du avsluta appen helt?'),parent=self):self.quit_app()
+            return
+        self.withdraw();logger.info('Main window hidden to system tray')
+
+    def quit_app(self):
+        """Exit the whole application rather than only hiding its window."""
+        if self._quitting:return
+        if getattr(self,'_update_install_running',False):
+            messagebox.showinfo(_('Uppdatering pågår'),_('Vänta tills uppdateringen är klar. Appen startas sedan om automatiskt.'),parent=self)
+            return
+        self._quitting=True
+        if self.tray is not None:self.tray.stop()
+        logger.info('Application exited by user')
+        self.destroy()
+
+    def backup_paths(self):
+        return BackupPaths(database=DB_PATH,export_dir=EXPORT_DIR,svg_dir=SVG_DIR,safety_dir=APP_DIR/'backups')
+
+    def create_backup(self):
+        selected=filedialog.asksaveasfilename(parent=self,title=_('Säkerhetskopiera inställningar och påminnelser'),initialfile=suggested_backup_filename(),defaultextension='.zip',filetypes=[(_('ZIP-säkerhetskopia'),'*.zip')])
+        if not selected:return
+        try:
+            destination=create_local_backup(selected,self.backup_paths())
+            logger.info('Local backup created: %s',destination)
+            messagebox.showinfo(_('Säkerhetskopiering klar'),_('Inställningar, fakturor, påminnelser och logotyper har kopierats till:\n{path}',path=destination),parent=self)
+        except BackupError as exc:
+            logger.error('Local backup failed: %s',exc)
+            messagebox.showerror(_('Säkerhetskopieringen misslyckades'),str(exc),parent=self)
+
+    def restore_backup(self):
+        selected=filedialog.askopenfilename(parent=self,title=_('Återställ säkerhetskopia'),filetypes=[(_('ZIP-säkerhetskopia'),'*.zip')])
+        if not selected:return
+        if not messagebox.askyesno(_('Återställ säkerhetskopia'),_('Nuvarande inställningar, fakturor, påminnelser och logotyper ersätts. En ny säkerhetskopia av nuvarande data skapas först. Vill du fortsätta?'),parent=self):return
+        try:
+            safety=restore_local_backup(selected,self.backup_paths())
+            init_db();set_language(setting('language') or 'sv');self.sync_autostart();self.rebuild_ui()
+            logger.info('Local backup restored; safety copy: %s',safety)
+            messagebox.showinfo(_('Återställningen är klar'),_('Säkerhetskopian har återställts. En kopia av tidigare data finns här:\n{path}',path=safety),parent=self)
+        except BackupError as exc:
+            logger.error('Local restore failed: %s',exc)
+            messagebox.showerror(_('Återställningen misslyckades'),str(exc),parent=self)
+
     def _configure_icons(self):
         """Use the same product icon for the window, dialogs and OS taskbar/dock."""
         self._window_icons=[];self._header_icon=None
+        self._configure_macos_dock_icon()
         try:
             if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
                 self.iconbitmap(default=str(ICON_DIR/'paypamin_flow.ico'))
@@ -233,6 +324,17 @@ class ReminderApp(tk.Tk):
             if header_path.is_file():self._header_icon=tk.PhotoImage(master=self,file=str(header_path))
         except tk.TclError:
             logger.exception('Application icon could not be loaded')
+
+    def _configure_macos_dock_icon(self):
+        if sys.platform!='darwin':return
+        try:
+            from AppKit import NSApplication,NSImage
+            image=NSImage.alloc().initWithContentsOfFile_(str(ICON_DIR/'paypamin_flow_256.png'))
+            if image:NSApplication.sharedApplication().setApplicationIconImage_(image)
+        except Exception as exc:
+            # Python Launcher may not have installed PyObjC yet; pystray pulls
+            # it in and the next icon setup retries without affecting the UI.
+            logger.info('macOS dock icon is not available yet: %s',exc)
 
     def sync_autostart(self):
         try:
@@ -305,32 +407,41 @@ class ReminderApp(tk.Tk):
 
     def start_update_installation(self,release,manual=False):
         if self._update_install_running:return
-        if not getattr(sys,'frozen',False):
-            error=UpdateInstallError(_('Automatisk installation kräver ett native-programpaket. Källkodskörning uppdateras manuellt.'))
-            logger.info('Automatic update skipped for source checkout: %s',error)
-            if manual:self._show_update_install_error(release,error)
-            return
         self._update_install_running=True;self._set_update_install_busy(True)
         result_queue=queue.Queue()
         def install():
             try:
                 plan=stage_update(release,log_path=APP_DIR/'update.log')
-                self._update_helper_process=launch_update(plan)
-                result_queue.put(('restart',manual,release,None))
+                installed=install_update(plan)
+                result_queue.put(('restart',manual,release,installed))
             except Exception as exc:result_queue.put(('error',manual,release,exc))
         threading.Thread(target=install,daemon=True).start()
         self.after(200,lambda:self._poll_update_installation(result_queue))
 
     def _poll_update_installation(self,result_queue):
-        try:status,manual,release,error=result_queue.get_nowait()
+        try:status,manual,release,payload=result_queue.get_nowait()
         except queue.Empty:
             self.after(200,lambda:self._poll_update_installation(result_queue));return
         if status=='restart':
-            logger.info('Update helper started; closing app for silent restart to %s',release.version)
+            installed=payload
+            try:
+                self._update_helper_process=restart_updated_app(installed)
+            except Exception as error:
+                try:rollback_update(installed)
+                except UpdateInstallError:logger.exception('Update rollback failed')
+                cleanup_update(installed)
+                self._update_install_running=False;self._set_update_install_busy(False)
+                logger.error('Updated app could not be restarted: %s',error)
+                if manual:self._show_update_install_error(release,error)
+                return
+            cleanup_update(installed)
+            logger.info('Python update installed; closing app for silent restart to %s',release.version)
+            self._quitting=True
+            if self.tray is not None:self.tray.stop()
             self.destroy();return
         self._update_install_running=False;self._set_update_install_busy(False)
-        logger.error('Automatic update installation failed: %s',error)
-        if manual:self._show_update_install_error(release,error)
+        logger.error('Automatic update installation failed: %s',payload)
+        if manual:self._show_update_install_error(release,payload)
 
     def _show_update_install_error(self,release,error):
         details=str(error) if isinstance(error,UpdateInstallError) else _('Ett oväntat fel uppstod vid installationen.')
@@ -341,7 +452,6 @@ class ReminderApp(tk.Tk):
         form=ttk.Frame(w,padding=24);form.pack()
         ttk.Label(form,text=_('Version {version} är tillgänglig',version=release.version),style='Title.TLabel').pack(anchor='w')
         ttk.Label(form,text=_('Installerad version: {current}\nSenaste release: {latest}\n\nLokala fakturor, inställningar och mallar påverkas inte.',current=APP_VERSION,latest=release.version),justify='left').pack(anchor='w',pady=(8,12))
-        if not getattr(sys,'frozen',False):ttk.Label(form,text=_('Automatisk installation kräver ett native-programpaket. Källkodskörning uppdateras manuellt.'),style='Sub.TLabel',wraplength=420).pack(anchor='w',pady=(0,12))
         def open_download():
             try:
                 if not webbrowser.open(release.url,new=2):raise RuntimeError('No web browser available')
@@ -352,7 +462,7 @@ class ReminderApp(tk.Tk):
         def install_now():
             w.destroy();self.start_update_installation(release,manual=True)
         buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(8,0))
-        if getattr(sys,'frozen',False):ttk.Button(buttons,text=_('Installera och starta om'),command=install_now,style='Accent.TButton').pack(side='left')
+        ttk.Button(buttons,text=_('Installera och starta om'),command=install_now,style='Accent.TButton').pack(side='left')
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='right')
         ttk.Button(buttons,text=_('Öppna nedladdningssida'),command=open_download).pack(side='right',padx=(0,8))
 
@@ -361,6 +471,7 @@ class ReminderApp(tk.Tk):
         for child in self.winfo_children():
             if child.winfo_class()!='Toplevel':child.destroy()
         self.build();self.refresh()
+        if self.tray is not None:self.tray.refresh()
 
     def on_filter_select(self,event=None):
         selected=self.current_filter.get()
@@ -377,12 +488,13 @@ class ReminderApp(tk.Tk):
         if importlib.util.find_spec('pdf2image') is None: missing.append('pdf2image')
         if importlib.util.find_spec('svglib') is None: missing.append('svglib')
         if importlib.util.find_spec('PIL') is None: missing.append('Pillow')
+        if importlib.util.find_spec('pystray') is None: missing.append('pystray')
         if not missing:return
         win=tk.Toplevel(self);win.title(_('Förbereder appen'));win.transient(self);win.resizable(False,False)
         win.protocol('WM_DELETE_WINDOW',lambda:None)
         box=ttk.Frame(win,padding=22);box.pack()
         ttk.Label(box,text=_('Installerar saknade Python-tillägg'),font=(self.font_family,11,'bold')).pack(anchor='w')
-        ttk.Label(box,text=_('Detta behövs för att läsa och skapa PDF. Installationen sker i bakgrunden.')).pack(anchor='w',pady=(7,10))
+        ttk.Label(box,text=_('Detta behövs för PDF och systemfält. Installationen sker i bakgrunden.')).pack(anchor='w',pady=(7,10))
         bar=ttk.Progressbar(box,mode='indeterminate',length=330);bar.pack(fill='x');bar.start(12)
         status=ttk.Label(box,text=_('Ansluter till Python-pakettjänsten…'),style='Sub.TLabel');status.pack(anchor='w',pady=(8,0))
         win.update_idletasks()
@@ -395,6 +507,7 @@ class ReminderApp(tk.Tk):
             if 'pdf2image' in missing:packages.append('pdf2image')
             if 'svglib' in missing:packages.append('svglib>=1.5')
             if 'Pillow' in missing:packages.append('Pillow>=10.0')
+            if 'pystray' in missing:packages.append('pystray>=0.19')
             args=[sys.executable,'-m','pip','install']+packages
             flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
             try:
@@ -411,9 +524,10 @@ class ReminderApp(tk.Tk):
                 self.after(250,poll);return
             bar.stop();win.destroy()
             if ok:
-                messagebox.showinfo(_('Tillägg klara'),_('Nödvändiga PDF-tillägg installerades. Appen är redo.'),parent=self)
+                self.start_tray()
+                messagebox.showinfo(_('Tillägg klara'),_('Nödvändiga Python-tillägg installerades. Appen är redo.'),parent=self)
             else:
-                messagebox.showerror(_('Kunde inte installera tillägg'),_('PDF-tilläggen kunde inte installeras automatiskt. Kontrollera internetanslutning och pip.\n\n')+details[-1200:],parent=self)
+                messagebox.showerror(_('Kunde inte installera tillägg'),_('Python-tilläggen kunde inte installeras automatiskt. Kontrollera internetanslutning och pip.\n\n')+details[-1200:],parent=self)
         self.after(350,poll)
 
     def _style(self):
@@ -428,7 +542,23 @@ class ReminderApp(tk.Tk):
         s.configure('Treeview',font=(self.font_family,9),rowheight=30,background='white',fieldbackground='white')
         s.configure('Treeview.Heading',font=(self.font_family,9,'bold'),background='#e8edf4',foreground='#344054')
 
+    def _build_menu(self):
+        menu=tk.Menu(self)
+        file_menu=tk.Menu(menu,tearoff=0)
+        file_menu.add_command(label=_('Säkerhetskopiera inställningar och påminnelser'),command=self.create_backup)
+        file_menu.add_command(label=_('Återställ säkerhetskopia'),command=self.restore_backup)
+        file_menu.add_separator()
+        file_menu.add_command(label=_('Dölj till systemfältet'),command=self.hide_to_tray)
+        file_menu.add_command(label=_('Avsluta helt'),command=self.quit_app)
+        menu.add_cascade(label=_('Arkiv'),menu=file_menu)
+        help_menu=tk.Menu(menu,tearoff=0)
+        help_menu.add_command(label=_('Sök efter uppdateringar'),command=lambda:self.check_for_updates(manual=True))
+        help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
+        menu.add_cascade(label=_('Hjälp'),menu=help_menu)
+        self.configure(menu=menu)
+
     def build(self):
+        self._build_menu()
         header=ttk.Frame(self,padding=(22,17,22,10)); header.pack(fill='x')
         if self._header_icon:tk.Label(header,image=self._header_icon,bg='#f3f5f8',borderwidth=0).pack(side='left',padx=(0,11))
         ttk.Label(header,text=APP_NAME,style='Title.TLabel').pack(side='left')

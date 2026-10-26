@@ -71,6 +71,47 @@ class UpdateUiTests(unittest.TestCase):
         self.assertEqual(checks, [])
         self.assertEqual(scheduled, [(UPDATE_CHECK_INTERVAL_MS, "next-scheduled-check")])
 
+    def test_successful_python_install_restarts_and_closes(self):
+        installed = object()
+        events = []
+        fake = SimpleNamespace(
+            _update_helper_process=None,
+            _quitting=False,
+            tray=None,
+            destroy=lambda: events.append("destroyed"),
+        )
+        results = queue.Queue()
+        results.put(("restart", False, RELEASE, installed))
+        process = SimpleNamespace(pid=123)
+        with patch.object(self.app, "restart_updated_app", return_value=process) as restart, patch.object(
+            self.app, "cleanup_update"
+        ) as cleanup:
+            self.app.ReminderApp._poll_update_installation(fake, results)
+        restart.assert_called_once_with(installed)
+        cleanup.assert_called_once_with(installed)
+        self.assertEqual(fake._update_helper_process, process)
+        self.assertTrue(fake._quitting)
+        self.assertEqual(events, ["destroyed"])
+
+    def test_failed_restart_rolls_back_python_files(self):
+        installed = object()
+        events = []
+        fake = SimpleNamespace(
+            _update_install_running=True,
+            _set_update_install_busy=lambda busy: events.append(("busy", busy)),
+            _show_update_install_error=lambda release, error: self.fail("Automatic failure must stay silent"),
+        )
+        results = queue.Queue()
+        results.put(("restart", False, RELEASE, installed))
+        with patch.object(self.app, "restart_updated_app", side_effect=self.app.UpdateInstallError("failed")), patch.object(
+            self.app, "rollback_update"
+        ) as rollback, patch.object(self.app, "cleanup_update") as cleanup:
+            self.app.ReminderApp._poll_update_installation(fake, results)
+        rollback.assert_called_once_with(installed)
+        cleanup.assert_called_once_with(installed)
+        self.assertFalse(fake._update_install_running)
+        self.assertEqual(events, [("busy", False)])
+
 
 if __name__ == "__main__":
     unittest.main()

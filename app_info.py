@@ -1,4 +1,5 @@
 """Central product information for PayPamin Flow."""
+from pathlib import PurePosixPath
 
 APP_NAME = "PayPamin Flow"
 APP_SLUG = "paypamin-flow"
@@ -12,9 +13,50 @@ APP_DESCRIPTION_SV = "Lokal app för fakturor och betalningspåminnelser"
 APP_REPOSITORY = "Tokke2/PayPamin-Flow"
 APP_RELEASES_URL = f"https://github.com/{APP_REPOSITORY}/releases"
 APP_LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
+PYTHON_RELEASE_ASSET = "PayPamin-Flow-Python.zip"
+# Every desktop platform uses the same Python-only release package.
 RELEASE_ASSET_NAMES = {
-    "windows": "PayPamin-Flow-Windows.zip",
-    "macos": "PayPamin-Flow-macOS.zip",
-    "linux": "PayPamin-Flow-Linux.tar.gz",
+    platform: PYTHON_RELEASE_ASSET for platform in ("windows", "macos", "linux", "python")
 }
+PYTHON_PACKAGE_REQUIRED_FILES = (
+    "app_backup.py",
+    "app_info.py",
+    "autostart.py",
+    "currency.py",
+    "i18n.py",
+    "invoice_parser.py",
+    "paypamin_flow.py",
+    "paypamin_flow.pyw",
+    "tray.py",
+    "update_checker.py",
+    "update_installer.py",
+    "requirements.txt",
+    "assets/paypamin_flow.png",
+    "assets/paypamin_flow_256.png",
+)
 SUPPORTED_PLATFORMS = "Windows · macOS · Linux"
+
+
+def is_python_package_file(filename: str) -> bool:
+    """Return whether a path is an application-owned file allowed in updates."""
+    path = PurePosixPath(filename)
+    if (
+        not filename
+        or filename.endswith("/")
+        or "\\" in filename
+        or path.is_absolute()
+        or ".." in path.parts
+        or any(not part or part == "." or part.startswith(".") for part in path.parts)
+    ):
+        return False
+    if len(path.parts) == 1:
+        return path.suffix.lower() in {".py", ".pyw", ".txt", ".md", ".vbs", ".sh"}
+    if len(path.parts) == 2 and path.parts[0] == "assets":
+        return path.suffix.lower() in {".png", ".svg", ".ico", ".icns"}
+    if len(path.parts) == 2 and path.parts[0] == "packaging":
+        return filename in {
+            "packaging/install_linux.sh",
+            "packaging/install_macos.sh",
+            "packaging/paypamin-flow.desktop",
+        }
+    return False

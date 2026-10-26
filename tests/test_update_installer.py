@@ -1,197 +1,214 @@
 import hashlib
 import io
-import os
-import stat
-import shutil
-import sys
-import tarfile
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from app_info import RELEASE_ASSET_NAMES
+import update_installer
+from app_info import PYTHON_PACKAGE_REQUIRED_FILES, PYTHON_RELEASE_ASSET
 from update_checker import ReleaseAsset, ReleaseInfo
 from update_installer import (
     UpdateInstallError,
-    UpdatePlan,
-    download_verified_package,
-    extract_update_package,
-    launch_update,
+    cleanup_update,
+    install_update,
+    restart_updated_app,
+    rollback_update,
     stage_update,
 )
 
 
+PACKAGE_URL = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.7.0/{PYTHON_RELEASE_ASSET}"
+CHECKSUM_URL = PACKAGE_URL + ".sha256"
+
+
+def python_package(version="0.7.0", extra=None):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in PYTHON_PACKAGE_REQUIRED_FILES:
+            if name == "app_info.py":
+                content = f'APP_VERSION = "{version}"\n'.encode()
+            elif name.endswith((".py", ".pyw")):
+                content = f"# updated {name}\n".encode()
+            elif name == "requirements.txt":
+                content = b"pystray>=0.19.5\n"
+            else:
+                content = b"icon"
+            archive.writestr(name, content)
+        for name, content in (extra or {}).items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def release_with_package(package):
+    digest = hashlib.sha256(package).hexdigest()
+    checksum = f"{digest}  {PYTHON_RELEASE_ASSET}\n".encode("ascii")
+    release = ReleaseInfo(
+        version="0.7.0",
+        tag_name="v0.7.0",
+        url="https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0",
+        assets=(ReleaseAsset(PYTHON_RELEASE_ASSET, PACKAGE_URL), ReleaseAsset(PYTHON_RELEASE_ASSET + ".sha256", CHECKSUM_URL)),
+    )
+    return release, {PACKAGE_URL: package, CHECKSUM_URL: checksum}
+
+
 class FakeResponse:
-    def __init__(self, content, url):
-        self.content = content
+    def __init__(self, url, content):
         self.url = url
-        self.offset = 0
+        self.stream = io.BytesIO(content)
+        self.status = 200
 
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        return None
+    def __exit__(self, *args):
+        return False
+
+    def read(self, size=-1):
+        return self.stream.read(size)
 
     def geturl(self):
         return self.url
 
-    def read(self, size):
-        chunk = self.content[self.offset:self.offset + size]
-        self.offset += len(chunk)
-        return chunk
 
-
-def linux_package(content=b"new-linux-app"):
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        info = tarfile.TarInfo("paypamin-flow")
-        info.size = len(content)
-        info.mode = 0o755
-        archive.addfile(info, io.BytesIO(content))
-    return buffer.getvalue()
-
-
-def release_with_package(package_name, package_content, declared_checksum=None):
-    package_url = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/{package_name}"
-    checksum_url = package_url + ".sha256"
-    checksum = declared_checksum or hashlib.sha256(package_content).hexdigest()
-    checksum_content = f"{checksum}  {package_name}\n".encode("ascii")
-    responses = {package_url: package_content, checksum_url: checksum_content}
-
+def opener_for(responses):
     def opener(request, timeout):
-        return FakeResponse(responses[request.full_url], request.full_url)
+        return FakeResponse(request.full_url, responses[request.full_url])
 
-    release = ReleaseInfo(
-        version="0.6.0",
-        tag_name="v0.6.0",
-        url="https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0",
-        assets=(ReleaseAsset(package_name, package_url), ReleaseAsset(package_name + ".sha256", checksum_url)),
-    )
-    return release, opener
+    return opener
 
 
 class UpdateInstallerTests(unittest.TestCase):
-    def test_downloads_and_verifies_package(self):
-        content = linux_package()
-        release, opener = release_with_package(RELEASE_ASSET_NAMES["linux"], content)
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            package = download_verified_package(release, "linux", Path(temporary_directory), opener)
-            self.assertEqual(package.read_bytes(), content)
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.target = self.root / "app"
+        self.target.mkdir()
+
+    def stage(self, package=None, target=None):
+        release, responses = release_with_package(package or python_package())
+        plan = stage_update(
+            release,
+            platform="linux",
+            target_path=target or self.target,
+            log_path=self.root / "update.log",
+            opener=opener_for(responses),
+        )
+        self.addCleanup(cleanup_update, plan)
+        return plan
+
+    def test_stage_downloads_verifies_and_preserves_running_app(self):
+        (self.target / "paypamin_flow.py").write_text("old application", encoding="utf-8")
+        plan = self.stage()
+        self.assertEqual(plan.source_path.joinpath("paypamin_flow.py").read_text(), "# updated paypamin_flow.py\n")
+        self.assertEqual(plan.target_path, self.target.resolve())
+        self.assertEqual((self.target / "paypamin_flow.py").read_text(), "old application")
+        self.assertTrue(plan.work_dir.is_dir())
+        cleanup_update(plan)
+        self.assertFalse(plan.work_dir.exists())
 
     def test_checksum_mismatch_is_rejected(self):
-        release, opener = release_with_package(RELEASE_ASSET_NAMES["linux"], linux_package(), "0" * 64)
-        with tempfile.TemporaryDirectory() as temporary_directory:
+        release, responses = release_with_package(python_package())
+        responses[CHECKSUM_URL] = f"{'0' * 64}  {PYTHON_RELEASE_ASSET}\n".encode()
+        with self.assertRaises(UpdateInstallError):
+            stage_update(release, platform="linux", target_path=self.target, opener=opener_for(responses))
+        self.assertEqual(list(self.target.iterdir()), [])
+
+    def test_path_traversal_is_rejected(self):
+        package = python_package(extra={"../outside.py": "not allowed"})
+        with self.assertRaises(UpdateInstallError):
+            self.stage(package)
+        self.assertFalse((self.root / "outside.py").exists())
+
+    def test_missing_python_assets_are_rejected(self):
+        release = ReleaseInfo("0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0")
+        with self.assertRaises(UpdateInstallError):
+            stage_update(release, platform="linux", target_path=self.target)
+
+    def test_package_version_must_match_release(self):
+        with self.assertRaises(UpdateInstallError):
+            self.stage(python_package(version="0.8.0"))
+
+    def test_install_preserves_user_data_and_rollback_restores_every_file(self):
+        (self.target / "paypamin_flow.py").write_text("old application", encoding="utf-8")
+        for folder in ("import", "export", "svg"):
+            (self.target / folder).mkdir()
+            (self.target / folder / "keep.txt").write_text(folder, encoding="utf-8")
+        database = self.target / "paminnelseapp.sqlite3"
+        database.write_bytes(b"user database")
+        plan = self.stage()
+        installed = install_update(plan)
+        self.assertEqual((self.target / "paypamin_flow.py").read_text(), "# updated paypamin_flow.py\n")
+        self.assertTrue((self.target / "tray.py").is_file())
+        for folder in ("import", "export", "svg"):
+            self.assertEqual((self.target / folder / "keep.txt").read_text(), folder)
+        self.assertEqual(database.read_bytes(), b"user database")
+
+        rollback_update(installed)
+        self.assertEqual((self.target / "paypamin_flow.py").read_text(), "old application")
+        self.assertFalse((self.target / "tray.py").exists())
+        self.assertEqual(database.read_bytes(), b"user database")
+
+    def test_failed_installation_rolls_back_and_cleans_staging(self):
+        (self.target / "app_info.py").write_text("old info", encoding="utf-8")
+        (self.target / "autostart.py").write_text("old autostart", encoding="utf-8")
+        plan = self.stage()
+        original_replace = update_installer._replace_file
+
+        def fail_once(source, target):
+            if target.name == "autostart.py" and source.parent == plan.source_path:
+                raise OSError("synthetic write failure")
+            return original_replace(source, target)
+
+        with patch.object(update_installer, "_replace_file", side_effect=fail_once):
             with self.assertRaises(UpdateInstallError):
-                download_verified_package(release, "linux", Path(temporary_directory), opener)
-            self.assertFalse((Path(temporary_directory) / RELEASE_ASSET_NAMES["linux"]).exists())
+                install_update(plan)
+        self.assertEqual((self.target / "app_info.py").read_text(), "old info")
+        self.assertEqual((self.target / "autostart.py").read_text(), "old autostart")
+        self.assertFalse(plan.work_dir.exists())
 
-    def test_missing_platform_assets_are_rejected(self):
-        release = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0")
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            with self.assertRaises(UpdateInstallError):
-                download_verified_package(release, "windows", Path(temporary_directory))
+    def test_windows_restart_uses_pythonw_and_no_console(self):
+        plan = self.stage()
+        installed = install_update(plan)
+        python_home = self.root / "python"
+        python_home.mkdir()
+        python = python_home / "python.exe"
+        pythonw = python_home / "pythonw.exe"
+        python.write_bytes(b"")
+        pythonw.write_bytes(b"")
+        calls = []
 
-    def test_stage_update_downloads_extracts_and_preserves_target_path(self):
-        content = linux_package(b"staged-new-app")
-        release, opener = release_with_package(RELEASE_ASSET_NAMES["linux"], content)
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            target = root / "installed app"
-            target.write_bytes(b"old-app")
-            plan = stage_update(release, "linux", target, root / "logs" / "update.log", opener)
-            try:
-                self.assertEqual(plan.target, target.resolve())
-                self.assertEqual(plan.source.read_bytes(), b"staged-new-app")
-                self.assertEqual(plan.log_path, root / "logs" / "update.log")
-            finally:
-                shutil.rmtree(plan.work_dir, ignore_errors=True)
+        def popen(args, **kwargs):
+            calls.append((args, kwargs))
+            return SimpleNamespace(pid=4321)
 
-    def test_extracts_windows_executable_only(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            package = root / "windows.zip"
-            with zipfile.ZipFile(package, "w") as archive:
-                archive.writestr("PayPamin Flow.exe", b"new-windows-app")
-                archive.writestr("../ignored", b"must-not-be-extracted")
-            source = extract_update_package(package, "windows", root / "out")
-            self.assertEqual(source.read_bytes(), b"new-windows-app")
-            self.assertFalse((root / "ignored").exists())
+        with patch.object(update_installer.sys, "platform", "win32"), patch.object(
+            update_installer.sys, "executable", str(python)
+        ), patch.object(update_installer.subprocess, "Popen", side_effect=popen), patch.object(
+            update_installer.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True
+        ), patch.object(update_installer.subprocess, "DETACHED_PROCESS", 0x00000008, create=True):
+            process = restart_updated_app(installed)
+        self.assertEqual(process.pid, 4321)
+        args, kwargs = calls[0]
+        self.assertEqual(args, [str(pythonw.resolve()), str((self.target / "paypamin_flow.pyw").resolve())])
+        self.assertEqual(kwargs["creationflags"], 0x08000008)
+        self.assertFalse(kwargs["start_new_session"])
+        self.assertEqual(kwargs["stdout"], update_installer.subprocess.DEVNULL)
+        self.assertEqual(kwargs["stderr"], update_installer.subprocess.DEVNULL)
 
-    def test_extracts_macos_bundle_and_executable_mode(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            package = root / "macos.zip"
-            with zipfile.ZipFile(package, "w") as archive:
-                info = zipfile.ZipInfo("PayPamin Flow.app/Contents/MacOS/paypamin-flow")
-                info.external_attr = 0o100755 << 16
-                archive.writestr(info, b"new-macos-app")
-                archive.writestr("PayPamin Flow.app/Contents/Info.plist", "synthetic")
-            source = extract_update_package(package, "macos", root / "out")
-            self.assertEqual((source / "Contents" / "MacOS" / "paypamin-flow").read_bytes(), b"new-macos-app")
-            if os.name == "posix":
-                self.assertTrue((source / "Contents" / "MacOS" / "paypamin-flow").stat().st_mode & 0o111)
-
-    def test_macos_path_traversal_is_rejected(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            package = root / "macos.zip"
-            with zipfile.ZipFile(package, "w") as archive:
-                archive.writestr("PayPamin Flow.app/../outside", b"unsafe")
-            with self.assertRaises(UpdateInstallError):
-                extract_update_package(package, "macos", root / "out")
-            self.assertFalse((root / "outside").exists())
-
-    def test_macos_symlinks_are_rejected(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            package = root / "macos.zip"
-            with zipfile.ZipFile(package, "w") as archive:
-                link = zipfile.ZipInfo("PayPamin Flow.app/Contents/MacOS/link")
-                link.create_system = 3
-                link.external_attr = (stat.S_IFLNK | 0o777) << 16
-                archive.writestr(link, "../../outside")
-            with self.assertRaises(UpdateInstallError):
-                extract_update_package(package, "macos", root / "out")
-
-    def test_helper_launch_failure_cleans_staging_directory(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            work_dir = root / "work"
-            work_dir.mkdir()
-            plan = UpdatePlan("linux", work_dir, work_dir / "source", root / "target", root / "update.log")
-            with patch("update_installer.subprocess.Popen", side_effect=OSError("unavailable")):
-                with self.assertRaises(UpdateInstallError):
-                    launch_update(plan, process_id=99_999_999)
-            self.assertFalse(work_dir.exists())
-
-    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux helper integration test")
-    def test_linux_helper_replaces_and_restarts_app(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            work_dir = root / "work with spaces"
-            work_dir.mkdir()
-            updated = b"#!/bin/sh\n# updated\nexit 0\n"
-            source = work_dir / "staged app"
-            source.write_bytes(updated)
-            target = root / "target app"
-            target.write_bytes(b"#!/bin/sh\n# old\nexit 0\n")
-            target.chmod(0o755)
-            log = root / "update.log"
-            plan = UpdatePlan("linux", work_dir, source, target, log)
-            helper = launch_update(plan, process_id=99_999_999)
-            try:
-                helper.wait(timeout=10)
-            finally:
-                if helper.poll() is None:
-                    helper.kill()
-                    helper.wait()
-            self.assertEqual(target.read_bytes(), updated)
-            self.assertFalse(work_dir.exists())
-            self.assertFalse(Path(str(target) + ".bak").exists())
-            self.assertIn("Update installed and application restarted", log.read_text(encoding="utf-8"))
+    def test_untrusted_download_url_is_rejected(self):
+        release, responses = release_with_package(python_package())
+        unsafe = ReleaseInfo(
+            release.version,
+            release.tag_name,
+            release.url,
+            (ReleaseAsset(PYTHON_RELEASE_ASSET, "http://example.com/update.zip"), release.assets[1]),
+        )
+        with self.assertRaises(UpdateInstallError):
+            stage_update(unsafe, platform="linux", target_path=self.target, opener=opener_for(responses))
 
 
 if __name__ == "__main__":

@@ -1,12 +1,18 @@
+import hashlib
 import importlib.util
-import os
-import tarfile
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 
-from app_info import RELEASE_ASSET_NAMES
+from app_info import (
+    APP_VERSION,
+    PYTHON_PACKAGE_REQUIRED_FILES,
+    PYTHON_RELEASE_ASSET,
+    RELEASE_ASSET_NAMES,
+    is_python_package_file,
+)
+from update_installer import _extract_python_package
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,54 +22,34 @@ SPEC.loader.exec_module(packaging)
 
 
 class ReleasePackagingTests(unittest.TestCase):
-    def assert_checksum(self, asset, checksum):
-        self.assertEqual(checksum.read_text(encoding="ascii"), f"{packaging.sha256_file(asset)}  {asset.name}\n")
+    def test_all_platforms_use_one_python_package(self):
+        self.assertEqual(set(RELEASE_ASSET_NAMES.values()), {PYTHON_RELEASE_ASSET})
+        self.assertEqual(PYTHON_RELEASE_ASSET, "PayPamin-Flow-Python.zip")
 
-    def test_windows_package_contains_single_executable(self):
+    def test_package_contains_python_sources_icons_and_no_native_binaries(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            dist = root / "dist"
-            dist.mkdir()
-            (dist / "PayPamin Flow.exe").write_bytes(b"synthetic-windows-app")
-            asset, checksum = packaging.package_release("windows", dist, root / "assets")
-            self.assertEqual(asset.name, RELEASE_ASSET_NAMES["windows"])
+            output = Path(temporary_directory)
+            asset, checksum = packaging.build_python_package(ROOT, output)
+            self.assertEqual(asset.name, PYTHON_RELEASE_ASSET)
+            self.assertEqual(checksum.name, PYTHON_RELEASE_ASSET + ".sha256")
+            digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+            self.assertEqual(checksum.read_text(encoding="ascii"), f"{digest}  {PYTHON_RELEASE_ASSET}\n")
             with zipfile.ZipFile(asset) as archive:
-                self.assertEqual(archive.namelist(), ["PayPamin Flow.exe"])
-                self.assertEqual(archive.read("PayPamin Flow.exe"), b"synthetic-windows-app")
-            self.assert_checksum(asset, checksum)
-
-    def test_macos_package_contains_app_bundle(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            executable = root / "dist" / "PayPamin Flow.app" / "Contents" / "MacOS" / "paypamin-flow"
-            executable.parent.mkdir(parents=True)
-            executable.write_bytes(b"synthetic-macos-app")
-            executable.chmod(0o755)
-            (executable.parents[1] / "Info.plist").write_text("synthetic", encoding="utf-8")
-            asset, checksum = packaging.package_release("macos", root / "dist", root / "assets")
-            self.assertEqual(asset.name, RELEASE_ASSET_NAMES["macos"])
-            with zipfile.ZipFile(asset) as archive:
-                self.assertIn("PayPamin Flow.app/Contents/MacOS/paypamin-flow", archive.namelist())
-                self.assertIn("PayPamin Flow.app/Contents/Info.plist", archive.namelist())
-                if os.name == "posix":
-                    mode = (archive.getinfo("PayPamin Flow.app/Contents/MacOS/paypamin-flow").external_attr >> 16) & 0o777
-                    self.assertTrue(mode & 0o111)
-            self.assert_checksum(asset, checksum)
-
-    def test_linux_package_contains_executable(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            dist = root / "dist"
-            dist.mkdir()
-            (dist / "paypamin-flow").write_bytes(b"synthetic-linux-app")
-            (dist / "paypamin-flow").chmod(0o755)
-            asset, checksum = packaging.package_release("linux", dist, root / "assets")
-            self.assertEqual(asset.name, RELEASE_ASSET_NAMES["linux"])
-            with tarfile.open(asset, "r:gz") as archive:
-                member = archive.getmember("paypamin-flow")
-                self.assertTrue(member.isfile())
-                self.assertEqual(archive.extractfile(member).read(), b"synthetic-linux-app")
-            self.assert_checksum(asset, checksum)
+                names = set(archive.namelist())
+                self.assertTrue(set(PYTHON_PACKAGE_REQUIRED_FILES).issubset(names))
+                self.assertIn("paypamin_flow.py", names)
+                self.assertIn("app_backup.py", names)
+                self.assertIn("tray.py", names)
+                self.assertIn("assets/paypamin_flow.ico", names)
+                self.assertIn("assets/paypamin_flow.icns", names)
+                self.assertTrue(all(is_python_package_file(name) for name in names))
+                self.assertFalse(any(name.lower().endswith((".exe", ".dll", ".so", ".dylib", ".spec")) for name in names))
+                self.assertFalse(any(name.startswith(("tests/", ".git/", "import/", "export/", "svg/")) for name in names))
+                self.assertNotIn("start_paypamin_flow.command", names)
+            validated = output / "validated"
+            _extract_python_package(asset, validated, APP_VERSION)
+            self.assertTrue((validated / "paypamin_flow.py").is_file())
+            self.assertTrue((validated / "tray.py").is_file())
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # PayPamin Flow
 
-Lokal skrivbordsapp för **Windows, macOS och Linux** som läser enskilda Fortnox-fakturor från PDF, skapar betalningspåminnelser som PDF och håller reda på nästa steg. Fakturor och kunduppgifter behandlas lokalt; appen ansluter inte till Fortnox och skickar inte e-post eller Kronofogden-ärenden automatiskt.
+Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda Fortnox-fakturor från PDF, skapar betalningspåminnelser som PDF och håller reda på nästa steg. Fakturor och kunduppgifter behandlas lokalt; appen ansluter inte till Fortnox och skickar inte e-post eller Kronofogden-ärenden automatiskt.
 
 - **Skapare och upphovsman:** Rickard Länkvist
 - **Copyright:** © 2026 Rickard Länkvist
@@ -9,51 +9,52 @@ Lokal skrivbordsapp för **Windows, macOS och Linux** som läser enskilda Fortno
 
 ## Funktioner
 
-- Läser enskilda faktura-PDF:er och föreslår kund, fakturanummer, datum, belopp efter **ATT BETALA** och fakturatext.
-- **Valuta per faktura** med SEK som standard och redigerbara koder med tre bokstäver, exempelvis EUR, USD, NOK och DKK. Belopp växlas inte mellan valutor.
-- Importmapp och knapp för att skanna nya PDF-filer. Varje ny faktura granskas innan den sparas. Dubbletter stoppas via fakturanummer eller identiskt PDF-innehåll, även om filen döpts om, och användaren får ett tydligt meddelande.
+- Läser faktura-PDF:er och föreslår kund, fakturanummer, datum, belopp efter **ATT BETALA** och fakturatext.
+- **Valuta per faktura** med SEK som standard och redigerbara ISO-koder, exempelvis EUR, USD, NOK och DKK. Belopp växlas inte mellan valutor.
+- Importmapp och knapp för att skanna nya PDF-filer. Varje ny faktura granskas innan den sparas. Dubbletter stoppas via fakturanummer eller identiskt PDF-innehåll, även om filen döpts om.
 - PDF-förhandsgranskning med markerbara fältområden och återanvändbara leverantörsmallar.
 - SVG-logotyp kan kopplas till en leverantörsmall och återanvändas vid export.
 - Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta.
-- Samma egen applikationsikon i fönster, dialoger, Windows-exe, macOS-app och Linux-programmeny.
+- Samma PayPamin Flow-ikon i fönster, dialoger, programmenyer och systemfältet.
+- **Stäng till systemfältet:** fönstrets stängknapp döljer appen medan schemalagda kontroller fortsätter. **Arkiv → Avsluta helt** eller systemfältets **Avsluta helt** stänger appen helt.
+- **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
 - **Autostart vid inloggning** på Windows, macOS och Linux. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
-- **Automatiska uppdateringar mot GitHub Releases** två gånger per dygn, med verifierade native-paket och tyst omstart. Manuell sökning och nedladdning finns också.
+- **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med SHA-256-verifiering och tyst omstart. Manuell sökning och installation finns i appen via **Hjälp → Sök efter uppdateringar**.
 - PDF sparas lokalt och öppnas i datorns standardprogram. Fellogg öppnas via **Visa fellogg**.
 
-## Starta från källkod
+## Python-only – ingen EXE eller native-app
 
-Python **3.10 eller senare** och Tkinter krävs. Installera Python-tilläggen med:
+PayPamin Flow distribueras som **Python-källkod**, inte som EXE, macOS-app eller native Linux-binär. Samma releasepaket används på alla tre plattformarna:
+
+- `PayPamin-Flow-Python.zip`
+- `PayPamin-Flow-Python.zip.sha256`
+
+Python **3.10 eller senare** och Tkinter krävs. Packa upp ZIP-filen i en mapp där din användare har skrivrättigheter och installera tilläggen:
 
 ```sh
 python -m pip install -r requirements.txt
 ```
 
-Använd `py` i stället för `python` i Windows om det är det kommando som pekar på din Python-installation.
+Använd `py -m pip` i Windows om det är det kommando som pekar på din Python-installation. Appen kan också installera saknade Python-tillägg i bakgrunden utan att öppna ett konsolfönster.
+
+## Starta utan konsolfönster
 
 ### Windows
 
-1. Installera Python från python.org och välj **Add Python to PATH**. Den officiella installationen innehåller Tkinter.
+1. Installera Python från python.org och välj **Add Python to PATH**. Den officiella installationen innehåller Tkinter och `pythonw.exe`.
 2. Installera tilläggen enligt ovan.
-3. Dubbelklicka på `start_paypamin_flow.vbs` för att starta utan konsolfönster.
+3. Dubbelklicka på **`start_paypamin_flow.vbs`**. Startaren använder `pythonw.exe` och öppnar inget konsolfönster.
 
-För felsökning från PowerShell:
-
-```powershell
-py paypamin_flow.py
-```
+För felsökning från en redan öppen PowerShell kan `py paypamin_flow.py` användas.
 
 ### macOS
 
-1. Installera Python 3.10+ med Tkinter, till exempel det officiella installationspaketet från python.org.
+1. Installera Python 3.10+ med Tkinter och Python Launcher, till exempel det officiella installationspaketet från python.org.
 2. Installera tilläggen enligt ovan.
-3. Kör `./start_paypamin_flow.command` eller:
+3. Öppna **`paypamin_flow.pyw`** med Python Launcher. Python Launchers alternativ att köra i Terminal ska vara avstängt.
 
-```sh
-python3 paypamin_flow.py
-```
-
-Det native `.app`-paketet från byggsteget nedan startar utan Terminalfönster. Källkodsstartaren `.command` är avsedd för felsökning och kan öppna Terminal; använd native `.app` när du vill starta helt utan Terminal.
+Autostart och omstart efter uppdatering använder Python direkt via LaunchAgents respektive appens befintliga process och öppnar inte Terminal. En separat `.command`-startare används inte eftersom macOS annars kan öppna Terminal.
 
 ### Linux
 
@@ -62,47 +63,59 @@ På Debian/Ubuntu installeras skrivbords- och Python-stöd med:
 ```sh
 sudo apt install python3 python3-pip python3-tk
 python3 -m pip install -r requirements.txt
-./start_paypamin_flow.sh
+./packaging/install_linux.sh
 ```
 
-På system med externally managed Python kan en virtuell miljö användas:
+Starta därefter **PayPamin Flow** från programmenyn. Skrivbordsposten har `Terminal=false`. Installationen är per användare och kopierar Python-filerna till `~/.local/share/paypamin-flow` som standard.
 
-```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
-./start_paypamin_flow.sh
-```
+På system med externally managed Python kan en virtuell miljö användas. Skapa miljön, installera `requirements.txt` i den och ange dess Python med miljövariabeln `PYTHON` när installationsprogrammet körs.
+
+## Systemfält och fullständig avslutning
+
+När du stänger huvudfönstret döljs det i systemfältet. Appen fortsätter då med bland annat schemalagda uppdateringskontroller.
+
+- Klicka på PayPamin Flow-ikonen eller välj **Öppna PayPamin Flow** i systemfältet för att visa fönstret igen.
+- Välj **Arkiv → Dölj till systemfältet** för att dölja det utan musens stängknapp.
+- Välj **Arkiv → Avsluta helt** eller **Avsluta helt** i systemfältet för att avsluta bakgrundsaktiviteten och stänga appen.
+
+Om skrivbordsmiljön inte har ett fungerande systemfält lämnas fönstret synligt och appen erbjuder ett tydligt val att avsluta i stället för att gömmas oåtkomlig. På Linux kan skrivbordets AppIndicator-/systemfältsstöd behöva aktiveras.
+
+## Säkerhetskopiering och återställning
+
+Välj **Arkiv → Säkerhetskopiera inställningar och påminnelser** och spara ZIP-filen på en säker plats. Säkerhetskopian innehåller:
+
+- den lokala databasen med inställningar, fakturor, leverantörsmallar och PDF-fältområden;
+- skapade påminnelse-PDF:er från `export/`;
+- företagslogotyper från `svg/`;
+- ett manifest med format, version, tidsstämpel och SHA-256-kontrollsummor.
+
+Importerade originalfakturor i `import/` och diagnostikloggar ingår inte. Kopiera originalfakturorna separat om de inte finns någon annanstans.
+
+Välj **Arkiv → Återställ säkerhetskopia** för att återställa. Arkivets sökvägar, filtyper, kontrollsummor och SQLite-integritet kontrolleras först. Appen skapar alltid en säkerhetskopia av nuvarande data innan något ersätts. Den sparas under `~/.paminnelseapp/backups`. Om ersättningen misslyckas återställs de tidigare filerna automatiskt.
+
+## Uppdateringar i appen
+
+Appen kontrollerar den senaste stabila GitHub-releasen en kort stund efter start och därefter **var 12:e timme medan appen körs**, även när fönstret ligger i systemfältet. Automatiska uppdateringar är aktiverade som standard och kan stängas av under **Inställningar**.
+
+Vid en nyare version hämtas samma Python-ZIP för Windows, macOS och Linux. Kontrollsumman verifieras, arkivets sökvägar och filer valideras och Python-filerna syntaxkontrolleras innan något ersätts. Appen ersätter endast egna program-, start-, dokumentations- och ikonfiler. Databas, `import/`, `export/`, `svg/` och andra användardata ingår inte och lämnas orörda.
+
+Installationen sker **inuti appen**; du ska inte starta någon separat uppdateringsfil. Därefter startas den uppdaterade Python-appen om utan konsolfönster. Gamla programfiler används som reserv under ersättningen och återställs om installationen eller omstarten misslyckas.
+
+Manuell kontroll görs med knappen **Sök efter uppdateringar** eller **Hjälp → Sök efter uppdateringar**. Vid en nyare version väljer du **Installera och starta om** eller **Öppna nedladdningssida**.
+
+Kontrollen använder GitHubs publika API och skickar inga faktura-, kund- eller inställningsuppgifter. Automatiska nätverks- och installationsfel loggas utan popup och provas igen vid nästa schemalagda kontroll. Appmappen måste vara skrivbar för den aktuella användaren. Tekniska installationsfel loggas i `update.log` under `~/.paminnelseapp`.
 
 ## Språk / Language
 
 Välj **Inställningar → Språk → Svenska / English** och spara. Språkbytet sker direkt utan omstart och sparas i den lokala databasen. Svenska är standard vid första starten.
 
-Språkvalet gäller huvudfönster, filter, statusar, formulär, PDF-förhandsgranskning, felmeddelanden, belopp och datum samt nya påminnelse-PDF:er. Befintliga fakturor, PDF-mallar, logotypval och autostart fungerar med båda språken. Redan skapade PDF-filer ändras inte i efterhand.
-
-## Uppdateringar
-
-Appen kontrollerar den senaste stabila GitHub-releasen en kort stund efter start och därefter **var 12:e timme medan appen är öppen**. Automatiska uppdateringar är aktiverade som standard och kan stängas av under **Inställningar → Sök efter och installera uppdateringar automatiskt två gånger per dygn**.
-
-När en nyare version finns hämtar en native-installation automatiskt rätt paket för Windows, macOS eller Linux. Paketets SHA-256-kontrollsumma verifieras före uppackning. Därefter stängs appen, programmet byts ut och startas igen utan konsolfönster. Den gamla installationen används som reserv under ombytet så att den kan återställas vid fel. Databas, fakturor, inställningar, mallar och företagslogotyper ingår inte i uppdateringen och lämnas orörda.
-
-Knappen **Sök efter uppdateringar** gör en manuell kontroll. Vid en nyare version kan du välja **Installera och starta om** eller **Öppna nedladdningssida**. Körning direkt från källkod skrivs inte över automatiskt; använd release-sidan eller uppdatera källkoden manuellt.
-
-Kontrollen använder GitHubs publika API och skickar inga faktura-, kund- eller inställningsuppgifter. Automatiska nätverks- och installationsfel loggas utan popup och provas igen vid nästa schemalagda kontroll. Installationsmappen måste vara skrivbar för den aktuella användaren. Operativsystemets säkerhetsskydd, kodsigneringskrav eller saknade releasepaket kan kräva manuell installation. Tekniska installationsfel loggas i `update.log` under `~/.paminnelseapp`.
-
-GitHub Actions bygger och bifogar följande filer till nya publicerade releaser:
-
-- `PayPamin-Flow-Windows.zip` och `.sha256`
-- `PayPamin-Flow-macOS.zip` och `.sha256`
-- `PayPamin-Flow-Linux.tar.gz` och `.sha256`
-
-Säkerhetskopiera den lokala databasen regelbundet och innan en manuell ominstallation.
+Språkvalet gäller huvudfönster, menyer, systemfält, filter, statusar, formulär, PDF-förhandsgranskning, felmeddelanden, belopp och datum samt nya påminnelse-PDF:er. Befintliga fakturor, PDF-mallar, logotypval och autostart fungerar med båda språken. Redan skapade PDF-filer ändras inte i efterhand.
 
 ## Valuta / Currency
 
-Varje faktura har en egen valuta. **SEK** är standard för nya fakturor och för befintliga fakturor när databasen uppdateras. Ange en annan ISO-kod med tre bokstäver, till exempel **EUR**, **USD**, **NOK** eller **DKK**, i granskningsformuläret eller när fakturan läggs till manuellt. Koden normaliseras till versaler.
+Varje faktura har en egen valuta. **SEK** är standard för nya fakturor och för befintliga fakturor när databasen uppdateras. Ange en annan ISO-kod med tre bokstäver, till exempel **EUR**, **USD**, **NOK** eller **DKK**, i granskningsformuläret eller när fakturan läggs till manuellt.
 
-PDF-importen föreslår valuta när en kod finns vid **ATT BETALA**, efter **Valuta/Currency** eller i ett sparat markerat valutafält. Kontrollera alltid förslaget före godkännande. Fakturabelopp, betalt belopp, kvarstående belopp, påminnelseavgifter och PDF-summor visas i fakturans valuta. Den inställda numeriska påminnelseavgiften används i respektive fakturas valuta.
+PDF-importen föreslår valuta när en kod finns vid **ATT BETALA**, efter **Valuta/Currency** eller i ett sparat markerat valutafält. Kontrollera alltid förslaget. Fakturabelopp, betalt belopp, kvarstående belopp, avgifter och PDF-summor visas i fakturans valuta.
 
 **Appen gör ingen valutaomräkning.** Att ändra valuta ändrar märkningen, inte de inmatade siffrorna. Svensk visning blir exempelvis `1 234,50 EUR`; engelsk visning blir `EUR 1,234.50`.
 
@@ -112,53 +125,36 @@ Autostart gäller endast den inloggade användaren och kräver inga administrat�
 
 | System | Mekanism |
 | --- | --- |
-| Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PayPaminFlow` |
+| Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PayPaminFlow` med `pythonw.exe` |
 | macOS | `~/Library/LaunchAgents/se.paypamin.flow.plist` |
 | Linux | `$XDG_CONFIG_HOME/autostart/paypamin-flow.desktop`, normalt `~/.config/autostart/` |
 
-Stäng av eller aktivera via **Inställningar → Starta PayPamin Flow automatiskt när jag loggar in**. Om appmappen eller det byggda programmet flyttas, starta appen en gång från den nya platsen så uppdateras sökvägen. Autostart sker efter inloggning, inte före inloggning vid datorns boot.
-
-**Autostart öppnar inget konsolfönster.** Windows använder den windowed native-exe:n eller `pythonw.exe` för källkod, macOS använder LaunchAgents och Linux använder en skrivbordspost med `Terminal=false`.
-
-### Manuell start utan konsolfönster
-
-| System | Konsolfri startväg |
-| --- | --- |
-| Windows | `PayPamin Flow.exe` eller `start_paypamin_flow.vbs` |
-| macOS | `PayPamin Flow.app` |
-| Linux | **PayPamin Flow** i programmenyn efter installation med `packaging/install_linux.sh` |
+Stäng av eller aktivera via **Inställningar → Starta PayPamin Flow automatiskt när jag loggar in**. Om appmappen flyttas, starta appen en gång från den nya platsen så uppdateras sökvägen. Autostart sker efter inloggning och öppnar inget konsolfönster.
 
 ## Applikationsikon
 
-Ikonen föreställer ett fakturadokument med **P** och en grön betalningsmarkering. Original och native format ligger i `assets/`:
+Ikonen föreställer ett fakturadokument med **P** och en grön betalningsmarkering. Original och skrivbordsformat ligger i `assets/`:
 
 - `paypamin_flow.svg` – vektororiginal.
-- `paypamin_flow.png` och storleksvarianter – Tkinter och Linux.
+- `paypamin_flow.png` och storleksvarianter – Tkinter, systemfält och Linux.
 - `paypamin_flow.ico` – Windows, flera inbäddade storlekar.
-- `paypamin_flow.icns` – macOS.
+- `paypamin_flow.icns` – macOS-ikonkälla.
 
-Generera om raster- och native ikoner med Pillow installerat:
+Generera om raster- och skrivbordsikoner med Pillow installerat:
 
 ```sh
 python assets/build_icons.py
 ```
 
-## Bygg native skrivbordsapp
+## Skapa Python-releasepaket
 
-Bygg på respektive operativsystem; PyInstaller kors kompilerar inte mellan OS:
+Det finns inget PyInstaller- eller native-byggsteg. Skapa det plattformsoberoende paketet och dess kontrollsumma med:
 
 ```sh
-python -m pip install -r requirements-build.txt
-pyinstaller paypamin_flow.spec --clean --noconfirm
+python packaging/package_release.py --output release-assets
 ```
 
-Resultat:
-
-- **Windows:** `dist/PayPamin Flow.exe` med appikon, version, produktnamn och copyrightmetadata.
-- **macOS:** `dist/PayPamin Flow.app` med ICNS-ikon, bundle-id och copyrightmetadata.
-- **Linux:** `dist/paypamin-flow`. Installera programpost och ikon för den aktuella användaren med `./packaging/install_linux.sh`.
-
-GitHub Actions-workflöen i `.github/workflows/build.yml` kör tester och bygger paket för Windows, macOS och Linux. Paketen blir byggartefakter när workflöen körs. När en release publiceras skapar `packaging/package_release.py` plattformspaketen och deras SHA-256-filer, som därefter bifogas releasen för automatiska uppdateringar.
+GitHub Actions-workflöen i `.github/workflows/build.yml` kör testerna på Windows, macOS och Linux. Ubuntu-jobbet skapar Python-ZIP och SHA-256-fil. Vid en framtida, uttryckligen beställd release kan samma två filer bifogas releasen för appens uppdateringsfunktion.
 
 ## Fakturor, logotyper och OCR
 
@@ -176,10 +172,10 @@ OCR för skannade PDF:er kräver Tesseract med svenska språkdata (`swe`) och Po
 ## Lokal lagring och integritet
 
 - Databas, mallar, inställningar och fellogg sparas i användarprofilen under `~/.paminnelseapp`. Det befintliga katalognamnet behålls så att tidigare data inte försvinner efter namnbytet.
-- Vid källkodskörning ligger `import/`, `export/` och `svg/` i projektmappen. I ett fruset/native paket ligger de under `~/.paminnelseapp` så att appen aldrig skriver i en temporär eller skrivskyddad programkatalog.
+- `import/`, `export/` och `svg/` ligger i den skrivbara Python-appmappen.
 - Kundfakturor, exporter, lokala databaser, loggar och företagslogotyper ska inte checkas in. Se `.gitignore`.
 - Felloggen kan innehålla tekniska fel och filvägar. Granska den innan den delas.
-- Säkerhetskopiera databasen och mallarna före uppdatering eller ominstallation.
+- Använd appens ZIP-säkerhetskopior regelbundet och före en manuell ominstallation.
 
 ## Tester
 
@@ -187,7 +183,7 @@ OCR för skannade PDF:er kräver Tesseract med svenska språkdata (`swe`) och Po
 python -m unittest discover -s tests -v
 ```
 
-Parser-, autostart-, ikon-, språk-, valuta- och databasmigreringstester använder syntetiska data och kräver ingen grafisk skrivbordssession. Översättningstesterna kontrollerar även att nya texter har engelska översättningar och matchande variabler. Testa alltid ändringar mot riktiga, noggrant granskade exempel före skarp användning.
+Parser-, autostart-, ikon-, språk-, valuta-, databas-, säkerhetskopierings-, systemfälts-, paket- och uppdateringstester använder syntetiska data och kräver ingen grafisk skrivbordssession. Översättningstesterna kontrollerar att nya texter har engelska översättningar och matchande variabler. Testa alltid ändringar mot riktiga, noggrant granskade exempel före skarp användning.
 
 ## Begränsningar
 

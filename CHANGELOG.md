@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — application version remains 0.6.0
+
+- Replaced native application packaging with one cross-platform `PayPamin-Flow-Python.zip` and SHA-256 sidecar; removed PyInstaller and native build metadata.
+- Added validated in-app installation of Python updates with atomic replacement, rollback and console-free restart; no separate updater needs to be run by the user.
+- Added close-to-system-tray behavior, an explicit full-exit path and the PayPamin Flow icon in the tray.
+- Added bilingual File-menu backup and restore for settings, invoices, reminders, templates and logos, including checksum/SQLite validation and a pre-restore safety backup.
+- Added File and Help menus, with update checks available inside the app and automatic checks retained every 12 hours.
+- Added headless backup, tray, Python-package, updater, rollback and console-free restart tests.
+
 ## 0.6.0 — 2026-10-26
 
 - Close SQLite connections deterministically after each transaction so Windows does not retain locked database files.
