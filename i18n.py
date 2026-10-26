@@ -266,6 +266,7 @@ _ENGLISH = {
     "PDF-läsning kräver PyMuPDF. Installera med: pip install pymupdf": "PDF reading requires PyMuPDF. Install with: pip install pymupdf",
     "Det går inte att hitta appens programfil.": "The application executable could not be found.",
     "Det går inte att hitta Python-installationen.": "The Python installation could not be found.",
+    "Konsolfri start kräver pythonw.exe. Installera Python från python.org.": "Console-free launch requires pythonw.exe. Install Python from python.org.",
     "Startfilen saknas: {script}": "The launch file is missing: {script}",
     "Plattformen stöds inte": "Platform not supported",
     "Autostart stöds inte på {platform}.": "Autostart is not supported on {platform}.",

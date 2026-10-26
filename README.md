@@ -53,7 +53,7 @@ py paypamin_flow.py
 python3 paypamin_flow.py
 ```
 
-Det native `.app`-paketet från byggsteget nedan startar utan Terminalfönster.
+Det native `.app`-paketet från byggsteget nedan startar utan Terminalfönster. Källkodsstartaren `.command` är avsedd för felsökning och kan öppna Terminal; använd native `.app` när du vill starta helt utan Terminal.
 
 ### Linux
 
@@ -117,6 +117,16 @@ Autostart gäller endast den inloggade användaren och kräver inga administrat�
 | Linux | `$XDG_CONFIG_HOME/autostart/paypamin-flow.desktop`, normalt `~/.config/autostart/` |
 
 Stäng av eller aktivera via **Inställningar → Starta PayPamin Flow automatiskt när jag loggar in**. Om appmappen eller det byggda programmet flyttas, starta appen en gång från den nya platsen så uppdateras sökvägen. Autostart sker efter inloggning, inte före inloggning vid datorns boot.
+
+**Autostart öppnar inget konsolfönster.** Windows använder den windowed native-exe:n eller `pythonw.exe` för källkod, macOS använder LaunchAgents och Linux använder en skrivbordspost med `Terminal=false`.
+
+### Manuell start utan konsolfönster
+
+| System | Konsolfri startväg |
+| --- | --- |
+| Windows | `PayPamin Flow.exe` eller `start_paypamin_flow.vbs` |
+| macOS | `PayPamin Flow.app` |
+| Linux | **PayPamin Flow** i programmenyn efter installation med `packaging/install_linux.sh` |
 
 ## Applikationsikon
 

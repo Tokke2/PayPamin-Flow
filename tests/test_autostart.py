@@ -44,6 +44,26 @@ class AutostartTests(unittest.TestCase):
                 self.assertFalse(path.exists())
                 self.assertFalse(autostart.is_autostart_enabled())
 
+    def test_windows_source_autostart_always_uses_pythonw(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            source = temp / "source"
+            source.mkdir()
+            (source / "paypamin_flow.py").write_text("", encoding="utf-8")
+            (source / "paypamin_flow.pyw").write_text("", encoding="utf-8")
+            python = temp / "python.exe"
+            pythonw = temp / "pythonw.exe"
+            python.write_bytes(b"")
+            pythonw.write_bytes(b"")
+            with mock.patch.object(autostart.sys, "platform", "win32"), \
+                    mock.patch.object(autostart.sys, "executable", str(python)), \
+                    mock.patch.object(autostart, "SOURCE_DIR", source):
+                command = autostart.launch_command()
+                self.assertEqual(command, [str(pythonw.resolve()), str(source / "paypamin_flow.pyw")])
+                pythonw.unlink()
+                with self.assertRaises(autostart.AutostartError):
+                    autostart.launch_command()
+
     def test_windows_autostart_writes_and_removes_current_user_run_value(self):
         values = {}
         fake_winreg = mock.MagicMock()
