@@ -39,7 +39,22 @@ jobs:
       - name: Install application and build dependencies
         run: python -m pip install -r requirements-build.txt
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        shell: bash
+        run: |
+          set +e
+          python -m unittest discover -s tests -v > test-results.txt 2>&1
+          status=$?
+          cat test-results.txt
+          if [ "$status" -ne 0 ]; then
+            STATUS="$status" python - <<'PY'
+          import os
+          from pathlib import Path
+          output = Path("test-results.txt").read_text(encoding="utf-8", errors="replace")[-12000:]
+          output = output.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error::Tests failed with exit code {os.environ['STATUS']}%0A{output}")
+          PY
+          fi
+          exit "$status"
       - name: Verify desktop imports
         run: python -c "import tkinter; import fitz; import reportlab; import PIL; import paypamin_flow"
       - name: Build native application
