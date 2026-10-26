@@ -2,6 +2,11 @@ name: Test and build PayPamin Flow
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to attach packages to (optional)
+        required: false
+        type: string
   push:
     branches: [main]
   pull_request:
@@ -76,7 +81,7 @@ jobs:
 
   publish-release-packages:
     name: Publish release packages
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     needs: desktop
     runs-on: ubuntu-latest
     permissions:
@@ -91,5 +96,6 @@ jobs:
       - name: Attach packages to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$REPOSITORY"
