@@ -24,6 +24,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "autostart.py",
     "currency.py",
     "i18n.py",
+    "import_watcher.py",
     "invoice_parser.py",
     "paypamin_flow.py",
     "paypamin_flow.pyw",

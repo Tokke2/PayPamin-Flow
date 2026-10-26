@@ -259,6 +259,10 @@ _ENGLISH = {
     "Autostart kunde inte sparas": "Autostart could not be saved",
     "{error}\n\nPlats: {location}": "{error}\n\nLocation: {location}",
 
+    # Automatic Fortnox PDF folder import
+    "Automatisk import klar": "Automatic import complete",
+    "Bevaka importmappen och importera nya PDF:er automatiskt": "Watch the import folder and import new PDFs automatically",
+
     # Tray, menus and local backups
     "Arkiv": "File",
     "Avsluta helt": "Exit completely",

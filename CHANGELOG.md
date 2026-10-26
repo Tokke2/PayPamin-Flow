@@ -7,7 +7,8 @@
 - Added close-to-system-tray behavior, an explicit full-exit path and the PayPamin Flow icon in the tray.
 - Added bilingual File-menu backup and restore for settings, invoices, reminders, templates and logos, including checksum/SQLite validation and a pre-restore safety backup.
 - Added File and Help menus, with update checks available inside the app and automatic checks retained every 12 hours.
-- Added headless backup, tray, Python-package, updater, rollback and console-free restart tests.
+- Added license-free Fortnox PDF import with automatic folder monitoring, stable-file detection, reviewed imports, duplicate suppression and an automatic-import setting.
+- Added headless backup, tray, import-watcher, Python-package, updater, rollback and console-free restart tests.
 
 ## 0.6.0 — 2026-10-26
 

@@ -11,7 +11,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 
 - Läser faktura-PDF:er och föreslår kund, fakturanummer, datum, belopp efter **ATT BETALA** och fakturatext.
 - **Valuta per faktura** med SEK som standard och redigerbara ISO-koder, exempelvis EUR, USD, NOK och DKK. Belopp växlas inte mellan valutor.
-- Importmapp och knapp för att skanna nya PDF-filer. Varje ny faktura granskas innan den sparas. Dubbletter stoppas via fakturanummer eller identiskt PDF-innehåll, även om filen döpts om.
+- **Automatisk bevakning av importmappen** upptäcker nya Fortnox-PDF:er utan API eller integrationslicens. Filer väntas in tills de är färdigskrivna och varje ny faktura granskas innan den sparas. Dubbletter stoppas via fakturanummer, sökväg eller identiskt PDF-innehåll, även om filen döpts om.
 - PDF-förhandsgranskning med markerbara fältområden och återanvändbara leverantörsmallar.
 - SVG-logotyp kan kopplas till en leverantörsmall och återanvändas vid export.
 - Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta.
@@ -156,9 +156,22 @@ python packaging/package_release.py --output release-assets
 
 GitHub Actions-workflöen i `.github/workflows/build.yml` kör testerna på Windows, macOS och Linux. Ubuntu-jobbet skapar Python-ZIP och SHA-256-fil. Vid en framtida, uttryckligen beställd release kan samma två filer bifogas releasen för appens uppdateringsfunktion.
 
+## Kostnadsfri Fortnox-import utan API
+
+Appen behöver ingen Fortnox-integrationslicens för PDF-importen:
+
+1. Exportera eller spara en faktura-PDF från Fortnox i appens `import/`-mapp. Knappen **Öppna importmapp** öppnar rätt plats.
+2. Appen kontrollerar mappen var femte sekund. En ny eller ändrad PDF måste ha samma storlek och tidsstämpel vid två kontroller, så att appen inte läser en halvfärdig export.
+3. Den färdiga PDF:en öppnas automatiskt i den befintliga förhandsgranskningen. Kontrollera och godkänn uppgifterna innan fakturan sparas.
+4. Dubbletter stoppas utan extra popup vid automatisk körning. En sammanfattning visas när något importerats eller när ett fel behöver åtgärdas.
+
+Bevakningen fungerar även när huvudfönstret ligger i systemfältet; fönstret öppnas när en faktura behöver granskas. Stäng av eller aktivera funktionen under **Inställningar → Bevaka importmappen och importera nya PDF:er automatiskt**. **Skanna importmapp** kan alltid användas manuellt, även för en fil som du tidigare avbrutit.
+
+Detta är ingen direkt API-koppling: exporten från Fortnox görs fortfarande manuellt. Appen loggar inte in i Fortnox och skickar inga uppgifter dit.
+
 ## Fakturor, logotyper och OCR
 
-- Lägg faktura-PDF:er i `import/` och klicka **Skanna importmapp**, eller använd **Lägg till faktura-PDF**.
+- Lägg faktura-PDF:er i `import/` för automatisk bevakning, klicka **Skanna importmapp** för en direkt genomsökning, eller använd **Lägg till faktura-PDF**.
 - Kontrollera föreslagna värden och godkänn dem innan en påminnelse skapas.
 - Lägg egna SVG-logotyper i `svg/`; dessa är företagslogotyper och ska inte förväxlas med appens ikon i `assets/`.
 - Genererade PDF-filer läggs i `export/`.
@@ -183,7 +196,7 @@ OCR för skannade PDF:er kräver Tesseract med svenska språkdata (`swe`) och Po
 python -m unittest discover -s tests -v
 ```
 
-Parser-, autostart-, ikon-, språk-, valuta-, databas-, säkerhetskopierings-, systemfälts-, paket- och uppdateringstester använder syntetiska data och kräver ingen grafisk skrivbordssession. Översättningstesterna kontrollerar att nya texter har engelska översättningar och matchande variabler. Testa alltid ändringar mot riktiga, noggrant granskade exempel före skarp användning.
+Parser-, importbevaknings-, autostart-, ikon-, språk-, valuta-, databas-, säkerhetskopierings-, systemfälts-, paket- och uppdateringstester använder syntetiska data och kräver ingen grafisk skrivbordssession. Översättningstesterna kontrollerar att nya texter har engelska översättningar och matchande variabler. Testa alltid ändringar mot riktiga, noggrant granskade exempel före skarp användning.
 
 ## Begränsningar
 

@@ -28,6 +28,7 @@ from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
 from invoice_parser import extract_pdf, normalize_amount, normalize_date, parse_invoice_text
+from import_watcher import ImportFolderMonitor
 from update_checker import UPDATE_CHECK_INTERVAL_MS, UpdateCheckError, fetch_latest_release, is_newer_version
 from update_installer import (
     UpdateInstallError,
@@ -37,6 +38,8 @@ from update_installer import (
     rollback_update,
     stage_update,
 )
+
+IMPORT_WATCH_INTERVAL_MS = 5000
 
 APP_DIR = Path.home() / ".paminnelseapp"
 APP_DIR.mkdir(parents=True,exist_ok=True)
@@ -119,7 +122,7 @@ def init_db():
             id INTEGER PRIMARY KEY, vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
             x0 REAL NOT NULL, y0 REAL NOT NULL, x1 REAL NOT NULL, y1 REAL NOT NULL, created TEXT NOT NULL)""")
         db.execute("CREATE TABLE IF NOT EXISTS vendor_logos (vendor TEXT PRIMARY KEY, logo_file TEXT NOT NULL DEFAULT '')")
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','language':'sv'}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','auto_import':'1','language':'sv'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
 
@@ -230,12 +233,14 @@ class ReminderApp(tk.Tk):
         self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
         self._update_check_running=False;self._update_install_running=False;self._update_helper_process=None;self.update_button=None
         self.tray=None;self._quitting=False
+        self._import_monitor=ImportFolderMonitor(IMPORT_DIR);self._import_scan_running=False;self._python_addons_ready=False
         self.build(); self.refresh()
         self.protocol('WM_DELETE_WINDOW',self.hide_to_tray)
         self.start_tray()
         self.after(100,self.sync_autostart)
         self.after(250,self.check_python_addons)
         self.after(2000,self._run_scheduled_update_check)
+        self.after(1500,self._run_scheduled_import_scan)
 
     def start_tray(self):
         """Start the tray icon lazily so unsupported desktops can still run the app."""
@@ -489,7 +494,9 @@ class ReminderApp(tk.Tk):
         if importlib.util.find_spec('svglib') is None: missing.append('svglib')
         if importlib.util.find_spec('PIL') is None: missing.append('Pillow')
         if importlib.util.find_spec('pystray') is None: missing.append('pystray')
-        if not missing:return
+        if not missing:
+            self._python_addons_ready=True
+            return
         win=tk.Toplevel(self);win.title(_('Förbereder appen'));win.transient(self);win.resizable(False,False)
         win.protocol('WM_DELETE_WINDOW',lambda:None)
         box=ttk.Frame(win,padding=22);box.pack()
@@ -524,6 +531,7 @@ class ReminderApp(tk.Tk):
                 self.after(250,poll);return
             bar.stop();win.destroy()
             if ok:
+                self._python_addons_ready=True
                 self.start_tray()
                 messagebox.showinfo(_('Tillägg klara'),_('Nödvändiga Python-tillägg installerades. Appen är redo.'),parent=self)
             else:
@@ -880,42 +888,67 @@ class ReminderApp(tk.Tk):
         render_page();win.wait_window();return guess
 
 
-    def scan_import_folder(self):
-        IMPORT_DIR.mkdir(exist_ok=True)
-        files=sorted(p for p in IMPORT_DIR.glob('*.pdf') if p.is_file())
-        if not files:
-            messagebox.showinfo(_('Importmapp tom'),_('Lägg faktura-PDF:er i mappen:\n{folder}',folder=IMPORT_DIR),parent=self);return
-        imported=skipped=failed=duplicates=0
-        for path in files:
-            source=str(path.resolve())
-            with connect() as db:
-                existing_source=db.execute('SELECT 1 FROM invoices WHERE source=? LIMIT 1',(source,)).fetchone()
-            if existing_source:
-                duplicates+=1
-                logger.info('Duplicate import blocked by source path: file=%s',path.name)
-                continue
-            try:
-                source_hash=file_sha256(path)
-                text=extract_pdf(str(path));guess=parse_invoice_text(text)
-                duplicate=find_duplicate_invoice(guess.get('invoice_no',''),source_hash)
-                if duplicate:
-                    duplicates+=1
-                    logger.info('Duplicate import blocked: existing_id=%s file=%s',duplicate['id'],path.name)
-                    continue
-                vendor=self.guess_supplier(text)
-                guess['template_vendor']=vendor
-                guess=self.apply_saved_zones(str(path),vendor,guess)
-                guess=self.preview_invoice(str(path),guess,vendor)
-                self.add_invoice(source=source,guess=guess,source_hash=source_hash)
-                with connect() as db:
-                    saved=db.execute('SELECT 1 FROM invoices WHERE source=? LIMIT 1',(source,)).fetchone()
-                if saved:imported+=1
-                else:skipped+=1
-            except Exception:
-                logger.exception('Import folder scan failed for %s',path.name);failed+=1
-        logger.info('Import folder scan complete: imported=%s duplicates=%s skipped=%s failed=%s',imported,duplicates,skipped,failed)
-        self.refresh()
-        messagebox.showinfo(_('Skanning klar'),_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,skipped=skipped,failed=failed),parent=self)
+    def _run_scheduled_import_scan(self):
+        """Poll for stable PDFs, then reuse the reviewed manual import flow."""
+        if self._quitting:return
+        try:
+            if setting('auto_import')=='1' and self._python_addons_ready and not self._import_scan_running:
+                files=self._import_monitor.poll()
+                if files:
+                    logger.info('Automatic import detected %d stable PDF file(s)',len(files))
+                    if self.state()=='withdrawn':self.deiconify()
+                    self.scan_import_folder(automatic=True,paths=files)
+        except Exception:
+            logger.exception('Automatic import folder watch failed')
+        if not self._quitting:self.after(IMPORT_WATCH_INTERVAL_MS,self._run_scheduled_import_scan)
+
+    def scan_import_folder(self,automatic=False,paths=None):
+        if getattr(self,'_import_scan_running',False):return
+        self._import_scan_running=True
+        try:
+            IMPORT_DIR.mkdir(exist_ok=True)
+            files=sorted(Path(p) for p in paths) if paths is not None else sorted(
+                p for p in IMPORT_DIR.iterdir() if p.is_file() and p.suffix.lower()=='.pdf')
+            if not files:
+                if not automatic:messagebox.showinfo(_('Importmapp tom'),_('Lägg faktura-PDF:er i mappen:\n{folder}',folder=IMPORT_DIR),parent=self)
+                return
+            imported=skipped=failed=duplicates=0
+            for path in files:
+                try:
+                    source=str(path.resolve())
+                    with connect() as db:
+                        existing_source=db.execute('SELECT 1 FROM invoices WHERE source=? LIMIT 1',(source,)).fetchone()
+                    if existing_source:
+                        duplicates+=1
+                        logger.info('Duplicate import blocked by source path: file=%s',path.name)
+                        continue
+                    source_hash=file_sha256(path)
+                    text=extract_pdf(str(path));guess=parse_invoice_text(text)
+                    duplicate=find_duplicate_invoice(guess.get('invoice_no',''),source_hash)
+                    if duplicate:
+                        duplicates+=1
+                        logger.info('Duplicate import blocked: existing_id=%s file=%s',duplicate['id'],path.name)
+                        continue
+                    vendor=self.guess_supplier(text)
+                    guess['template_vendor']=vendor
+                    guess=self.apply_saved_zones(str(path),vendor,guess)
+                    guess=self.preview_invoice(str(path),guess,vendor)
+                    self.add_invoice(source=source,guess=guess,source_hash=source_hash)
+                    with connect() as db:
+                        saved=db.execute('SELECT 1 FROM invoices WHERE source=? LIMIT 1',(source,)).fetchone()
+                    if saved:imported+=1
+                    else:skipped+=1
+                except Exception:
+                    logger.exception('Import folder scan failed for %s',path.name);failed+=1
+            logger.info('Import folder scan complete: automatic=%s imported=%d duplicates=%d skipped=%d failed=%d',automatic,imported,duplicates,skipped,failed)
+            self.refresh()
+            # Automatic duplicate-only and user-cancelled batches must not add
+            # another popup after the review dialog. Manual scans always report.
+            if not automatic or imported or failed:
+                title=_('Automatisk import klar') if automatic else _('Skanning klar')
+                messagebox.showinfo(title,_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,skipped=skipped,failed=failed),parent=self)
+        finally:
+            self._import_scan_running=False
 
     def open_import_folder(self):
         IMPORT_DIR.mkdir(exist_ok=True)
@@ -1127,6 +1160,8 @@ class ReminderApp(tk.Tk):
         ttk.Checkbutton(form,text=_('Lås påminnelseavgiften (förhindra oavsiktlig ändring)'),variable=locked,command=toggle_lock).grid(row=len(fields)+5,column=0,columnspan=3,sticky='w',pady=(10,4))
         ttk.Label(form,text=_('Låset skyddar inställningen i appen; lås upp här för att ändra avgiften.'),style='Sub.TLabel').grid(row=len(fields)+6,column=0,columnspan=3,sticky='w')
         ttk.Label(form,text=_('Obs: påminnelseavgiften använder fakturans valuta. Kontrollera att avgift, ränta och villkor gäller för era kunder.'),style='Sub.TLabel').grid(row=len(fields)+7,column=0,columnspan=3,sticky='w',pady=(8,0))
+        automatic_import_var=tk.BooleanVar(value=setting('auto_import')=='1')
+        ttk.Checkbutton(form,text=_('Bevaka importmappen och importera nya PDF:er automatiskt'),variable=automatic_import_var).grid(row=len(fields)+8,column=0,columnspan=3,sticky='w',pady=(10,3))
         def save():
             try:
                 for k,e in entries.items():
@@ -1145,13 +1180,14 @@ class ReminderApp(tk.Tk):
             set_setting('fee_locked','1' if locked.get() else '0')
             set_setting('autostart','1' if autostart_var.get() else '0')
             set_setting('update_auto','1' if automatic_updates_var.get() else '0')
+            set_setting('auto_import','1' if automatic_import_var.get() else '0')
             set_setting('language',new_language)
             set_language(new_language)
-            logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),new_language)
+            logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s automatic_import=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),new_language)
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()
-        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+8,column=1,sticky='e',pady=(15,0))
+        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+9,column=1,sticky='e',pady=(15,0))
 
 def main():
     init_db()

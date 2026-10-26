@@ -137,6 +137,29 @@ class DuplicateInvoiceTests(unittest.TestCase):
         self.assertIn("Dubbletter som inte importerades: 1", info.call_args.args[1])
         self.assertEqual(self.invoice_count(), 1)
 
+    def test_automatic_duplicate_batch_does_not_show_extra_summary(self):
+        import_dir = self.workspace / "import"
+        import_dir.mkdir(exist_ok=True)
+        pdf = import_dir / "renamed.pdf"
+        pdf.write_bytes(b"same PDF content")
+        self.app.IMPORT_DIR = import_dir
+        self.app.save_invoice_record(self.record(source_hash=self.app.file_sha256(pdf)))
+        fake = SimpleNamespace(
+            _import_scan_running=False,
+            refresh=lambda: None,
+            preview_invoice=lambda *args: self.fail("Duplicate must not open the preview"),
+            add_invoice=lambda **kwargs: self.fail("Duplicate must not open the save dialog"),
+        )
+        with (
+            patch.object(self.app, "extract_pdf", return_value="synthetic text"),
+            patch.object(self.app, "parse_invoice_text", return_value={"invoice_no": "F-9999"}),
+            patch.object(self.app.messagebox, "showinfo", create=True) as info,
+        ):
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True, paths=[pdf])
+        info.assert_not_called()
+        self.assertFalse(fake._import_scan_running)
+        self.assertEqual(self.invoice_count(), 1)
+
     def test_duplicate_warning_is_swedish_and_english(self):
         duplicate = {"invoice_no": "F-1001", "customer": "Exempelkund AB"}
         with patch.object(self.app.messagebox, "showwarning", create=True) as warning:
