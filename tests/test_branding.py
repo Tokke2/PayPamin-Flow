@@ -2,7 +2,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_NAME
+from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_NAME, APP_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +15,14 @@ class BrandingTests(unittest.TestCase):
         self.assertEqual(APP_AUTHOR, "Rickard Länkvist")
         self.assertIn(APP_AUTHOR, APP_COPYRIGHT)
         self.assertIn("Copyright ©", APP_COPYRIGHT)
+
+    def test_windows_metadata_matches_application_version(self):
+        major, minor, patch = (int(part) for part in APP_VERSION.split("."))
+        metadata = (ROOT / "packaging" / "windows_version_info.txt").read_text(encoding="utf-8")
+        self.assertIn(f"filevers=({major}, {minor}, {patch}, 0)", metadata)
+        self.assertIn(f"prodvers=({major}, {minor}, {patch}, 0)", metadata)
+        self.assertIn(f"StringStruct('FileVersion', '{APP_VERSION}')", metadata)
+        self.assertIn(f"StringStruct('ProductVersion', '{APP_VERSION}')", metadata)
 
     def test_all_native_icon_formats_are_present(self):
         expected_sizes = {

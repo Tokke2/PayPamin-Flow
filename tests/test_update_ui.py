@@ -9,7 +9,7 @@ from test_database import load_headless_app
 from update_checker import UPDATE_CHECK_INTERVAL_MS, ReleaseInfo
 
 
-RELEASE = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0")
+RELEASE = ReleaseInfo("0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0")
 
 
 class UpdateUiTests(unittest.TestCase):
@@ -40,7 +40,7 @@ class UpdateUiTests(unittest.TestCase):
         results.put(("ok", False, RELEASE))
         with patch.object(self.app, "setting", return_value="1"):
             self.app.ReminderApp._poll_update_check(fake, results)
-        self.assertEqual(calls, [("0.6.0", False)])
+        self.assertEqual(calls, [("0.7.0", False)])
 
     def test_manual_new_release_shows_choices_instead_of_auto_installing(self):
         fake = self.fake_app()
@@ -50,7 +50,7 @@ class UpdateUiTests(unittest.TestCase):
         results = queue.Queue()
         results.put(("ok", True, RELEASE))
         self.app.ReminderApp._poll_update_check(fake, results)
-        self.assertEqual(calls, ["0.6.0"])
+        self.assertEqual(calls, ["0.7.0"])
 
     def test_scheduler_respects_twice_daily_interval_and_setting(self):
         fake = SimpleNamespace()

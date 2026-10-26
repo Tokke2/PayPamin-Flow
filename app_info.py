@@ -3,7 +3,7 @@
 APP_NAME = "PayPamin Flow"
 APP_SLUG = "paypamin-flow"
 APP_ID = "se.paypamin.flow"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 APP_AUTHOR = "Rickard Länkvist"
 COPYRIGHT_YEAR = "2026"
 APP_COPYRIGHT = f"Copyright © {COPYRIGHT_YEAR} {APP_AUTHOR}"

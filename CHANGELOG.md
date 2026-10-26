@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-10-26
 
 - Guaranteed console-free Windows source autostart by requiring `pythonw.exe` instead of falling back to a console interpreter; added native and manual launcher coverage for all three desktop platforms.
 - Prevented duplicate invoice imports and manual entries using normalized invoice numbers and PDF content hashes, including renamed files; added bilingual warnings and duplicate counts in folder-scan results.
