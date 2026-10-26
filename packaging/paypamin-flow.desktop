@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=PayPamin Flow
+GenericName=Payment reminders
+GenericName[sv]=Betalningspåminnelser
+Comment=Local invoice and payment reminder app
+Comment[sv]=Lokal app för fakturor och betalningspåminnelser
+Exec=paypamin-flow
+Icon=paypamin-flow
+Terminal=false
+Categories=Office;Finance;
+Keywords=invoice;reminder;payment;
+Keywords[sv]=faktura;påminnelse;betalning;
+StartupNotify=true

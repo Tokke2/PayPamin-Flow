@@ -1,0 +1,95 @@
+name: Test and build PayPamin Flow
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: macos-latest
+            platform: macos
+          - os: ubuntu-latest
+            platform: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install Tkinter on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+      - name: Install application and build dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Run tests
+        shell: bash
+        run: |
+          set +e
+          python -m unittest discover -s tests -v > test-results.txt 2>&1
+          status=$?
+          cat test-results.txt
+          if [ "$status" -ne 0 ]; then
+            STATUS="$status" python - <<'PY'
+          import os
+          from pathlib import Path
+          output = Path("test-results.txt").read_text(encoding="utf-8", errors="replace")[-12000:]
+          output = output.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error::Tests failed with exit code {os.environ['STATUS']}%0A{output}")
+          PY
+          fi
+          exit "$status"
+      - name: Verify desktop imports
+        run: python -c "import tkinter; import fitz; import reportlab; import PIL; import paypamin_flow"
+      - name: Build native application
+        run: pyinstaller paypamin_flow.spec --clean --noconfirm
+      - name: Package native application and SHA-256
+        run: python packaging/package_release.py --platform "${{ matrix.platform }}" --dist dist --output release-assets
+      - name: Upload native application
+        uses: actions/upload-artifact@v4
+        with:
+          name: PayPamin-Flow-native-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PayPamin-Flow-release-${{ matrix.platform }}
+          path: release-assets/
+          if-no-files-found: error
+
+  publish-release-packages:
+    name: Publish release packages
+    if: github.event_name == 'release'
+    needs: desktop
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: PayPamin-Flow-release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Attach packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber

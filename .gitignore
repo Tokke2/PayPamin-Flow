@@ -1,0 +1,28 @@
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Native builds
+build/
+dist/
+release-assets/
+
+# Local application data and logs
+*.log
+*.sqlite3
+*.sqlite3-*
+
+# Sensitive customer data and generated reminders
+import/*
+!import/README.md
+export/*
+!export/README.md
+svg/*
+!svg/README.md
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
