@@ -1,6 +1,6 @@
 import unittest
 
-from invoice_parser import parse_invoice_text
+from invoice_parser import normalize_amount, parse_invoice_text
 from paypaminn_flow import parse_invoice_text as legacy_parse_invoice_text
 
 
@@ -37,6 +37,72 @@ class InvoiceParserTests(unittest.TestCase):
     def test_detects_explicit_currency_label(self):
         text = "Valuta: USD\nFakturanummer 7002\nATT BETALA 250,00"
         self.assertEqual(parse_invoice_text(text)["currency"], "USD")
+
+    def test_normalizes_swedish_european_and_english_amount_formats(self):
+        cases = {
+            "12,50": 12.5,
+            "12.50": 12.5,
+            "1250.50": 1250.5,
+            "1 234,56": 1234.56,
+            "1.234,56": 1234.56,
+            "1,234.56": 1234.56,
+            "1,234": 1234.0,
+            "1.234": 1234.0,
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_amount(raw), expected)
+
+    def test_reads_english_total_due_and_us_amount(self):
+        text = """Invoice # INV-2045\nInvoice date: 2026-10-01\nDue date: 2026-10-15\nCurrency: GBP\nTotal due\n1,234.56\nDescription\nConsulting services"""
+        parsed = parse_invoice_text(text)
+        self.assertEqual(parsed["invoice_no"], "INV-2045")
+        self.assertEqual(parsed["invoice_date"], "2026-10-01")
+        self.assertEqual(parsed["due_date"], "2026-10-15")
+        self.assertEqual(parsed["amount"], 1234.56)
+        self.assertEqual(parsed["currency"], "GBP")
+        self.assertEqual(parsed["note"], "Consulting services")
+
+    def test_reads_amount_due_with_european_decimal(self):
+        parsed = parse_invoice_text("Amount due: EUR 950,75")
+        self.assertEqual(parsed["amount"], 950.75)
+        self.assertEqual(parsed["currency"], "EUR")
+
+    def test_reads_amount_before_payable_label_and_currency(self):
+        parsed = parse_invoice_text("GBP 1,234.56 Total due")
+        self.assertEqual(parsed["amount"], 1234.56)
+        self.assertEqual(parsed["currency"], "GBP")
+
+    def test_payable_amount_does_not_pick_invoice_number_or_date(self):
+        parsed = parse_invoice_text("ATT BETALA\nFakturanummer 6258\n2026-10-31\n6 563,00 SEK")
+        self.assertEqual(parsed["amount"], 6563.0)
+
+    def test_invoice_hash_label_between_total_and_amount_is_skipped(self):
+        parsed = parse_invoice_text("Total due\nInvoice # 2045\n1,234.56")
+        self.assertEqual(parsed["invoice_no"], "2045")
+        self.assertEqual(parsed["amount"], 1234.56)
+
+    def test_payable_label_does_not_turn_vat_into_total(self):
+        parsed = parse_invoice_text("ATT BETALA\nMoms 25 %\n1 312,50\nTotal exkl moms 5 250,00")
+        self.assertEqual(parsed["amount"], 0.0)
+
+    def test_grand_total_fallback_is_supported(self):
+        parsed = parse_invoice_text("Grand total USD 800.25")
+        self.assertEqual(parsed["amount"], 800.25)
+        self.assertEqual(parsed["currency"], "USD")
+
+    def test_zero_payable_total_does_not_fall_back_to_subtotal(self):
+        parsed = parse_invoice_text("ATT BETALA 0,00 SEK\nTotal exkl moms 100,00")
+        self.assertEqual(parsed["amount"], 0.0)
+
+    def test_unique_euro_symbol_near_total_is_detected(self):
+        parsed = parse_invoice_text("Total due € 1.234,56")
+        self.assertEqual(parsed["amount"], 1234.56)
+        self.assertEqual(parsed["currency"], "EUR")
+
+    def test_payable_whole_amount_without_decimals(self):
+        parsed = parse_invoice_text("ATT BETALA 6 563 SEK")
+        self.assertEqual(parsed["amount"], 6563.0)
 
     def test_defaults_to_sek_when_no_currency_is_detectable(self):
         text = "Fakturanummer 7003\nATT BETALA 6 563,00"
