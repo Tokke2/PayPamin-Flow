@@ -1,6 +1,5 @@
 import importlib.util
 import shutil
-import sqlite3
 import sys
 import tempfile
 import types
@@ -40,7 +39,7 @@ class DatabaseTests(unittest.TestCase):
             database_path = workspace / "legacy.sqlite3"
             app.DB_PATH = database_path
             try:
-                with sqlite3.connect(database_path) as db:
+                with app.connect() as db:
                     db.execute(
                         """CREATE TABLE invoices (
                         id INTEGER PRIMARY KEY, customer TEXT NOT NULL, invoice_no TEXT NOT NULL,
@@ -60,14 +59,14 @@ class DatabaseTests(unittest.TestCase):
                 app.init_db()  # Migration must also be safe on subsequent starts.
                 self.assertEqual(app.setting('update_auto'), '1')
 
-                with sqlite3.connect(database_path) as db:
+                with app.connect() as db:
                     columns = {row[1] for row in db.execute("PRAGMA table_info(invoices)")}
                     existing = db.execute(
                         "SELECT amount,paid,currency FROM invoices WHERE invoice_no='6258'"
                     ).fetchone()
                     self.assertIn("currency", columns)
                     self.assertIn("source_hash", columns)
-                    self.assertEqual(existing, (6563.0, 1000.0, "SEK"))
+                    self.assertEqual(tuple(existing), (6563.0, 1000.0, "SEK"))
 
                     db.execute(
                         "INSERT INTO invoices(customer,invoice_no,due_date,created) VALUES(?,?,?,?)",

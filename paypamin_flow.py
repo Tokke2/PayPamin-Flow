@@ -61,8 +61,18 @@ def open_path(path):
             raise
 
 
+class ClosingConnection(sqlite3.Connection):
+    """Commit or roll back, then close the SQLite handle on every with exit."""
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def connect():
-    db = sqlite3.connect(DB_PATH)
+    db = sqlite3.connect(DB_PATH, factory=ClosingConnection)
     db.row_factory = sqlite3.Row
     return db
 

@@ -2,6 +2,7 @@
 
 ## 0.6.0 — 2026-10-26
 
+- Close SQLite connections deterministically after each transaction so Windows does not retain locked database files.
 - Guaranteed console-free Windows source autostart by requiring `pythonw.exe` instead of falling back to a console interpreter; added native and manual launcher coverage for all three desktop platforms.
 - Prevented duplicate invoice imports and manual entries using normalized invoice numbers and PDF content hashes, including renamed files; added bilingual warnings and duplicate counts in folder-scan results.
 - Added silent GitHub release checks shortly after startup and every 12 hours while the app is open, plus a **Check for updates** button and an automatic-update setting.

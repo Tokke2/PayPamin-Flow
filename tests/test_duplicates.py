@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +45,12 @@ class DuplicateInvoiceTests(unittest.TestCase):
     def invoice_count(self):
         with self.app.connect() as db:
             return db.execute("SELECT count(*) FROM invoices").fetchone()[0]
+
+    def test_connection_closes_after_with_block(self):
+        with self.app.connect() as connection:
+            self.assertEqual(connection.execute("SELECT 1").fetchone()[0], 1)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
 
     def test_invoice_number_is_unique_despite_case_and_whitespace(self):
         self.assertIsNone(self.app.save_invoice_record(self.record()))
