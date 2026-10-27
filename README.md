@@ -20,7 +20,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
 - **Autostart vid inloggning** på Windows, macOS och Linux. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
-- **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med SHA-256-verifiering och tyst omstart. Manuell sökning och installation finns i appen via **Hjälp → Sök efter uppdateringar**.
+- **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med SHA-256-verifiering och tyst omstart. Både nyare versioner och nya officiella release-byggen med samma versionsnummer kan upptäckas. Manuell sökning och installation finns i appen via **Hjälp → Sök efter uppdateringar**.
 - PDF sparas lokalt och öppnas i datorns standardprogram. Fellogg öppnas via **Visa fellogg**.
 
 ## Python-only – ingen EXE eller native-app
@@ -106,7 +106,9 @@ Välj **Arkiv → Återställ säkerhetskopia** för att återställa. Arkivets 
 
 Appen kontrollerar den senaste stabila GitHub-releasen en kort stund efter start och därefter **var 12:e timme medan appen körs**, även när fönstret ligger i systemfältet. Automatiska uppdateringar är aktiverade som standard och kan stängas av under **Inställningar**.
 
-Vid en nyare version hämtas samma Python-ZIP för Windows, macOS och Linux. Kontrollsumman verifieras, arkivets sökvägar och filer valideras och Python-filerna syntaxkontrolleras innan något ersätts. Appen ersätter endast egna program-, start-, dokumentations- och ikonfiler. Databas, `import/`, `export/`, `svg/` och andra användardata ingår inte och lämnas orörda.
+Vid en nyare version eller ett nytt officiellt bygge av samma version hämtas samma Python-ZIP för Windows, macOS och Linux. Releasepaketet får GitHubs numeriska release-ID vid bygget. Appen jämför det ID:t när versionsnumren är lika och installerar därför inte samma bygge om och om igen. En äldre release eller en release utan giltigt ID erbjuds inte som nedgradering. Kontrollen går mot GitHubs **latest release**, inte mot `main`.
+
+Kontrollsumman verifieras, arkivets sökvägar och filer valideras och Python-filerna syntaxkontrolleras innan något ersätts. Appen ersätter endast egna program-, start-, dokumentations- och ikonfiler. Databas, `import/`, `export/`, `svg/` och andra användardata ingår inte och lämnas orörda. Installationer med den äldre uppdateraren, som endast jämför versionsnummer, måste installera det första paketet med release-ID-stöd manuellt en gång.
 
 Installationen sker **inuti appen**; du ska inte starta någon separat uppdateringsfil. Därefter startas den uppdaterade Python-appen om utan konsolfönster. Gamla programfiler används som reserv under ersättningen och återställs om installationen eller omstarten misslyckas.
 

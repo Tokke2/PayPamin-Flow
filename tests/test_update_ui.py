@@ -52,6 +52,18 @@ class UpdateUiTests(unittest.TestCase):
         self.app.ReminderApp._poll_update_check(fake, results)
         self.assertEqual(calls, ["0.7.0"])
 
+    def test_same_version_release_build_uses_release_comparison(self):
+        fake = self.fake_app()
+        release = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0", release_id="200")
+        calls = []
+        fake.show_update_available = lambda value: calls.append(value.release_id)
+        results = queue.Queue()
+        results.put(("ok", True, release))
+        with patch.object(self.app, "is_update_available", return_value=True) as compare:
+            self.app.ReminderApp._poll_update_check(fake, results)
+        compare.assert_called_once_with(release, "0.6.0")
+        self.assertEqual(calls, ["200"])
+
     def test_scheduler_respects_twice_daily_interval_and_setting(self):
         fake = SimpleNamespace()
         fake._run_scheduled_update_check = "next-scheduled-check"

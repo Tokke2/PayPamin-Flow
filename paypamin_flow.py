@@ -31,7 +31,7 @@ from console_free import configure_console_free_subprocesses
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
 from invoice_parser import extract_invoice_sections, normalize_amount, normalize_date, parse_invoice_text
 from import_watcher import ImportFolderMonitor
-from update_checker import UPDATE_CHECK_INTERVAL_MS, UpdateCheckError, fetch_latest_release, is_newer_version
+from update_checker import UPDATE_CHECK_INTERVAL_MS, UpdateCheckError, fetch_latest_release, is_update_available
 from update_installer import (
     UpdateInstallError,
     cleanup_update,
@@ -454,8 +454,8 @@ class ReminderApp(tk.Tk):
                 messagebox.showwarning(_('Kunde inte söka efter uppdateringar'),details,parent=self)
             return
         release=payload
-        if is_newer_version(release.version,APP_VERSION):
-            logger.info('New PayPamin Flow release available: current=%s latest=%s',APP_VERSION,release.version)
+        if is_update_available(release,APP_VERSION):
+            logger.info('New PayPamin Flow release available: current=%s latest=%s release_id=%s',APP_VERSION,release.version,release.release_id)
             if manual:self.show_update_available(release)
             elif setting('update_auto')=='1':self.start_update_installation(release,manual=False)
             return
@@ -507,7 +507,8 @@ class ReminderApp(tk.Tk):
     def show_update_available(self,release):
         w=tk.Toplevel(self);w.title(_('Uppdatering tillgänglig'));w.transient(self);w.resizable(False,False);w.configure(bg='#f3f5f8')
         form=ttk.Frame(w,padding=24);form.pack()
-        ttk.Label(form,text=_('Version {version} är tillgänglig',version=release.version),style='Title.TLabel').pack(anchor='w')
+        heading=_('Uppdaterat bygge av version {version} är tillgänglig',version=release.version) if release.version==APP_VERSION else _('Version {version} är tillgänglig',version=release.version)
+        ttk.Label(form,text=heading,style='Title.TLabel').pack(anchor='w')
         ttk.Label(form,text=_('Installerad version: {current}\nSenaste release: {latest}\n\nLokala fakturor, inställningar och mallar påverkas inte.',current=APP_VERSION,latest=release.version),justify='left').pack(anchor='w',pady=(8,12))
         def open_download():
             try:

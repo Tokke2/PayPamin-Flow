@@ -26,6 +26,15 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertEqual(set(RELEASE_ASSET_NAMES.values()), {PYTHON_RELEASE_ASSET})
         self.assertEqual(PYTHON_RELEASE_ASSET, "PayPamin-Flow-Python.zip")
 
+    def test_official_release_stamp_accepts_only_numeric_release_ids(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory)
+            build_info = packaging.stamp_release_build(source, "424038701")
+            self.assertEqual(build_info.read_text(encoding="utf-8"), '"""Official GitHub release identity for same-version update checks."""\n\nAPP_RELEASE_ID = "424038701"\n')
+            for invalid in ("main", "arena/cae09411-paypamin-flow", "0", "12x"):
+                with self.assertRaises(ValueError):
+                    packaging.stamp_release_build(source, invalid)
+
     def test_package_contains_python_sources_icons_and_no_native_binaries(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             output = Path(temporary_directory)
@@ -39,6 +48,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertTrue(set(PYTHON_PACKAGE_REQUIRED_FILES).issubset(names))
                 self.assertIn("paypamin_flow.py", names)
                 self.assertIn("app_backup.py", names)
+                self.assertIn("build_info.py", names)
                 self.assertIn("tray.py", names)
                 self.assertIn("assets/paypamin_flow.ico", names)
                 self.assertIn("assets/paypamin_flow.icns", names)

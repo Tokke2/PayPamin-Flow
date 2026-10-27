@@ -4,6 +4,7 @@
 
 - Replaced native application packaging with one cross-platform `PayPamin-Flow-Python.zip` and SHA-256 sidecar; removed PyInstaller and native build metadata.
 - Added validated in-app installation of Python updates with atomic replacement, rollback and console-free restart; no separate updater needs to be run by the user.
+- Added official GitHub release-ID comparison so a refreshed release build can be installed without changing the application version; update checks still use Releases rather than the main branch.
 - Prevented Windows console windows from PDF/OCR and other child processes while preserving existing subprocess flags; GUI launch and autostart continue to use `pythonw.exe`.
 - Fixed tray startup through pystray's detached GUI integration and backend-ready visibility callback; added a distinct Windows taskbar app identity and mandatory validation of every application icon in Python updates.
 - Added close-to-system-tray behavior, an explicit full-exit path and the PayPamin Flow icon in the tray.

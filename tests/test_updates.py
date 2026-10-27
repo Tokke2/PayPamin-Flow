@@ -6,10 +6,12 @@ from app_info import APP_LATEST_RELEASE_API, APP_RELEASES_URL
 from i18n import set_language
 from update_checker import (
     UPDATE_CHECK_INTERVAL_MS,
+    ReleaseInfo,
     UpdateCheckError,
     canonical_version,
     fetch_latest_release,
     is_newer_version,
+    is_update_available,
     version_key,
 )
 
@@ -29,7 +31,7 @@ class FakeResponse:
 
 
 def payload(tag="v0.6.0", url="https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0", **values):
-    result = {"tag_name": tag, "html_url": url, "draft": False, "prerelease": False}
+    result = {"id": 100, "tag_name": tag, "html_url": url, "draft": False, "prerelease": False}
     result.update(values)
     return result
 
@@ -45,6 +47,20 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertFalse(is_newer_version("0.4.9", "0.5.0"))
         self.assertEqual(canonical_version(" v0.5.0 "), "0.5.0")
 
+    def test_same_version_release_builds_use_release_identity(self):
+        release = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0", release_id="200")
+        self.assertTrue(is_update_available(release, "0.6.0", "100"))
+        self.assertFalse(is_update_available(release, "0.6.0", "200"))
+        self.assertFalse(is_update_available(release, "0.6.0", ""))
+        self.assertTrue(is_update_available(release, "0.5.9", "100"))
+        self.assertFalse(is_update_available(release, "0.6.1", "100"))
+
+    def test_release_identity_is_optional_for_newer_versions(self):
+        new_version = ReleaseInfo("0.6.1", "v0.6.1", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.1")
+        same_version = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0")
+        self.assertTrue(is_update_available(new_version, "0.6.0", "100"))
+        self.assertFalse(is_update_available(same_version, "0.6.0", "100"))
+
     def test_rejects_non_stable_version_format(self):
         with self.assertRaises(ValueError):
             version_key("0.5.0-beta")
@@ -59,6 +75,7 @@ class UpdateCheckerTests(unittest.TestCase):
         release = fetch_latest_release(timeout=3, opener=opener)
         self.assertEqual(release.version, "0.6.0")
         self.assertEqual(release.tag_name, "v0.6.0")
+        self.assertEqual(release.release_id, "100")
         self.assertEqual(release.url, payload()["html_url"])
         self.assertEqual(calls[0][0].full_url, APP_LATEST_RELEASE_API)
         self.assertEqual(calls[0][1], 3)
@@ -70,6 +87,10 @@ class UpdateCheckerTests(unittest.TestCase):
     def test_rejects_untrusted_release_url(self):
         with self.assertRaises(UpdateCheckError):
             fetch_latest_release(opener=lambda request, timeout: FakeResponse(payload(url="http://example.com/update")))
+
+    def test_rejects_branch_name_as_release_identity(self):
+        with self.assertRaises(UpdateCheckError):
+            fetch_latest_release(opener=lambda request, timeout: FakeResponse(payload(id="main")))
 
     def test_rejects_prerelease_response(self):
         with self.assertRaises(UpdateCheckError):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -29,9 +30,25 @@ def package_files(source: Path) -> list[Path]:
     return sorted(candidates, key=lambda path: path.relative_to(source).as_posix())
 
 
-def build_python_package(source: Path, output: Path) -> tuple[Path, Path]:
+def stamp_release_build(source: Path, release_id: str) -> Path:
+    """Stamp an official package with its numeric GitHub release identity."""
+    release_id = str(release_id or "").strip()
+    if not re.fullmatch(r"[1-9][0-9]*", release_id):
+        raise ValueError("A numeric GitHub release ID is required")
+    build_info = source / "build_info.py"
+    build_info.write_text(
+        '"""Official GitHub release identity for same-version update checks."""\n\n'
+        f'APP_RELEASE_ID = "{release_id}"\n',
+        encoding="utf-8",
+    )
+    return build_info
+
+
+def build_python_package(source: Path, output: Path, *, release_id: str = "") -> tuple[Path, Path]:
     source = source.resolve()
     output = output.resolve()
+    if release_id:
+        stamp_release_build(source, release_id)
     files = package_files(source)
     names = {path.relative_to(source).as_posix() for path in files}
     missing = sorted(set(PYTHON_PACKAGE_REQUIRED_FILES) - names)
@@ -52,8 +69,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=ROOT)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--release-id", default="", help="Numeric GitHub release ID for official release packages")
     args = parser.parse_args()
-    archive, checksum = build_python_package(args.source, args.output)
+    archive, checksum = build_python_package(args.source, args.output, release_id=args.release_id)
     print(archive)
     print(checksum)
 

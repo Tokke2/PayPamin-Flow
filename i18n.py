@@ -95,6 +95,7 @@ _ENGLISH = {
     "Ingen nyare version finns.\n\nInstallerad version: {current}\nSenaste release: {latest}": "No newer version is available.\n\nInstalled version: {current}\nLatest release: {latest}",
     "Uppdatering tillgänglig": "Update available",
     "Version {version} är tillgänglig": "Version {version} is available",
+    "Uppdaterat bygge av version {version} är tillgänglig": "An updated build of version {version} is available",
     "Installerad version: {current}\nSenaste release: {latest}\n\nLokala fakturor, inställningar och mallar påverkas inte.": "Installed version: {current}\nLatest release: {latest}\n\nLocal invoices, settings and templates are not affected.",
     "Öppna nedladdningssida": "Open download page",
     "Kunde inte öppna webbläsaren": "Could not open the browser",
