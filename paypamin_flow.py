@@ -775,7 +775,7 @@ class ReminderApp(tk.Tk):
     def selected_logo_path(self):
         selected=self.logo_var.get()
         path=SVG_DIR/selected
-        return str(path) if selected and path.is_file() else ''
+        return str(path.resolve()) if selected and path.is_file() else ''
 
     def logo_file_path(self,filename):
         """Resolve one safe supplier-logo filename inside the user's SVG folder."""

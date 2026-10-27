@@ -95,6 +95,13 @@ class InvoiceLogoTests(unittest.TestCase):
         self.assertEqual(path, str((self.app.SVG_DIR / "global.svg").resolve()))
         self.assertEqual(name, "global.svg")
 
+    def test_global_fallback_uses_the_canonical_logo_path(self):
+        canonical = self.workspace / "canonical-global.svg"
+        with patch.object(Path, "resolve", return_value=canonical):
+            path, name = self.owner.invoice_logo({"logo_file": None, "template_vendor": ""})
+        self.assertEqual(path, str(canonical))
+        self.assertEqual(name, "global.svg")
+
     def test_p1_export_keeps_invoice_logo_after_global_choice_changes(self):
         self.map_vendor_logo()
         row = self.save_invoice("invoice.svg")
