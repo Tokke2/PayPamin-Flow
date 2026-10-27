@@ -5,7 +5,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import update_installer
 from app_info import PYTHON_PACKAGE_REQUIRED_FILES, PYTHON_RELEASE_ASSET
@@ -14,9 +14,12 @@ from update_installer import (
     UpdateInstallError,
     cleanup_update,
     install_update,
+    mark_update_ready,
     restart_updated_app,
     rollback_update,
     stage_update,
+    update_restart_ready,
+    wait_for_update_restart,
 )
 
 
@@ -205,6 +208,8 @@ class UpdateInstallerTests(unittest.TestCase):
         self.assertFalse(kwargs["start_new_session"])
         self.assertEqual(kwargs["stdout"], update_installer.subprocess.DEVNULL)
         self.assertEqual(kwargs["stderr"], update_installer.subprocess.DEVNULL)
+        self.assertEqual(kwargs["env"][update_installer.UPDATE_READY_FILE_ENV], str(installed.ready_file))
+        self.assertEqual(kwargs["env"][update_installer.UPDATE_READY_TOKEN_ENV], installed.ready_token)
 
     def test_unix_restart_uses_the_same_diagnostic_gui_launcher(self):
         plan = self.stage()
@@ -226,6 +231,43 @@ class UpdateInstallerTests(unittest.TestCase):
         self.assertEqual(args, [str(python.resolve()), str((self.target / "paypamin_flow.pyw").resolve())])
         self.assertTrue(kwargs["start_new_session"])
         self.assertEqual(kwargs["creationflags"], 0)
+        self.assertEqual(kwargs["env"][update_installer.UPDATE_READY_FILE_ENV], str(installed.ready_file))
+
+    def test_ready_handshake_requires_matching_token_and_pid(self):
+        plan = self.stage()
+        installed = install_update(plan)
+        installed.ready_file = self.root / "ready.json"
+        installed.ready_token = "one-off-token"
+        process = SimpleNamespace(pid=update_installer.os.getpid())
+        environment = {
+            update_installer.UPDATE_READY_FILE_ENV: str(installed.ready_file),
+            update_installer.UPDATE_READY_TOKEN_ENV: installed.ready_token,
+        }
+        with patch.dict(update_installer.os.environ, environment):
+            self.assertTrue(mark_update_ready())
+        self.assertTrue(update_restart_ready(installed, process))
+        self.assertFalse(update_restart_ready(installed, SimpleNamespace(pid=process.pid + 1)))
+        installed.ready_token = "wrong-token"
+        self.assertFalse(update_restart_ready(installed, process))
+
+    def test_failed_ready_handshake_stops_child_and_raises(self):
+        plan = self.stage()
+        installed = install_update(plan)
+        process = Mock(pid=999)
+        process.poll.return_value = None
+        with self.assertRaises(UpdateInstallError):
+            wait_for_update_restart(installed, process, timeout=0)
+        process.terminate.assert_called_once_with()
+
+    def test_early_child_exit_is_a_readiness_failure(self):
+        plan = self.stage()
+        installed = install_update(plan)
+        process = Mock(pid=999)
+        process.poll.return_value = 1
+        with self.assertRaises(UpdateInstallError) as raised:
+            wait_for_update_restart(installed, process)
+        self.assertIn("kod 1", str(raised.exception))
+        process.terminate.assert_not_called()
 
     def test_untrusted_download_url_is_rejected(self):
         release, responses = release_with_package(python_package())

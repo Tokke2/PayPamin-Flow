@@ -90,6 +90,11 @@ class InvoiceLogoTests(unittest.TestCase):
         self.assertEqual(path, "")
         self.assertEqual(name, "(Ingen logotyp)")
 
+    def test_missing_explicit_svg_is_kept_for_a_clear_pdf_error(self):
+        path, name = self.owner.invoice_logo({"logo_file": "missing.svg", "template_vendor": ""})
+        self.assertEqual(path, str((self.app.SVG_DIR / "missing.svg").resolve()))
+        self.assertEqual(name, "missing.svg")
+
     def test_global_logo_is_only_the_last_fallback(self):
         path, name = self.owner.invoice_logo({"logo_file": None, "template_vendor": ""})
         self.assertEqual(path, str((self.app.SVG_DIR / "global.svg").resolve()))
@@ -114,6 +119,11 @@ class InvoiceLogoTests(unittest.TestCase):
         self.assertEqual(calls, [(row["id"], "P1", str((self.app.SVG_DIR / "invoice.svg").resolve()))])
         self.assertIn("invoice.svg", confirm.call_args.args[1])
         self.assertNotIn("global.svg", confirm.call_args.args[1])
+        with self.app.connect() as db:
+            saved = db.execute("SELECT p1_snapshot FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        snapshot = self.app.read_p1_snapshot(saved["p1_snapshot"])
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot["terms"]["fee"], 150.0)
 
 
 if __name__ == "__main__":

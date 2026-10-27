@@ -14,7 +14,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 - **Automatisk bevakning av importmappen** upptäcker nya Fortnox-PDF:er utan API eller integrationslicens. Filer väntas in tills de är färdigskrivna och varje ny faktura granskas innan den sparas. Dubbletter stoppas via fakturanummer, sökväg eller identiskt PDF-innehåll, även om filen döpts om.
 - PDF-förhandsgranskning med markerbara fältområden och återanvändbara leverantörsmallar.
 - SVG-logotyp kan kopplas till en leverantörsmall och återanvändas vid export. Ett logotypval i PDF-matchningen sparas även direkt på fakturan och följer med till P1/P2 utan att fältmallen behöver sparas; valet påverkas inte av en senare global logotypändring.
-- Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta. **Redigera P1** kan byta logotyp och skriva om den befintliga P1-PDF:en med ursprungligt datum och oförändrad historik; den gamla filen bevaras om skrivningen misslyckas.
+- Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta. **Redigera P1** kan byta logotyp och skriva om den befintliga P1-PDF:en med ursprungligt datum, originaldata och oförändrade villkor/historik via en intern P1-snapshot; den gamla filen bevaras om skrivningen misslyckas. En skadad eller oläsbar SVG ger ett tydligt fel i stället för att tyst ersättas med textlogotyp.
 - Samma PayPamin Flow-ikon i fönster, dialoger, programmenyer och systemfältet.
 - **Stäng till systemfältet:** fönstrets stängknapp döljer appen medan schemalagda kontroller fortsätter. **Arkiv → Avsluta helt** eller systemfältets **Avsluta helt** stänger appen helt.
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
@@ -114,7 +114,7 @@ Vid en nyare version eller ett nytt officiellt bygge av samma version hämtas sa
 
 Kontrollsumman verifieras, arkivets sökvägar och filer valideras och Python-filerna syntaxkontrolleras innan något ersätts. Appen ersätter endast egna program-, start-, dokumentations- och ikonfiler. Databas, `import/`, `export/`, `svg/` och andra användardata ingår inte och lämnas orörda. Installationer med den äldre uppdateraren, som endast jämför versionsnummer, måste installera det första paketet med release-ID-stöd manuellt en gång.
 
-Installationen sker **inuti appen**; du ska inte starta någon separat uppdateringsfil. Därefter startas den uppdaterade Python-appen om utan konsolfönster. Gamla programfiler används som reserv under ersättningen och återställs om installationen eller omstarten misslyckas.
+Installationen sker **inuti appen**; du ska inte starta någon separat uppdateringsfil. Därefter startas den uppdaterade Python-appen om utan konsolfönster. Gamla programfiler används som reserv under ersättningen och återställs om installationen eller omstarten misslyckas. Den gamla appen stängs först när den nya processen har bekräftat att gränssnittets händelseloop startat via en engångsbekräftelse med PID och token. Vid timeout eller tidigt avslut stoppas den misslyckade nya processen, filerna rullas tillbaka och den gamla appen lämnas användbar.
 
 Manuell kontroll görs med knappen **Sök efter uppdateringar** eller **Hjälp → Sök efter uppdateringar**. Vid en nyare version väljer du **Installera och starta om** eller **Öppna nedladdningssida**.
 

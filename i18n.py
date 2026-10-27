@@ -225,6 +225,11 @@ _ENGLISH = {
     "PDF-tillägg saknas": "PDF add-on missing",
     "Kunde inte skapa PDF eftersom ett PDF-tillägg saknas. Öppna felloggen eller starta om appen med internetanslutning.": "Could not create the PDF because a PDF add-on is missing. Open the error log or restart the app with an internet connection.",
     "PDF kunde inte skapas": "PDF could not be created",
+    "Logotypen kunde inte användas": "The logo could not be used",
+    "SVG-logotypen hittades inte: {path}": "The SVG logo was not found: {path}",
+    "SVG-logotypen kunde inte läsas: {path}\n{error}": "The SVG logo could not be read: {path}\n{error}",
+    "SVG-logotypen kunde inte bäddas in: {path}\n{error}": "The SVG logo could not be embedded: {path}\n{error}",
+    "SVG-logotypen har ingen giltig storlek: {path}": "The SVG logo has no valid size: {path}",
     "Ett fel loggades. Öppna felloggen för detaljer.\n\n{error}": "An error was logged. Open the error log for details.\n\n{error}",
 
     # Generated reminder document
@@ -327,6 +332,8 @@ _ENGLISH = {
     "Vänta tills uppdateringen är klar. Appen startas sedan om automatiskt.": "Wait for the update to finish. The app will then restart automatically.",
     "Den här installationen kan inte uppdatera sig själv. Använd Python-versionen av PayPamin Flow.": "This installation cannot update itself. Use the Python version of PayPamin Flow.",
     "Den uppdaterade appen kunde inte startas: {error}": "The updated app could not be started: {error}",
+    "Den uppdaterade appen stängdes innan starten bekräftades (kod {code}).": "The updated app closed before startup was confirmed (code {code}).",
+    "Den uppdaterade appen bekräftade inte att den startade i tid.": "The updated app did not confirm that it started in time.",
     "Filen är inte tillåten i uppdateringspaketet: {name}": "This file is not allowed in the update package: {name}",
     "Konsolfri omstart kräver en Python-installation.": "A console-free restart requires a Python installation.",
     "Konsolfri omstart kräver pythonw.exe. Installera Python från python.org.": "A console-free restart requires pythonw.exe. Install Python from python.org.",

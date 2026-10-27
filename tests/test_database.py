@@ -65,12 +65,13 @@ class DatabaseTests(unittest.TestCase):
                 with app.connect() as db:
                     columns = {row[1] for row in db.execute("PRAGMA table_info(invoices)")}
                     existing = db.execute(
-                        "SELECT amount,paid,currency,logo_file FROM invoices WHERE invoice_no='6258'"
+                        "SELECT amount,paid,currency,logo_file,p1_snapshot FROM invoices WHERE invoice_no='6258'"
                     ).fetchone()
                     self.assertIn("currency", columns)
                     self.assertIn("source_hash", columns)
                     self.assertIn("logo_file", columns)
-                    self.assertEqual(tuple(existing), (6563.0, 1000.0, "SEK", None))
+                    self.assertIn("p1_snapshot", columns)
+                    self.assertEqual(tuple(existing), (6563.0, 1000.0, "SEK", None, ""))
 
                     db.execute(
                         "INSERT INTO invoices(customer,invoice_no,due_date,created) VALUES(?,?,?,?)",

@@ -9,12 +9,15 @@ from __future__ import annotations
 import ast
 import hashlib
 import hmac
+import json
 import os
+import secrets
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -36,6 +39,9 @@ DOWNLOAD_TIMEOUT = 90
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 MAX_CHECKSUM_BYTES = 65_536
 MAX_PACKAGE_FILES = 500
+UPDATE_READY_FILE_ENV = "PAYPAMIN_UPDATE_READY_FILE"
+UPDATE_READY_TOKEN_ENV = "PAYPAMIN_UPDATE_READY_TOKEN"
+UPDATE_RESTART_TIMEOUT_SECONDS = 20.0
 
 
 class UpdateInstallError(RuntimeError):
@@ -63,6 +69,8 @@ class Replacement:
 class InstalledUpdate:
     plan: UpdatePlan
     replacements: list[Replacement]
+    ready_file: Path | None = None
+    ready_token: str = ""
 
 
 def _log(plan: UpdatePlan, message: str) -> None:
@@ -336,6 +344,88 @@ def install_update(plan: UpdatePlan) -> InstalledUpdate:
         raise UpdateInstallError(_("Uppdateringen kunde inte installeras: {error}", error=exc)) from exc
 
 
+def mark_update_ready() -> bool:
+    """Confirm that the updated app's UI event loop has started.
+
+    The parent supplies a one-off path and token only to the child process. An
+    atomic write prevents the parent from reading a partial acknowledgement.
+    Normal starts without these environment variables do nothing.
+    """
+    filename = os.environ.get(UPDATE_READY_FILE_ENV, "")
+    token = os.environ.get(UPDATE_READY_TOKEN_ENV, "")
+    if not filename or not token:
+        return False
+    ready_file = Path(filename)
+    temporary = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{ready_file.name}.", dir=ready_file.parent)
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        temporary.write_text(json.dumps({"token": token, "pid": os.getpid()}), encoding="utf-8")
+        os.replace(temporary, ready_file)
+    except (OSError, ValueError, TypeError):
+        return False
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except (FileNotFoundError, OSError):
+                pass
+    os.environ.pop(UPDATE_READY_FILE_ENV, None)
+    os.environ.pop(UPDATE_READY_TOKEN_ENV, None)
+    return True
+
+
+def update_restart_ready(installed: InstalledUpdate, process) -> bool:
+    """Return only a matching PID/token acknowledgement, never a mere file."""
+    ready_file = getattr(installed, "ready_file", None)
+    token = getattr(installed, "ready_token", "")
+    if not ready_file or not token or not ready_file.is_file():
+        return False
+    try:
+        payload = json.loads(ready_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return False
+    return isinstance(payload, dict) and payload.get("token") == token and payload.get("pid") == process.pid
+
+
+def stop_updated_app(process) -> None:
+    """Stop a child that failed its readiness handshake, without harming the parent."""
+    try:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except Exception:
+            process.kill()
+            process.wait(timeout=2)
+    except Exception:
+        # Rollback must still run if a child already exited or cannot be killed.
+        pass
+
+
+def wait_for_update_restart(installed: InstalledUpdate, process, timeout=UPDATE_RESTART_TIMEOUT_SECONDS) -> None:
+    """Wait for real UI readiness and stop the child on every failed attempt."""
+    deadline = time.monotonic() + float(timeout)
+    try:
+        while True:
+            if update_restart_ready(installed, process):
+                _log(installed.plan, f"Updated app confirmed UI readiness with PID {process.pid}")
+                return
+            return_code = process.poll()
+            if return_code is not None:
+                raise UpdateInstallError(
+                    _("Den uppdaterade appen stängdes innan starten bekräftades (kod {code}).", code=return_code)
+                )
+            if time.monotonic() >= deadline:
+                raise UpdateInstallError(_("Den uppdaterade appen bekräftade inte att den startade i tid."))
+            time.sleep(0.1)
+    except Exception:
+        stop_updated_app(process)
+        raise
+
+
 def restart_updated_app(installed: InstalledUpdate):
     """Start the updated Python app without a console and return its process."""
 
@@ -355,6 +445,13 @@ def restart_updated_app(installed: InstalledUpdate):
     flags = 0
     if windows:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+    ready_file = installed.plan.work_dir / "restart-ready.json"
+    ready_token = secrets.token_hex(24)
+    installed.ready_file = ready_file
+    installed.ready_token = ready_token
+    environment = os.environ.copy()
+    environment[UPDATE_READY_FILE_ENV] = str(ready_file)
+    environment[UPDATE_READY_TOKEN_ENV] = ready_token
     try:
         process = subprocess.Popen(
             [str(executable), str(script)],
@@ -365,10 +462,11 @@ def restart_updated_app(installed: InstalledUpdate):
             close_fds=True,
             start_new_session=not windows,
             creationflags=flags,
+            env=environment,
         )
     except OSError as exc:
         raise UpdateInstallError(_("Den uppdaterade appen kunde inte startas: {error}", error=exc)) from exc
-    _log(installed.plan, f"Restarted updated app with PID {process.pid}")
+    _log(installed.plan, f"Restarted updated app with PID {process.pid}; waiting for UI readiness")
     return process
 
 

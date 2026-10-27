@@ -2,7 +2,7 @@ import queue
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import patch
 
 from test_database import load_headless_app
@@ -10,6 +10,14 @@ from update_checker import UPDATE_CHECK_INTERVAL_MS, ReleaseInfo
 
 
 RELEASE = ReleaseInfo("0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0")
+
+
+class ImmediateThread:
+    def __init__(self, target, daemon=None):
+        self.target = target
+
+    def start(self):
+        self.target()
 
 
 class UpdateUiTests(unittest.TestCase):
@@ -83,36 +91,85 @@ class UpdateUiTests(unittest.TestCase):
         self.assertEqual(checks, [])
         self.assertEqual(scheduled, [(UPDATE_CHECK_INTERVAL_MS, "next-scheduled-check")])
 
-    def test_successful_python_install_restarts_and_closes(self):
+    def test_successful_python_install_waits_for_ready_then_closes(self):
         installed = object()
         events = []
+        scheduled = []
         fake = SimpleNamespace(
             _update_helper_process=None,
+            _update_install_running=True,
+            _set_update_install_busy=lambda busy: events.append(("busy", busy)),
             _quitting=False,
             tray=None,
+            after=lambda delay, callback: scheduled.append(callback),
             destroy=lambda: events.append("destroyed"),
         )
+        fake._update_restart_failed = MethodType(self.app.ReminderApp._update_restart_failed, fake)
+        fake._poll_update_installation = MethodType(self.app.ReminderApp._poll_update_installation, fake)
         results = queue.Queue()
         results.put(("restart", False, RELEASE, installed))
         process = SimpleNamespace(pid=123)
         with patch.object(self.app, "restart_updated_app", return_value=process) as restart, patch.object(
+            self.app, "wait_for_update_restart", return_value=None
+        ) as wait, patch.object(self.app.threading, "Thread", ImmediateThread), patch.object(
             self.app, "cleanup_update"
         ) as cleanup:
             self.app.ReminderApp._poll_update_installation(fake, results)
+            self.assertEqual(events, [])
+            cleanup.assert_not_called()
+            self.assertFalse(fake._quitting)
+            scheduled.pop(0)()
         restart.assert_called_once_with(installed)
+        wait.assert_called_once_with(installed, process)
         cleanup.assert_called_once_with(installed)
         self.assertEqual(fake._update_helper_process, process)
         self.assertTrue(fake._quitting)
         self.assertEqual(events, ["destroyed"])
+
+    def test_failed_ready_handshake_rolls_back_without_closing_old_app(self):
+        installed = object()
+        events = []
+        scheduled = []
+        fake = SimpleNamespace(
+            _update_helper_process=None,
+            _update_install_running=True,
+            _set_update_install_busy=lambda busy: events.append(("busy", busy)),
+            _quitting=False,
+            tray=None,
+            after=lambda delay, callback: scheduled.append(callback),
+            destroy=lambda: events.append("destroyed"),
+            _show_update_install_error=lambda release, error: self.fail("Automatic failure must stay silent"),
+        )
+        fake._update_restart_failed = MethodType(self.app.ReminderApp._update_restart_failed, fake)
+        fake._poll_update_installation = MethodType(self.app.ReminderApp._poll_update_installation, fake)
+        results = queue.Queue()
+        results.put(("restart", False, RELEASE, installed))
+        process = SimpleNamespace(pid=123)
+        with patch.object(self.app, "restart_updated_app", return_value=process), patch.object(
+            self.app, "wait_for_update_restart", side_effect=self.app.UpdateInstallError("not ready")
+        ), patch.object(self.app.threading, "Thread", ImmediateThread), patch.object(
+            self.app, "rollback_update"
+        ) as rollback, patch.object(self.app, "cleanup_update") as cleanup:
+            self.app.ReminderApp._poll_update_installation(fake, results)
+            scheduled.pop(0)()
+        rollback.assert_called_once_with(installed)
+        cleanup.assert_called_once_with(installed)
+        self.assertFalse(fake._quitting)
+        self.assertFalse(fake._update_install_running)
+        self.assertNotIn("destroyed", events)
+        self.assertEqual(events, [("busy", False)])
 
     def test_failed_restart_rolls_back_python_files(self):
         installed = object()
         events = []
         fake = SimpleNamespace(
             _update_install_running=True,
+            _update_helper_process=None,
             _set_update_install_busy=lambda busy: events.append(("busy", busy)),
             _show_update_install_error=lambda release, error: self.fail("Automatic failure must stay silent"),
         )
+        fake._update_restart_failed = MethodType(self.app.ReminderApp._update_restart_failed, fake)
+        fake._poll_update_installation = MethodType(self.app.ReminderApp._poll_update_installation, fake)
         results = queue.Queue()
         results.put(("restart", False, RELEASE, installed))
         with patch.object(self.app, "restart_updated_app", side_effect=self.app.UpdateInstallError("failed")), patch.object(

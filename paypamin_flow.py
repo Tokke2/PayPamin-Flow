@@ -7,7 +7,7 @@ OCR för skannade PDF: se README.
 Copyright © 2026 Rickard Länkvist. Skapare: Rickard Länkvist.
 """
 from __future__ import annotations
-import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib, tempfile
+import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib, tempfile, json
 from logging.handlers import RotatingFileHandler
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -36,9 +36,11 @@ from update_installer import (
     UpdateInstallError,
     cleanup_update,
     install_update,
+    mark_update_ready,
     restart_updated_app,
     rollback_update,
     stage_update,
+    wait_for_update_restart,
 )
 
 IMPORT_WATCH_INTERVAL_MS = 5000
@@ -127,7 +129,7 @@ def init_db():
             amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'SEK', paid REAL NOT NULL DEFAULT 0,
             email TEXT DEFAULT '', source TEXT DEFAULT '', source_hash TEXT NOT NULL DEFAULT '', ignored INTEGER NOT NULL DEFAULT 0,
             note TEXT DEFAULT '', p1_date TEXT DEFAULT '', p2_date TEXT DEFAULT '', sent_count INTEGER NOT NULL DEFAULT 0,
-            created TEXT NOT NULL)""")
+            p1_snapshot TEXT DEFAULT '', created TEXT NOT NULL)""")
         existing={row['name'] for row in db.execute('PRAGMA table_info(invoices)').fetchall()}
         if 'invoice_date' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN invoice_date TEXT DEFAULT ''")
         if 'template_vendor' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN template_vendor TEXT DEFAULT ''")
@@ -135,6 +137,7 @@ def init_db():
         if 'logo_file' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN logo_file TEXT")
         if 'currency' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN currency TEXT NOT NULL DEFAULT 'SEK'")
         if 'source_hash' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''")
+        if 'p1_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p1_snapshot TEXT DEFAULT ''")
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         db.execute("""CREATE TABLE IF NOT EXISTS pdf_zones (
             vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
@@ -256,6 +259,63 @@ def reminder_file_path(row,level,day,prefix=None):
     safe_customer=re.sub(r'[^\w-]+','_',str(row['customer']),flags=re.UNICODE).strip('_')[:60] or 'kund'
     prefix=prefix or ('reminder' if get_language()=='en' else 'paminnelse')
     return EXPORT_DIR/f"{prefix}({reminder_number})_{safe_invoice_no}_{safe_customer}_{day.isoformat()}.pdf"
+
+
+def current_reminder_terms(fee):
+    """Capture the terms that affect a reminder PDF, not just its date."""
+    return {
+        'fee':float(fee or 0),
+        'interest':str(setting('interest') or ''),
+        'objection_days':str(setting('objection_days') or ''),
+        'payment_deadline_days':str(setting('payment_deadline_days') or ''),
+    }
+
+
+def capture_p1_snapshot(row,fee,day):
+    """Keep the original P1 content so a later logo edit changes only the logo."""
+    snapshot_row=dict(row)
+    snapshot_row.pop('p1_snapshot',None)
+    snapshot_row['p1_date']=day
+    return json.dumps({
+        'version':1,
+        'row':snapshot_row,
+        'terms':current_reminder_terms(fee),
+        'language':get_language(),
+    },ensure_ascii=False,sort_keys=True)
+
+
+def read_p1_snapshot(value):
+    try:
+        payload=json.loads(value or '')
+    except (TypeError,ValueError):
+        return None
+    if not isinstance(payload,dict) or not isinstance(payload.get('row'),dict) or not isinstance(payload.get('terms'),dict):
+        return None
+    return payload
+
+
+class LogoEmbedError(RuntimeError):
+    """Raised when a selected SVG cannot be embedded instead of falling back silently."""
+
+
+def load_svg_drawing(logo_path):
+    path=Path(logo_path)
+    if not path.is_file():
+        raise LogoEmbedError(_('SVG-logotypen hittades inte: {path}',path=path))
+    try:
+        from svglib.svglib import svg2rlg
+        drawing=svg2rlg(str(path))
+    except Exception as exc:
+        raise LogoEmbedError(_('SVG-logotypen kunde inte läsas: {path}\n{error}',path=path,error=exc)) from exc
+    try:
+        from math import isfinite
+        width=float(drawing.width);height=float(drawing.height)
+    except (AttributeError,TypeError,ValueError):
+        raise LogoEmbedError(_('SVG-logotypen har ingen giltig storlek: {path}',path=path))
+    if not isfinite(width) or not isfinite(height) or width<=0 or height<=0:
+        raise LogoEmbedError(_('SVG-logotypen har ingen giltig storlek: {path}',path=path))
+    drawing.width=width;drawing.height=height
+    return drawing
 
 
 def money(x,currency='SEK'):
@@ -502,6 +562,15 @@ class ReminderApp(tk.Tk):
         threading.Thread(target=install,daemon=True).start()
         self.after(200,lambda:self._poll_update_installation(result_queue))
 
+    def _update_restart_failed(self,release,installed,error,manual):
+        try:rollback_update(installed)
+        except UpdateInstallError:logger.exception('Update rollback failed')
+        cleanup_update(installed)
+        self._update_helper_process=None
+        self._update_install_running=False;self._set_update_install_busy(False)
+        logger.error('Updated app could not be restarted: %s',error)
+        if manual:self._show_update_install_error(release,error)
+
     def _poll_update_installation(self,result_queue):
         try:status,manual,release,payload=result_queue.get_nowait()
         except queue.Empty:
@@ -509,20 +578,31 @@ class ReminderApp(tk.Tk):
         if status=='restart':
             installed=payload
             try:
-                self._update_helper_process=restart_updated_app(installed)
+                process=restart_updated_app(installed)
+                self._update_helper_process=process
             except Exception as error:
-                try:rollback_update(installed)
-                except UpdateInstallError:logger.exception('Update rollback failed')
-                cleanup_update(installed)
-                self._update_install_running=False;self._set_update_install_busy(False)
-                logger.error('Updated app could not be restarted: %s',error)
-                if manual:self._show_update_install_error(release,error)
+                self._update_restart_failed(release,installed,error,manual)
                 return
+            def wait_for_ready():
+                try:
+                    wait_for_update_restart(installed,process)
+                    result_queue.put(('restart_ready',manual,release,installed))
+                except Exception as error:
+                    result_queue.put(('restart_failed',manual,release,(installed,error)))
+            threading.Thread(target=wait_for_ready,daemon=True).start()
+            # Keep the old window and its rollback copy alive until the child
+            # confirms that its UI event loop is actually running.
+            self.after(200,lambda:self._poll_update_installation(result_queue));return
+        if status=='restart_ready':
+            installed=payload
             cleanup_update(installed)
-            logger.info('Python update installed; closing app for silent restart to %s',release.version)
+            logger.info('Python update installed and UI confirmed; closing old app for restart to %s',release.version)
             self._quitting=True
             if self.tray is not None:self.tray.stop()
             self.destroy();return
+        if status=='restart_failed':
+            installed,error=payload
+            self._update_restart_failed(release,installed,error,manual);return
         self._update_install_running=False;self._set_update_install_busy(False)
         logger.error('Automatic update installation failed: %s',payload)
         if manual:self._show_update_install_error(release,payload)
@@ -791,9 +871,13 @@ class ReminderApp(tk.Tk):
         """Resolve one safe supplier-logo filename inside the user's SVG folder."""
         if not filename:return '',_('(Ingen logotyp)')
         root=SVG_DIR.resolve();path=(SVG_DIR/filename).resolve()
-        if path.parent!=root or not path.is_file():
-            logger.warning('Invoice logo is missing or outside the SVG folder: %s',filename)
+        if path.parent!=root:
+            logger.warning('Invoice logo is outside the SVG folder: %s',filename)
             return '',filename
+        if not path.is_file():
+            # Keep the safe path so PDF generation reports a missing selected
+            # logo instead of silently replacing it with the text brand.
+            logger.warning('Invoice logo is missing: %s',filename)
         return str(path),filename
 
     def invoice_logo(self,row):
@@ -1265,8 +1349,9 @@ class ReminderApp(tk.Tk):
         if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
             return
         day=date.today().isoformat()
+        p1_snapshot=capture_p1_snapshot(r,fee,day) if level=='P1' else ''
         with connect() as db:
-            if level=='P1':db.execute('UPDATE invoices SET p1_date=?,sent_count=sent_count+1 WHERE id=?',(day,r['id']))
+            if level=='P1':db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1 WHERE id=?',(day,p1_snapshot,r['id']))
             else:db.execute('UPDATE invoices SET p2_date=?,sent_count=sent_count+1 WHERE id=?',(day,r['id']))
         self.write_letter(r,level,fee,logo_path)
         self.refresh()
@@ -1298,30 +1383,55 @@ class ReminderApp(tk.Tk):
         w.wait_window()
 
     def update_p1_logo(self,row,logo_file,parent=None):
-        """Regenerate P1 without changing its date, P2 state or sent count."""
+        """Regenerate P1 without changing its original content, date or history."""
         original_date=dparse(row['p1_date'])
         if not original_date:return None
-        updated=dict(row);updated['logo_file']=logo_file
+        snapshot=read_p1_snapshot(row['p1_snapshot'] if 'p1_snapshot' in row.keys() else '')
+        updated=dict(row)
+        reminder_terms=current_reminder_terms(float(setting('fee') or 0))
+        snapshot_language=''
+        if snapshot:
+            updated.update(snapshot['row'])
+            reminder_terms=snapshot['terms']
+            snapshot_language=str(snapshot.get('language') or '')
+        updated['id']=row['id'];updated['logo_file']=logo_file
+        fee_value=reminder_terms.get('fee')
+        fee=float(setting('fee') or 0) if fee_value is None else float(fee_value or 0)
         logo_path,_=self.invoice_logo(updated)
-        prefixes=('reminder','paminnelse') if get_language()=='en' else ('paminnelse','reminder')
+        path_language=snapshot_language if snapshot_language in SUPPORTED_LANGUAGES else get_language()
+        prefixes=('reminder','paminnelse') if path_language=='en' else ('paminnelse','reminder')
         output_path=None
         for prefix in prefixes:
-            candidate=reminder_file_path(row,'P1',original_date,prefix)
+            candidate=reminder_file_path(updated,'P1',original_date,prefix)
             if candidate.is_file():output_path=candidate;break
-        result=self.write_letter(
-            updated,'P1',float(setting('fee') or 0),logo_path,
-            reminder_date=original_date,output_path=output_path,parent=parent,
-        )
+        previous_language=get_language()
+        if snapshot_language in SUPPORTED_LANGUAGES and snapshot_language!=previous_language:
+            set_language(snapshot_language)
+        try:
+            result=self.write_letter(
+                updated,'P1',fee,logo_path,
+                reminder_date=original_date,output_path=output_path,parent=parent,
+                reminder_terms=reminder_terms,
+            )
+        finally:
+            if get_language()!=previous_language:set_language(previous_language)
         if not result:return None
         with connect() as db:
-            db.execute('UPDATE invoices SET logo_file=? WHERE id=?',(logo_file,row['id']))
+            if snapshot:
+                db.execute('UPDATE invoices SET logo_file=? WHERE id=?',(logo_file,row['id']))
+            else:
+                # Older P1s have no original snapshot. Freeze the values used
+                # for this successful regeneration before any later edit.
+                snapshot_text=capture_p1_snapshot(updated,fee,original_date.isoformat())
+                db.execute('UPDATE invoices SET logo_file=?,p1_snapshot=? WHERE id=?',(logo_file,snapshot_text,row['id']))
         logger.info('P1 regenerated with a replacement logo: id=%s path=%s',row['id'],result)
         return result
 
-    def write_letter(self,r,level,fee,logo_path='',reminder_date=None,output_path=None,parent=None):
+    def write_letter(self,r,level,fee,logo_path='',reminder_date=None,output_path=None,parent=None,reminder_terms=None):
         today=reminder_date or date.today();remaining=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
+        effective_terms=reminder_terms or current_reminder_terms(fee)
         p1_fee=fee; p2_fee=fee if level=='P2' else 0; total=remaining+p1_fee+p2_fee
-        deadline_date=today+timedelta(days=int(setting('payment_deadline_days') or 5))
+        deadline_date=today+timedelta(days=int(effective_terms.get('payment_deadline_days') or 5))
         deadline=format_long_date(deadline_date)
         p2_warning=_('Ansökan om betalningsföreläggande lämnas in till Kronofogden om betalning inte kommit oss tillhanda senast den {deadline}. Kostnader för att driva ärendet kan tillkomma till dess full betalning har skett.',deadline=deadline) if level=='P2' else ''
         logger.info('Reminder generated: level=%s',level)
@@ -1330,7 +1440,8 @@ class ReminderApp(tk.Tk):
         try:
             descriptor,temporary_name=tempfile.mkstemp(prefix='.paypamin-reminder-',suffix='.pdf',dir=EXPORT_DIR)
             os.close(descriptor);temporary_pdf=Path(temporary_name)
-            self.write_pdf(temporary_pdf,r,level,fee,today,remaining,total,p2_warning,logo_path)
+            if reminder_terms is None:self.write_pdf(temporary_pdf,r,level,fee,today,remaining,total,p2_warning,logo_path)
+            else:self.write_pdf(temporary_pdf,r,level,fee,today,remaining,total,p2_warning,logo_path,effective_terms)
             os.replace(temporary_pdf,pdf_out)
             logger.info('Reminder PDF created: path=%s',pdf_out)
             try:
@@ -1340,6 +1451,10 @@ class ReminderApp(tk.Tk):
                 logger.exception('Could not automatically open generated PDF')
                 messagebox.showwarning(_('PDF skapad'),_('PDF:en sparades men kunde inte öppnas automatiskt.\n{path}\n\n{error}',path=pdf_out,error=open_exc),**dialog_options)
             return pdf_out
+        except LogoEmbedError as exc:
+            logger.exception('Reminder logo could not be embedded: invoice=%s',r['invoice_no'])
+            messagebox.showerror(_('Logotypen kunde inte användas'),str(exc),**dialog_options)
+            return None
         except ImportError:
             logger.exception('PDF generation dependency missing')
             messagebox.showerror(_('PDF-tillägg saknas'),_('Kunde inte skapa PDF eftersom ett PDF-tillägg saknas. Öppna felloggen eller starta om appen med internetanslutning.'),**dialog_options)
@@ -1354,7 +1469,7 @@ class ReminderApp(tk.Tk):
                 except FileNotFoundError:pass
                 except OSError:logger.warning('Temporary reminder PDF could not be removed: %s',temporary_pdf)
 
-    def write_pdf(self,path,r,level,fee,today,remaining,total,p2_warning,logo_path=''):
+    def write_pdf(self,path,r,level,fee,today,remaining,total,p2_warning,logo_path='',reminder_terms=None):
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_RIGHT
         from reportlab.lib.pagesizes import A4
@@ -1362,6 +1477,7 @@ class ReminderApp(tk.Tk):
         from reportlab.lib.units import mm
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Flowable
         from xml.sax.saxutils import escape
+        effective_terms=reminder_terms or current_reminder_terms(fee)
         currency=normalize_currency(r['currency'])
         styles=getSampleStyleSheet()
         styles.add(ParagraphStyle(name='LetterTitle',parent=styles['Heading1'],fontName='Times-Bold',fontSize=17,leading=21,textColor=colors.HexColor('#202020'),spaceBefore=9,spaceAfter=8))
@@ -1372,19 +1488,21 @@ class ReminderApp(tk.Tk):
         story=[]
         brand=Paragraph('<font name="Times-BoldItalic" size="22">Tadega AB</font>',styles['BodyText'])
         logo_path=Path(logo_path) if logo_path else None
-        if logo_path and logo_path.is_file():
-            try:
-                from svglib.svglib import svg2rlg
-                from reportlab.graphics import renderPDF
-                drawing=svg2rlg(str(logo_path))
-                if drawing and drawing.width and drawing.height:
-                    class LogoFlowable(Flowable):
-                        def __init__(self,drawing,maxw,maxh):
-                            Flowable.__init__(self);self.drawing=drawing;self.width=maxw;self.height=maxh;self.scale=min(maxw/drawing.width,maxh/drawing.height)
-                        def draw(self):
-                            self.canv.saveState();self.canv.scale(self.scale,self.scale);renderPDF.draw(self.drawing,self.canv,0,0);self.canv.restoreState()
-                    brand=LogoFlowable(drawing,70*mm,28*mm)
-            except Exception:logger.exception('Could not embed SVG logo in PDF')
+        if logo_path:
+            drawing=load_svg_drawing(logo_path)
+            from reportlab.graphics import renderPDF
+            class LogoFlowable(Flowable):
+                def __init__(self,drawing,maxw,maxh):
+                    Flowable.__init__(self);self.drawing=drawing;self.width=maxw;self.height=maxh;self.scale=min(maxw/drawing.width,maxh/drawing.height)
+                def draw(self):
+                    try:
+                        self.canv.saveState();self.canv.scale(self.scale,self.scale);renderPDF.draw(self.drawing,self.canv,0,0)
+                    except Exception as exc:
+                        try:self.canv.restoreState()
+                        except Exception:pass
+                        raise LogoEmbedError(_('SVG-logotypen kunde inte bäddas in: {path}\n{error}',path=logo_path,error=exc)) from exc
+                    self.canv.restoreState()
+            brand=LogoFlowable(drawing,70*mm,28*mm)
         n=1 if level=='P1' else 2
         meta_lines=['Tadega AB',f"{_('Påminnelsedatum')}: {today.isoformat()}",_('Påminnelse nummer {number}',number=n),f"{_('Fakturanummer')}: {escape(str(r['invoice_no']))}",f"{_('Fakturadatum')}: {escape(str(r['invoice_date'] or ''))}",f"{_('Förfallodatum')}: {escape(str(r['due_date']))}",f"{_('Valuta')}: {currency}"]
         meta=Paragraph('<br/>'.join(meta_lines),styles['RightSmall'])
@@ -1392,7 +1510,7 @@ class ReminderApp(tk.Tk):
         story.append(Paragraph(f'<b>{escape(str(r["customer"]))}</b>',styles['SmallText']))
         story.append(Paragraph(_('Betalningspåminnelse nummer {number}',number=n),styles['LetterTitle']))
         story.append(Paragraph(_('Vi saknar fortfarande betalning för nedanstående faktura. Om betalning redan har gjorts, vänligen bortse från denna påminnelse.'),styles['SmallText']))
-        deadline_date=today+timedelta(days=int(setting('payment_deadline_days') or 5))
+        deadline_date=today+timedelta(days=int(effective_terms.get('payment_deadline_days') or 5))
         deadline_text=format_long_date(deadline_date)
         story.append(Paragraph(f"<b>{escape(_('Betalning ska vara oss tillhanda senast {date}.',date=deadline_text))}</b>",styles['SmallText']))
         if level=='P2': story.append(Paragraph(escape(p2_warning),styles['AlertText']))
@@ -1410,7 +1528,7 @@ class ReminderApp(tk.Tk):
         story.append(Paragraph(_('Ovanstående påminnelser har skickats för fakturan och samtliga avgifter ingår i beloppet ovan.'),styles['SmallText']))
         payment_text=f"<b>{_('Betalning')}</b><br/>Bankgiro: 5660-4200 · Swish: 123 188 42 87<br/>{_('Betalningsmottagare')}: Tadega AB. {_('Ange fakturanumret vid betalning.')}<br/>IBAN: SE26 6000 0000 0005 3862 3322 · BIC: HANDSESS"
         story.append(Paragraph(payment_text,styles['SmallText']))
-        terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. Avgift per påminnelse: {fee}. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(setting('objection_days')),fee=money(fee,currency),interest=escape(setting('interest')))
+        terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. Avgift per påminnelse: {fee}. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(str(effective_terms.get('objection_days') or '')),fee=money(fee,currency),interest=escape(str(effective_terms.get('interest') or '')))
         story += [Spacer(1,2*mm),HRFlowable(width='100%',thickness=.4,color=colors.HexColor('#999999')),Spacer(1,2*mm),Paragraph(terms,styles['SmallText'])]
         doc.build(story)
     def settings(self):
@@ -1473,7 +1591,11 @@ def main():
         configure_windows_app_identity()
         init_db()
         logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
-        ReminderApp().mainloop()
+        window=ReminderApp()
+        after_idle=getattr(window,'after_idle',None)
+        if after_idle is not None:after_idle(mark_update_ready)
+        else:mark_update_ready()
+        window.mainloop()
     except Exception as e:
         if not isinstance(e,getattr(tk,'TclError',())):
             # The .pyw launcher turns this into a visible error and startup.log.

@@ -4,6 +4,7 @@
 
 - Replaced native application packaging with one cross-platform `PayPamin-Flow-Python.zip` and SHA-256 sidecar; removed PyInstaller and native build metadata.
 - Added validated in-app installation of Python updates with atomic replacement, rollback and console-free restart; no separate updater needs to be run by the user.
+- Kept the old app alive until the updated process confirms UI readiness with a one-off PID/token handshake; startup timeout or early exit stops the failed child and rolls back safely.
 - Added official GitHub release-ID comparison so a refreshed release build can be installed without changing the application version; update checks still use Releases rather than the main branch.
 - Prevented Windows console windows from PDF/OCR and other child processes while preserving existing subprocess flags; GUI launch and autostart continue to use `pythonw.exe`.
 - Fixed tray startup through pystray's detached GUI integration and backend-ready visibility callback; added a distinct Windows taskbar app identity and mandatory validation of every application icon in Python updates.
@@ -19,6 +20,7 @@
 - Applied the PayPamin Flow PNG and native Windows icon explicitly to every secondary app window through one shared window factory.
 - Preserved the supplier logo selected during PDF matching on the invoice itself and used it for P1/P2 export even without saving field zones, after restart or after changing the global logo.
 - Added **Edit P1** for replacing the logo and atomically regenerating the original P1 PDF without changing its date, P2 state or sent count; failed writes preserve the previous PDF and invoice selection.
+- Added internal P1 snapshots for original invoice data, fee, interest, payment deadline, objection terms and language, with safe legacy-row handling; broken SVG logos now show an error instead of silently generating a text-logo PDF.
 - Made the shared console-free launcher report import/startup failures with a native message and `~/.paminnelseapp/startup.log`; normal launch, autostart and update restart use the same entry point on all three platforms.
 - Removed obsolete legacy module duplicates and native-build leftovers; only active Python launchers and application files are shipped.
 - Added headless backup, tray, import-watcher, Python-package, updater, rollback and console-free restart tests.
