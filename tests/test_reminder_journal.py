@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 from contextlib import closing
 import unittest
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -26,8 +27,10 @@ class ReminderJournalTests(unittest.TestCase):
         self.app.DB_PATH = self.workspace / "journal.sqlite3"
         self.app.JOURNAL_PATH = self.workspace / "reminder_journal.json"
         self.app.JOURNAL_BACKUP_DIR = self.workspace / "backups" / "journal"
+        self.app.IMPORT_DIR = self.workspace / "import"
         self.app.EXPORT_DIR = self.workspace / "export"
         self.app.SVG_DIR = self.workspace / "svg"
+        self.app.IMPORT_DIR.mkdir(exist_ok=True)
         self.app.EXPORT_DIR.mkdir(exist_ok=True)
         self.app.SVG_DIR.mkdir(exist_ok=True)
         self.app.set_language("sv")
@@ -109,6 +112,52 @@ class ReminderJournalTests(unittest.TestCase):
         self.assertEqual(next_week.name, "reminder-journal-2026-W45.json")
         self.assertEqual(len(list(self.app.JOURNAL_BACKUP_DIR.glob("*.json"))), 2)
 
+    def test_weekly_backup_archives_import_and_export_once_per_week(self):
+        imported = self.app.IMPORT_DIR / "original.pdf"
+        imported.write_bytes(b"original invoice")
+        nested = self.app.IMPORT_DIR / "nested"
+        nested.mkdir()
+        (nested / "second.pdf").write_bytes(b"second invoice")
+        exported = self.app.EXPORT_DIR / "paminnelse(1)_JSON-1001.pdf"
+        exported.write_bytes(b"reminder PDF")
+        (self.app.EXPORT_DIR / "empty").mkdir()
+        moment = datetime(2026, 10, 27, tzinfo=timezone.utc)
+
+        first = create_weekly_backup(
+            self.app.DB_PATH, self.app.JOURNAL_PATH, self.app.JOURNAL_BACKUP_DIR,
+            import_dir=self.app.IMPORT_DIR, export_dir=self.app.EXPORT_DIR, now=moment,
+        )
+        archive_path = self.app.JOURNAL_BACKUP_DIR / "reminder-journal-2026-W44-files.zip"
+        self.assertEqual(first.name, "reminder-journal-2026-W44.json")
+        with zipfile.ZipFile(archive_path) as archive:
+            names = set(archive.namelist())
+            self.assertIn("import/original.pdf", names)
+            self.assertIn("import/nested/second.pdf", names)
+            self.assertIn("export/paminnelse(1)_JSON-1001.pdf", names)
+            self.assertIn("export/empty/", names)
+            self.assertEqual(archive.read("import/original.pdf"), b"original invoice")
+            self.assertEqual(archive.read("export/paminnelse(1)_JSON-1001.pdf"), b"reminder PDF")
+
+        imported.write_bytes(b"changed after weekly backup")
+        second = create_weekly_backup(
+            self.app.DB_PATH, self.app.JOURNAL_PATH, self.app.JOURNAL_BACKUP_DIR,
+            import_dir=self.app.IMPORT_DIR, export_dir=self.app.EXPORT_DIR,
+            now=datetime(2026, 10, 28, tzinfo=timezone.utc),
+        )
+        self.assertIsNone(second)
+        with zipfile.ZipFile(archive_path) as archive:
+            self.assertEqual(archive.read("import/original.pdf"), b"original invoice")
+
+        archive_path.unlink()
+        recreated = create_weekly_backup(
+            self.app.DB_PATH, self.app.JOURNAL_PATH, self.app.JOURNAL_BACKUP_DIR,
+            import_dir=self.app.IMPORT_DIR, export_dir=self.app.EXPORT_DIR,
+            now=datetime(2026, 10, 29, tzinfo=timezone.utc),
+        )
+        self.assertEqual(recreated, first)
+        with zipfile.ZipFile(archive_path) as archive:
+            self.assertEqual(archive.read("import/original.pdf"), b"changed after weekly backup")
+
     def test_failed_pdf_does_not_create_a_reminder_event(self):
         row = self.save_invoice("JSON-FAIL")
         owner = self.owner_for(row, None)
@@ -187,7 +236,10 @@ class ReminderJournalTests(unittest.TestCase):
         )
         with patch.object(self.app, "create_weekly_journal_backup", return_value=None) as backup:
             self.app.ReminderApp._run_scheduled_journal_backup(fake)
-        backup.assert_called_once_with(self.app.DB_PATH, self.app.JOURNAL_PATH, self.app.JOURNAL_BACKUP_DIR)
+        backup.assert_called_once_with(
+            self.app.DB_PATH, self.app.JOURNAL_PATH, self.app.JOURNAL_BACKUP_DIR,
+            import_dir=self.app.IMPORT_DIR, export_dir=self.app.EXPORT_DIR,
+        )
         self.assertEqual(scheduled, [(self.app.JOURNAL_BACKUP_INTERVAL_MS, "next-journal-backup")])
 
 

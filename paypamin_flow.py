@@ -1078,8 +1078,11 @@ class ReminderApp(tk.Tk):
         """Refresh the JSON journal and keep one automatic copy per ISO week."""
         if self._quitting:return
         try:
-            backup=create_weekly_journal_backup(DB_PATH,JOURNAL_PATH,JOURNAL_BACKUP_DIR)
-            if backup:logger.info('Weekly JSON journal backup created: %s',backup)
+            backup=create_weekly_journal_backup(
+                DB_PATH,JOURNAL_PATH,JOURNAL_BACKUP_DIR,
+                import_dir=IMPORT_DIR,export_dir=EXPORT_DIR,
+            )
+            if backup:logger.info('Weekly JSON and import/export backup created: %s',backup)
         except Exception:
             logger.exception('Weekly JSON journal backup failed')
         if not self._quitting:self.after(JOURNAL_BACKUP_INTERVAL_MS,self._run_scheduled_journal_backup)

@@ -13,6 +13,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import zipfile
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -343,19 +344,94 @@ def record_reminder(
     return event
 
 
-def create_weekly_backup(database_path, journal_path, backup_dir, *, now: datetime | None = None):
-    """Create at most one JSON copy per ISO week; return its path or None."""
+def _valid_weekly_files_backup(path: Path) -> bool:
+    """Check the ZIP structure without decompressing every file every hour."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            archive.infolist()
+        return True
+    except (OSError, zipfile.BadZipFile, RuntimeError):
+        return False
+
+
+def _add_weekly_directory(archive, source_dir, prefix, excluded):
+    """Add regular files and empty directories without following symlinks."""
+    if source_dir is None:
+        return
+    root = Path(source_dir).expanduser().resolve()
+    if not root.is_dir():
+        return
+    archive.writestr(f"{prefix}/", b"")
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink() or path.resolve() in excluded:
+            continue
+        relative = path.relative_to(root).as_posix()
+        member = f"{prefix}/{relative}"
+        if path.is_dir():
+            archive.writestr(f"{member.rstrip('/')}/", b"")
+        elif path.is_file():
+            archive.write(path, member)
+
+
+def _write_weekly_files_backup(destination, import_dir, export_dir, excluded=()):
+    """Atomically write one ZIP containing the import and export trees."""
+    destination = Path(destination).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        excluded_paths = {Path(path).expanduser().resolve() for path in excluded}
+        excluded_paths.add(temporary.resolve())
+        with zipfile.ZipFile(
+            temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
+        ) as archive:
+            _add_weekly_directory(archive, import_dir, "import", excluded_paths)
+            _add_weekly_directory(archive, export_dir, "export", excluded_paths)
+        os.replace(temporary, destination)
+        temporary = None
+        try:
+            destination.chmod(0o600)
+        except OSError:
+            pass
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise JournalError(_("Veckokopian av import- och exportmapparna kunde inte skapas: {error}", error=exc)) from exc
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
+def create_weekly_backup(
+    database_path, journal_path, backup_dir, *,
+    import_dir=None, export_dir=None, now: datetime | None = None,
+):
+    """Create one JSON and optional import/export archive per ISO week."""
     moment = _utc(now)
     year, week, _weekday = moment.isocalendar()
     backup_dir = Path(backup_dir).expanduser().resolve()
-    destination = backup_dir / f"{JOURNAL_BACKUP_PREFIX}{year}-W{week:02d}.json"
+    stem = f"{JOURNAL_BACKUP_PREFIX}{year}-W{week:02d}"
+    destination = backup_dir / f"{stem}.json"
+    files_destination = (
+        backup_dir / f"{stem}-files.zip"
+        if import_dir is not None or export_dir is not None else None
+    )
+    json_valid = False
     if destination.is_file():
         try:
             _read_json(destination)
-            return None
+            json_valid = True
         except JournalError:
             # Replace a damaged copy atomically from the live database.
             pass
+    files_valid = files_destination is None or _valid_weekly_files_backup(files_destination)
+    if json_valid and files_valid:
+        return None
     export_journal(database_path, journal_path, now=moment)
     backup_dir.mkdir(parents=True, exist_ok=True)
     temporary = None
@@ -372,6 +448,11 @@ def create_weekly_backup(database_path, journal_path, backup_dir, *, now: dateti
             destination.chmod(0o600)
         except OSError:
             pass
+        if files_destination is not None:
+            _write_weekly_files_backup(
+                files_destination, import_dir, export_dir,
+                excluded=(destination, files_destination, journal_path),
+            )
         return destination
     except OSError as exc:
         raise JournalError(_("Veckokopian av JSON-journalen kunde inte skapas: {error}", error=exc)) from exc

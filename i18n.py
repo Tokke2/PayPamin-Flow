@@ -368,6 +368,7 @@ _ENGLISH = {
     "JSON-journalen kunde inte exporteras: {error}": "The JSON journal could not be exported: {error}",
     "Påminnelsen kunde inte journalföras: {error}": "The reminder could not be added to the journal: {error}",
     "Veckokopian av JSON-journalen kunde inte skapas: {error}": "The weekly JSON journal backup could not be created: {error}",
+    "Veckokopian av import- och exportmapparna kunde inte skapas: {error}": "The weekly import/export folder backup could not be created: {error}",
     "JSON-journalen kunde inte importeras: {error}": "The JSON journal could not be imported: {error}",
     "Fakturan för påminnelsen hittades inte.": "The invoice for the reminder was not found.",
     "JSON-journalen innehåller en ogiltig logotypmall.": "The JSON journal contains an invalid logo template.",

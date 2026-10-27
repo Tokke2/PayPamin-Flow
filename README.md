@@ -103,7 +103,7 @@ Välj **Arkiv → Säkerhetskopiera inställningar och påminnelser** och spara 
 - företagslogotyper från `svg/`;
 - ett manifest med format, version, tidsstämpel och SHA-256-kontrollsummor.
 
-Importerade originalfakturor i `import/` och diagnostikloggar ingår inte. Kopiera originalfakturorna separat om de inte finns någon annanstans.
+Den manuella ZIP-säkerhetskopian innehåller inte importerade originalfakturor i `import/` eller diagnostikloggar. Originalfakturorna ingår i veckans separata filpaket enligt nedan.
 
 Välj **Arkiv → Återställ säkerhetskopia** för att återställa. Arkivets sökvägar, filtyper, kontrollsummor och SQLite-integritet kontrolleras först. Appen skapar alltid en säkerhetskopia av nuvarande data innan något ersätts. Den sparas under `~/.paminnelseapp/backups`. Om ersättningen misslyckas återställs de tidigare filerna automatiskt.
 
@@ -111,9 +111,9 @@ Välj **Arkiv → Återställ säkerhetskopia** för att återställa. Arkivets 
 
 Efter varje **lyckad P1/P2-generering** uppdateras **`~/.paminnelseapp/reminder_journal.json`** atomiskt. Journalen innehåller aktuella fakturor, inställningar, leverantörslogotypval, PDF-fältmallar och en bestående historik för varje påminnelse med nivå, datum, avgift, villkor, språk, logotypval, PDF-filnamn och fakturans innehåll vid tillfället. Äldre P1/P2-datum utan tidigare journal tas med automatiskt.
 
-- En automatisk kopia skapas **en gång per ISO-vecka medan appen körs**. Kontrollen görs vid start och därefter en gång i timmen. Kopiorna sparas som `reminder-journal-ÅÅÅÅ-Wvv.json` under **`~/.paminnelseapp/backups/journal/`**.
-- Efter ominstallation väljer du **Arkiv → Importera JSON-journal** och väljer huvudfilen eller en veckokopia. Fakturor, inställningar, mallar och påminnelsehistorik återställs. Befintliga fakturor slås samman utan dubbletter; lokala fakturaändringar skrivs inte över, medan saknad påminnelsehistorik kompletteras.
-- JSON-filen innehåller PDF-filnamn men inte själva PDF- eller SVG-filerna. Använd den befintliga ZIP-säkerhetskopian för att även flytta genererade PDF:er och logotypfiler. Påminnelsehistoriken finns även i databasen och följer därför med ZIP-säkerhetskopior.
+- En automatisk kopia skapas **en gång per ISO-vecka medan appen körs**. Kontrollen görs vid start och därefter en gång i timmen. JSON-kopian sparas som `reminder-journal-ÅÅÅÅ-Wvv.json` under **`~/.paminnelseapp/backups/journal/`**. Samma vecka skapas även `reminder-journal-ÅÅÅÅ-Wvv-files.zip` med hela `import/`- och `export/`-mapparna, inklusive undermappar och tomma kataloger. Om någon del av veckoparet saknas eller är skadat återskapas det utan att vänta till nästa vecka.
+- Efter ominstallation väljer du **Arkiv → Importera JSON-journal** och väljer huvudfilen eller en veckokopia. Fakturor, inställningar, mallar och påminnelsehistorik återställs. Befintliga fakturor slås samman utan dubbletter; lokala fakturaändringar skrivs inte över, medan saknad påminnelsehistorik kompletteras. JSON-importen skriver inte över `import/` eller `export/`; packa upp veckans `-files.zip` manuellt om du även vill återställa filerna.
+- JSON-filen innehåller PDF-filnamn men inte själva PDF- eller SVG-filerna. Veckans `-files.zip` innehåller originalfakturor och skapade påminnelse-PDF:er. Använd den manuella ZIP-säkerhetskopian för att även flytta logotypfiler. Påminnelsehistoriken finns även i databasen och följer därför med manuella ZIP-säkerhetskopior.
 
 ## Uppdateringar i appen
 

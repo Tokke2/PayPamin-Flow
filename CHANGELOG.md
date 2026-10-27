@@ -26,7 +26,7 @@
 - Made the shared console-free launcher report import/startup failures with a native message and `~/.paminnelseapp/startup.log`; normal launch, autostart and update restart use the same entry point on all three platforms.
 - Removed obsolete legacy module duplicates and native-build leftovers; only active Python launchers and application files are shipped.
 - Added an atomic JSON journal after every successful P1/P2 with invoice data, settings, templates and persistent reminder history; legacy reminder dates are included.
-- Added one automatic JSON backup per ISO week while the app is running and bilingual File-menu import for reinstall recovery, with duplicate-safe invoice/event merging.
+- Added one automatic JSON backup per ISO week while the app is running, a matching atomic ZIP of the import/export folders, and bilingual File-menu import for reinstall recovery, with duplicate-safe invoice/event merging.
 - Added headless backup, tray, import-watcher, Python-package, updater, rollback and console-free restart tests.
 
 ## 0.6.0 — 2026-10-26
