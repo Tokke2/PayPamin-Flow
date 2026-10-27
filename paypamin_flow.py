@@ -15,7 +15,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
-from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_NAME, APP_SLUG, APP_VERSION, SUPPORTED_PLATFORMS
+from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_ID, APP_NAME, APP_SLUG, APP_VERSION, SUPPORTED_PLATFORMS
 from app_backup import (
     BackupError,
     BackupPaths,
@@ -63,6 +63,26 @@ if not logger.handlers:
     log_handler=RotatingFileHandler(LOG_PATH,maxBytes=2_000_000,backupCount=3,encoding='utf-8')
     log_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logger.addHandler(log_handler)
+
+
+def configure_windows_app_identity():
+    """Give pythonw.exe its own taskbar identity and product icon on Windows."""
+
+    if not sys.platform.startswith('win'):
+        return
+    try:
+        import ctypes
+
+        set_app_id=ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        set_app_id.argtypes=[ctypes.c_wchar_p]
+        set_app_id.restype=ctypes.c_long
+        result=set_app_id(APP_ID)
+        if result!=0:
+            raise OSError(result,'SetCurrentProcessExplicitAppUserModelID failed')
+        logger.info('Windows application identity configured: %s',APP_ID)
+    except Exception as exc:
+        # Icon setup must never prevent the main window from opening.
+        logger.warning('Windows application identity could not be configured: %s',exc)
 
 
 def open_path(path):
@@ -320,14 +340,16 @@ class ReminderApp(tk.Tk):
         self._window_icons=[];self._header_icon=None
         self._configure_macos_dock_icon()
         try:
-            if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
-                self.iconbitmap(default=str(ICON_DIR/'paypamin_flow.ico'))
             for size in (16,32,48,256):
                 path=ICON_DIR/f'paypamin_flow_{size}.png'
                 if path.is_file():self._window_icons.append(tk.PhotoImage(master=self,file=str(path)))
             if self._window_icons:self.iconphoto(True,*self._window_icons)
             header_path=ICON_DIR/'paypamin_flow_48.png'
             if header_path.is_file():self._header_icon=tk.PhotoImage(master=self,file=str(header_path))
+            # Keep the native Windows icon last so it is not replaced by the
+            # generic pythonw.exe taskbar icon on older Tk/Windows versions.
+            if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
+                self.iconbitmap(default=str(ICON_DIR/'paypamin_flow.ico'))
         except tk.TclError:
             logger.exception('Application icon could not be loaded')
 
@@ -533,6 +555,7 @@ class ReminderApp(tk.Tk):
             bar.stop();win.destroy()
             if ok:
                 self._python_addons_ready=True
+                importlib.invalidate_caches()
                 self.start_tray()
                 messagebox.showinfo(_('Tillägg klara'),_('Nödvändiga Python-tillägg installerades. Appen är redo.'),parent=self)
             else:
@@ -1192,6 +1215,7 @@ class ReminderApp(tk.Tk):
 
 def main():
     configure_console_free_subprocesses()
+    configure_windows_app_identity()
     init_db()
     logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
     try: ReminderApp().mainloop()

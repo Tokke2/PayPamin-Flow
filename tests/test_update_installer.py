@@ -24,10 +24,13 @@ PACKAGE_URL = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.7.0
 CHECKSUM_URL = PACKAGE_URL + ".sha256"
 
 
-def python_package(version="0.7.0", extra=None):
+def python_package(version="0.7.0", extra=None, omit=None):
     buffer = io.BytesIO()
+    omitted = set(omit or ())
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name in PYTHON_PACKAGE_REQUIRED_FILES:
+            if name in omitted:
+                continue
             if name == "app_info.py":
                 content = f'APP_VERSION = "{version}"\n'.encode()
             elif name.endswith((".py", ".pyw")):
@@ -127,6 +130,10 @@ class UpdateInstallerTests(unittest.TestCase):
         release = ReleaseInfo("0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0")
         with self.assertRaises(UpdateInstallError):
             stage_update(release, platform="linux", target_path=self.target)
+
+    def test_missing_windows_icon_is_rejected(self):
+        with self.assertRaisesRegex(UpdateInstallError, "paypamin_flow.ico"):
+            self.stage(python_package(omit={"assets/paypamin_flow.ico"}))
 
     def test_package_version_must_match_release(self):
         with self.assertRaises(UpdateInstallError):

@@ -59,6 +59,8 @@ class ApplicationStartupTests(unittest.TestCase):
             try:
                 with patch.object(
                     app, "configure_console_free_subprocesses", side_effect=lambda: events.append("console-free")
+                ), patch.object(
+                    app, "configure_windows_app_identity", side_effect=lambda: events.append("windows-identity")
                 ), patch.object(app, "init_db", side_effect=lambda: events.append("database")), patch.object(
                     app, "ReminderApp", return_value=fake_window
                 ):
@@ -67,7 +69,7 @@ class ApplicationStartupTests(unittest.TestCase):
                 for handler in app.logger.handlers[:]:
                     app.logger.removeHandler(handler)
                     handler.close()
-            self.assertEqual(events, ["console-free", "database", "mainloop"])
+            self.assertEqual(events, ["console-free", "windows-identity", "database", "mainloop"])
 
 
 if __name__ == "__main__":

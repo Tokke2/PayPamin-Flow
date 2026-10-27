@@ -34,7 +34,13 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "update_installer.py",
     "requirements.txt",
     "assets/paypamin_flow.png",
+    "assets/paypamin_flow.ico",
+    "assets/paypamin_flow.icns",
+    "assets/paypamin_flow_16.png",
+    "assets/paypamin_flow_32.png",
+    "assets/paypamin_flow_48.png",
     "assets/paypamin_flow_256.png",
+    "assets/paypamin_flow_512.png",
 )
 SUPPORTED_PLATFORMS = "Windows · macOS · Linux"
 

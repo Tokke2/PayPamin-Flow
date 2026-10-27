@@ -80,6 +80,8 @@ När du stänger huvudfönstret döljs det i systemfältet. Appen fortsätter d�
 
 Om skrivbordsmiljön inte har ett fungerande systemfält lämnas fönstret synligt och appen erbjuder ett tydligt val att avsluta i stället för att gömmas oåtkomlig. På Linux kan skrivbordets AppIndicator-/systemfältsstöd behöva aktiveras.
 
+På Windows använder appen en egen app-identitet för aktivitetsfältets PayPamin Flow-ikon. Systemfältsikonen kan placeras under **^ / Dolda ikoner** av Windows; dra den till det synliga fältet om du vill ha den framme hela tiden. Start- och ikonfel loggas i `%USERPROFILE%\.paminnelseapp\app.log`.
+
 ## Säkerhetskopiering och återställning
 
 Välj **Arkiv → Säkerhetskopiera inställningar och påminnelser** och spara ZIP-filen på en säker plats. Säkerhetskopian innehåller:

@@ -1,8 +1,13 @@
+import sys
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_NAME
+from test_database import load_headless_app
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +44,32 @@ class BrandingTests(unittest.TestCase):
         title = root.find("{http://www.w3.org/2000/svg}title")
         self.assertIsNotNone(title)
         self.assertEqual(title.text, APP_NAME)
+
+
+class WindowsBrandingTests(unittest.TestCase):
+    def test_pythonw_receives_product_taskbar_identity(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            set_app_id = Mock(return_value=0)
+            fake_ctypes = SimpleNamespace(
+                windll=SimpleNamespace(
+                    shell32=SimpleNamespace(SetCurrentProcessExplicitAppUserModelID=set_app_id)
+                ),
+                c_wchar_p="wchar",
+                c_long="long",
+            )
+            try:
+                with patch.object(app.sys, "platform", "win32"), patch.dict(
+                    sys.modules, {"ctypes": fake_ctypes}
+                ):
+                    app.configure_windows_app_identity()
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
+            set_app_id.assert_called_once_with(app.APP_ID)
+            self.assertEqual(set_app_id.argtypes, ["wchar"])
+            self.assertEqual(set_app_id.restype, "long")
 
 
 if __name__ == "__main__":

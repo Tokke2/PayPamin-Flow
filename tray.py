@@ -1,8 +1,6 @@
 """System-tray integration without importing GUI backends at module import time."""
 from __future__ import annotations
 
-import sys
-import threading
 from pathlib import Path
 from typing import Callable
 
@@ -37,7 +35,6 @@ class TrayController:
         self.exit_label = exit_label
         self.on_error = on_error
         self.icon = None
-        self.thread: threading.Thread | None = None
         self._stopping = False
 
     @property
@@ -53,12 +50,16 @@ class TrayController:
             # Tk may already have been destroyed by an explicit full exit.
             pass
 
-    def _run(self) -> None:
+    def _show_when_ready(self, icon) -> None:
+        """Make the icon visible from pystray's ready callback."""
+
         try:
-            self.icon.run()
+            # A custom setup callback must set visible itself. The callback is
+            # invoked only after the backend has created its native tray item.
+            icon.visible = True
         except Exception as exc:
             if not self._stopping and self.on_error:
-                self._dispatch(lambda: self.on_error(exc))
+                self._dispatch(lambda error=exc: self.on_error(error))
 
     def start(self) -> None:
         if self.icon is not None:
@@ -80,20 +81,13 @@ class TrayController:
 
         self.icon = icon
         try:
-            if sys.platform == "darwin":
-                # AppKit owns the main thread. run_detached creates the status
-                # item while Tk continues to service the application's events.
-                icon.run_detached()
-            else:
-                self.thread = threading.Thread(
-                    target=self._run,
-                    name="paypamin-system-tray",
-                    daemon=True,
-                )
-                self.thread.start()
+            # pystray's run() must own the main thread. run_detached() is its
+            # supported integration point when Tk owns the application's main
+            # loop; the backend creates and manages its own native event loop.
+            # This is required on Windows and macOS and also works on Linux.
+            icon.run_detached(setup=self._show_when_ready)
         except Exception as exc:
             self.icon = None
-            self.thread = None
             raise TrayUnavailable(str(exc)) from exc
 
     def refresh(self) -> None:
@@ -103,11 +97,8 @@ class TrayController:
     def stop(self) -> None:
         self._stopping = True
         icon, self.icon = self.icon, None
-        thread, self.thread = self.thread, None
         if icon is not None:
             try:
                 icon.stop()
             except Exception:
                 pass
-        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=3)

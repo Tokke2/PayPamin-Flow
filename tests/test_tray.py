@@ -45,6 +45,7 @@ class FakeIcon:
         self.menu = menu
         self.started = False
         self.detached = False
+        self.visible = False
         self.stopped = False
         self.refreshed = False
         self.instances.append(self)
@@ -52,8 +53,10 @@ class FakeIcon:
     def run(self):
         self.started = True
 
-    def run_detached(self):
+    def run_detached(self, setup=None):
         self.detached = True
+        if setup:
+            setup(self)
 
     def stop(self):
         self.stopped = True
@@ -97,9 +100,11 @@ class TrayControllerTests(unittest.TestCase):
     def test_tray_actions_are_marshalled_to_tk_scheduler(self):
         scheduled, opened, exited = [], [], []
         controller = self.controller(scheduled, opened, exited)
-        with patch.object(tray.sys, "platform", "linux"):
-            controller.start()
+        controller.start()
         icon = FakeIcon.instances[-1]
+        self.assertTrue(icon.detached)
+        self.assertTrue(icon.visible)
+        self.assertFalse(icon.started)
         self.assertEqual(icon.menu.items[0].text(icon.menu.items[0]), "Open")
         self.assertEqual(icon.menu.items[1].text(icon.menu.items[1]), "Exit")
         icon.menu.items[0].action(icon, icon.menu.items[0])
@@ -114,13 +119,26 @@ class TrayControllerTests(unittest.TestCase):
         controller.stop()
         self.assertTrue(icon.stopped)
 
-    def test_macos_uses_detached_appkit_integration(self):
-        controller = self.controller([], [], [])
-        with patch.object(tray.sys, "platform", "darwin"):
-            controller.start()
-        self.assertTrue(FakeIcon.instances[-1].detached)
-        self.assertIsNone(controller.thread)
-        controller.stop()
+    def test_visibility_failure_is_reported_through_tk_scheduler(self):
+        scheduled = []
+        errors = []
+        controller = self.controller(scheduled, [], [])
+        controller.on_error = errors.append
+
+        class BrokenIcon:
+            @property
+            def visible(self):
+                return False
+
+            @visible.setter
+            def visible(self, value):
+                raise RuntimeError("native tray failed")
+
+        controller._show_when_ready(BrokenIcon())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(scheduled), 1)
+        scheduled[0]()
+        self.assertEqual(str(errors[0]), "native tray failed")
 
 
 class WindowCloseTests(unittest.TestCase):
