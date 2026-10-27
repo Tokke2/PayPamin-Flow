@@ -15,7 +15,7 @@ class AutostartTests(unittest.TestCase):
         command = autostart.launch_command()
         self.assertGreaterEqual(len(command), 2)
         self.assertTrue(command[0])
-        expected_script = "paypamin_flow.pyw" if sys.platform.startswith("win") else "paypamin_flow.py"
+        expected_script = "paypamin_flow.pyw"
         self.assertTrue(command[1].endswith(expected_script))
         self.assertTrue(Path(command[1]).is_file())
 
@@ -33,7 +33,7 @@ class AutostartTests(unittest.TestCase):
                 content = path.read_text(encoding="utf-8")
                 self.assertIn("[Desktop Entry]", content)
                 self.assertIn(f"Name={APP_NAME}", content)
-                self.assertIn("paypamin_flow.py", content)
+                self.assertIn("paypamin_flow.pyw", content)
                 self.assertIn("Terminal=false", content)
                 self.assertIn("Comment=Local invoice and payment reminder app", content)
                 self.assertIn("Comment[sv]=Lokal app för fakturor och betalningspåminnelser", content)
@@ -114,7 +114,7 @@ class AutostartTests(unittest.TestCase):
                 self.assertEqual(payload["Label"], APP_ID)
                 self.assertTrue(payload["RunAtLoad"])
                 self.assertEqual(payload["LimitLoadToSessionType"], "Aqua")
-                self.assertTrue(payload["ProgramArguments"][1].endswith("paypamin_flow.py"))
+                self.assertTrue(payload["ProgramArguments"][1].endswith("paypamin_flow.pyw"))
                 self.assertTrue(autostart.is_autostart_enabled())
 
                 autostart.set_autostart(False)

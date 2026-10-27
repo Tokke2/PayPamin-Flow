@@ -1468,15 +1468,21 @@ class ReminderApp(tk.Tk):
         ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+11,column=1,sticky='e',pady=(15,0))
 
 def main():
-    configure_console_free_subprocesses()
-    configure_windows_app_identity()
-    init_db()
-    logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
-    try: ReminderApp().mainloop()
-    except tk.TclError as e:
+    try:
+        configure_console_free_subprocesses()
+        configure_windows_app_identity()
+        init_db()
+        logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
+        ReminderApp().mainloop()
+    except Exception as e:
+        if not isinstance(e,getattr(tk,'TclError',())):
+            # The .pyw launcher turns this into a visible error and startup.log.
+            # Keep direct python paypamin_flow.py useful for terminal diagnostics too.
+            logger.exception('Application could not start')
+            raise
         logger.exception('Application UI could not start')
         try:messagebox.showerror(APP_NAME,_('Appen kunde inte starta. Kontrollera att Python installerats med Tkinter.\n\n{error}',error=e))
-        except tk.TclError:print(f'{APP_NAME}: {e}',file=sys.stderr)
+        except Exception:print(f'{APP_NAME}: {e}',file=sys.stderr)
 
 
 if __name__=='__main__':

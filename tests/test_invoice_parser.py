@@ -4,13 +4,9 @@ import unittest
 from unittest.mock import patch
 
 from invoice_parser import extract_invoice_sections, normalize_amount, parse_invoice_text, split_invoice_pages
-from paypaminn_flow import parse_invoice_text as legacy_parse_invoice_text
 
 
 class InvoiceParserTests(unittest.TestCase):
-    def test_legacy_parser_import_remains_compatible(self):
-        self.assertIs(legacy_parse_invoice_text, parse_invoice_text)
-
     def test_uses_att_betala_gross_total_not_ex_vat_subtotal(self):
         text = """Fakturabelopp exkl moms\n5 250,00\nMoms 25 %\n1 312,50\nTotal exkl moms 5 250,00\nATT BETALA\n6 563,00 SEK"""
         self.assertEqual(parse_invoice_text(text)["amount"], 6563.0)

@@ -206,6 +206,27 @@ class UpdateInstallerTests(unittest.TestCase):
         self.assertEqual(kwargs["stdout"], update_installer.subprocess.DEVNULL)
         self.assertEqual(kwargs["stderr"], update_installer.subprocess.DEVNULL)
 
+    def test_unix_restart_uses_the_same_diagnostic_gui_launcher(self):
+        plan = self.stage()
+        installed = install_update(plan)
+        python = self.root / "python"
+        python.write_bytes(b"")
+        calls = []
+
+        def popen(args, **kwargs):
+            calls.append((args, kwargs))
+            return SimpleNamespace(pid=4322)
+
+        with patch.object(update_installer.sys, "platform", "linux"), patch.object(
+            update_installer.sys, "executable", str(python)
+        ), patch.object(update_installer.subprocess, "Popen", side_effect=popen):
+            process = restart_updated_app(installed)
+        self.assertEqual(process.pid, 4322)
+        args, kwargs = calls[0]
+        self.assertEqual(args, [str(python.resolve()), str((self.target / "paypamin_flow.pyw").resolve())])
+        self.assertTrue(kwargs["start_new_session"])
+        self.assertEqual(kwargs["creationflags"], 0)
+
     def test_untrusted_download_url_is_rejected(self):
         release, responses = release_with_package(python_package())
         unsafe = ReleaseInfo(

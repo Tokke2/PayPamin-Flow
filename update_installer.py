@@ -342,11 +342,10 @@ def restart_updated_app(installed: InstalledUpdate):
     if getattr(sys, "frozen", False) or not sys.executable:
         raise UpdateInstallError(_("Konsolfri omstart kräver en Python-installation."))
     executable = Path(sys.executable).resolve()
-    script = installed.plan.target_path / "paypamin_flow.py"
+    script = installed.plan.target_path / "paypamin_flow.pyw"
     windows = sys.platform.startswith("win")
     if windows:
         executable = executable.with_name("pythonw.exe")
-        script = installed.plan.target_path / "paypamin_flow.pyw"
     if not executable.is_file() or not script.is_file():
         raise UpdateInstallError(
             _("Konsolfri omstart kräver pythonw.exe. Installera Python från python.org.")

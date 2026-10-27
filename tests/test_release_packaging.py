@@ -56,6 +56,8 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertFalse(any(name.lower().endswith((".exe", ".dll", ".so", ".dylib", ".spec")) for name in names))
                 self.assertFalse(any(name.startswith(("tests/", ".git/", "import/", "export/", "svg/")) for name in names))
                 self.assertNotIn("start_paypamin_flow.command", names)
+                self.assertNotIn("paypaminn_flow.py", names)
+                self.assertNotIn("paypaminn_flow.pyw", names)
             validated = output / "validated"
             _extract_python_package(asset, validated, APP_VERSION)
             self.assertTrue((validated / "paypamin_flow.py").is_file())

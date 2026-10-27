@@ -19,6 +19,8 @@
 - Applied the PayPamin Flow PNG and native Windows icon explicitly to every secondary app window through one shared window factory.
 - Preserved the supplier logo selected during PDF matching on the invoice itself and used it for P1/P2 export even without saving field zones, after restart or after changing the global logo.
 - Added **Edit P1** for replacing the logo and atomically regenerating the original P1 PDF without changing its date, P2 state or sent count; failed writes preserve the previous PDF and invoice selection.
+- Made the shared console-free launcher report import/startup failures with a native message and `~/.paminnelseapp/startup.log`; normal launch, autostart and update restart use the same entry point on all three platforms.
+- Removed obsolete legacy module duplicates and native-build leftovers; only active Python launchers and application files are shipped.
 - Added headless backup, tray, import-watcher, Python-package, updater, rollback and console-free restart tests.
 
 ## 0.6.0 — 2026-10-26

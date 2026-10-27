@@ -66,7 +66,6 @@ def is_python_package_file(filename: str) -> bool:
     if len(path.parts) == 2 and path.parts[0] == "packaging":
         return filename in {
             "packaging/install_linux.sh",
-            "packaging/install_macos.sh",
             "packaging/paypamin-flow.desktop",
         }
     return False

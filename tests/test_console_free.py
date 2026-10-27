@@ -71,6 +71,18 @@ class ApplicationStartupTests(unittest.TestCase):
                     handler.close()
             self.assertEqual(events, ["console-free", "windows-identity", "database", "mainloop"])
 
+    def test_unexpected_startup_errors_are_logged_and_reraised_for_the_gui_launcher(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            try:
+                with patch.object(app, "init_db", side_effect=RuntimeError("synthetic startup failure")):
+                    with self.assertRaisesRegex(RuntimeError, "synthetic startup failure"):
+                        app.main()
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
+
 
 if __name__ == "__main__":
     unittest.main()

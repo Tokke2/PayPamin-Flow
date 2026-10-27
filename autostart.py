@@ -35,14 +35,13 @@ def launch_command() -> list[str]:
     if not sys.executable:
         raise AutostartError(_("Det går inte att hitta Python-installationen."))
     executable = Path(sys.executable).resolve()
-    script = SOURCE_DIR / "paypamin_flow.py"
+    script = SOURCE_DIR / "paypamin_flow.pyw"
     if sys.platform.startswith("win"):
         # Never fall back to python.exe: that would open a console at login.
         pythonw = executable.with_name("pythonw.exe")
         if not pythonw.is_file():
             raise AutostartError(_("Konsolfri start kräver pythonw.exe. Installera Python från python.org."))
         executable = pythonw
-        script = SOURCE_DIR / "paypamin_flow.pyw"
     if not script.is_file():
         raise AutostartError(_("Startfilen saknas: {script}", script=script))
     return [str(executable), str(script)]

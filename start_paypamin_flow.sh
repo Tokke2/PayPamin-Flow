@@ -13,4 +13,4 @@ else
   echo "PayPamin Flow: Python 3.10 eller senare måste installeras." >&2
   exit 1
 fi
-exec "$PYTHON" "$APP_DIR/paypamin_flow.py" "$@"
+exec "$PYTHON" "$APP_DIR/paypamin_flow.pyw" "$@"
