@@ -48,7 +48,7 @@ jobs:
             STATUS="$status" python - <<'PY'
           import os
           from pathlib import Path
-          output = Path("test-results.txt").read_text(encoding="utf-8", errors="replace")[-12000:]
+          output = Path("test-results.txt").read_text(encoding="utf-8", errors="replace")[-3000:]
           output = output.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           print(f"::error::Tests failed with exit code {os.environ['STATUS']}%0A{output}")
           PY
