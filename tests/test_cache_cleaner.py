@@ -89,7 +89,10 @@ class SmartCacheCleanupTests(unittest.TestCase):
         payload = outside / "keep.pdf"
         payload.write_bytes(b"keep")
         link = self.temp / "paypamin-backup-linked"
-        link.symlink_to(outside, target_is_directory=True)
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"Symlinks are unavailable on this platform: {exc}")
         self.age(payload, 72)
 
         report = clean_cache(self.source, temp_dir=self.temp, now=NOW)
