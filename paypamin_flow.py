@@ -862,6 +862,7 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Säkerhetskopiera inställningar och påminnelser'),command=self.create_backup)
         file_menu.add_command(label=_('Återställ säkerhetskopia'),command=self.restore_backup)
         file_menu.add_command(label=_('Importera JSON-journal'),command=self.import_journal)
+        file_menu.add_command(label=_('Öppna exportmapp'),command=self.open_export_folder)
         file_menu.add_command(label=_('Rensa cache nu'),command=self.clear_cache_now)
         file_menu.add_separator()
         file_menu.add_command(label=_('Dölj till systemfältet'),command=self.hide_to_tray)
@@ -886,7 +887,7 @@ class ReminderApp(tk.Tk):
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)
         bar=ttk.Frame(self,padding=(22,5,22,12)); bar.pack(fill='x')
-        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Redigera P1',self.edit_p1,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
+        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Redigera P1',self.edit_p1,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
             ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
         controls=ttk.Frame(self,padding=(22,0,22,10));controls.pack(fill='x')
         ttk.Label(controls,text=_('Visa:')).pack(side='left')
@@ -1380,6 +1381,11 @@ class ReminderApp(tk.Tk):
         IMPORT_DIR.mkdir(exist_ok=True)
         try:open_path(IMPORT_DIR)
         except Exception:logger.exception('Could not open import folder')
+
+    def open_export_folder(self):
+        EXPORT_DIR.mkdir(exist_ok=True)
+        try:open_path(EXPORT_DIR)
+        except Exception:logger.exception('Could not open export folder')
 
     def import_invoice(self):
         path=filedialog.askopenfilename(title=_('Välj faktura-PDF'),filetypes=[('PDF','*.pdf')])

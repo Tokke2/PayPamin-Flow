@@ -43,6 +43,7 @@ _ENGLISH = {
     "Spara inställningar": "Save settings",
     "Skanna importmapp": "Scan import folder",
     "Öppna importmapp": "Open import folder",
+    "Öppna exportmapp": "Open export folder",
     "Lägg till faktura-PDF": "Add invoice PDF",
     "Lägg till manuellt": "Add manually",
     "Skapa påminnelse": "Create reminder",
