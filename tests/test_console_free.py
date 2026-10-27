@@ -75,7 +75,9 @@ class ApplicationStartupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = load_headless_app(Path(temporary_directory))
             try:
-                with patch.object(app, "init_db", side_effect=RuntimeError("synthetic startup failure")):
+                with patch.object(app, "configure_console_free_subprocesses"), patch.object(
+                    app, "configure_windows_app_identity"
+                ), patch.object(app, "init_db", side_effect=RuntimeError("synthetic startup failure")):
                     with self.assertRaisesRegex(RuntimeError, "synthetic startup failure"):
                         app.main()
             finally:
