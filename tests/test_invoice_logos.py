@@ -75,13 +75,13 @@ class InvoiceLogoTests(unittest.TestCase):
     def test_explicit_invoice_logo_wins_over_template_and_global(self):
         self.map_vendor_logo()
         path, name = self.owner.invoice_logo({"logo_file": "invoice.svg", "template_vendor": "Supplier AB"})
-        self.assertEqual(path, str(self.app.SVG_DIR / "invoice.svg"))
+        self.assertEqual(path, str((self.app.SVG_DIR / "invoice.svg").resolve()))
         self.assertEqual(name, "invoice.svg")
 
     def test_template_logo_is_used_when_invoice_choice_is_inherited(self):
         self.map_vendor_logo()
         path, name = self.owner.invoice_logo({"logo_file": None, "template_vendor": "Supplier AB"})
-        self.assertEqual(path, str(self.app.SVG_DIR / "vendor.svg"))
+        self.assertEqual(path, str((self.app.SVG_DIR / "vendor.svg").resolve()))
         self.assertEqual(name, "vendor.svg")
 
     def test_explicit_no_logo_does_not_fall_back(self):
@@ -92,7 +92,7 @@ class InvoiceLogoTests(unittest.TestCase):
 
     def test_global_logo_is_only_the_last_fallback(self):
         path, name = self.owner.invoice_logo({"logo_file": None, "template_vendor": ""})
-        self.assertEqual(path, str(self.app.SVG_DIR / "global.svg"))
+        self.assertEqual(path, str((self.app.SVG_DIR / "global.svg").resolve()))
         self.assertEqual(name, "global.svg")
 
     def test_p1_export_keeps_invoice_logo_after_global_choice_changes(self):
@@ -104,7 +104,7 @@ class InvoiceLogoTests(unittest.TestCase):
         self.owner.refresh = lambda: None
         with patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm:
             self.app.ReminderApp.make_reminder(self.owner)
-        self.assertEqual(calls, [(row["id"], "P1", str(self.app.SVG_DIR / "invoice.svg"))])
+        self.assertEqual(calls, [(row["id"], "P1", str((self.app.SVG_DIR / "invoice.svg").resolve()))])
         self.assertIn("invoice.svg", confirm.call_args.args[1])
         self.assertNotIn("global.svg", confirm.call_args.args[1])
 
