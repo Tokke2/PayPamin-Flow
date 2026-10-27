@@ -173,6 +173,8 @@ _ENGLISH = {
     "{label} avläst: {value}": "{label} read: {value}",
     "Mallnamn saknas": "Template name missing",
     "Ange leverantör eller mallnamn.": "Enter a supplier or template name.",
+    "Mallen kunde inte sparas": "The template could not be saved",
+    "PDF-granskningen är fortfarande öppen. Försök igen eller fortsätt utan att spara mall.\n\n{error}": "The PDF review is still open. Try again or continue without saving the template.\n\n{error}",
     "Fortsätt utan att spara mall": "Continue without saving a template",
     "Spara markerade fält som mall och fortsätt": "Save selected fields as a template and continue",
 

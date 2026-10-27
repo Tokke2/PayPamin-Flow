@@ -15,6 +15,7 @@
 - Added import of multiple invoices from one PDF, including multi-page invoice sections, per-invoice review/page ranges and stable per-section duplicate handling that can resume partially imported bundles.
 - Added conservative smart cache cleanup with manual and once-daily automatic modes, 24-hour age/type filters and strict protection for invoices, import files, settings and backups.
 - Added one-click paid marking and paid-invoice import suppression by invoice number or PDF identity, with silent automatic skips and separate manual summary counts.
+- Fixed modal PDF preview lockups by dismissing lingering invoice menus, delaying the preview grab until rendering succeeds, releasing it on every close and reporting template-save errors without trapping the window.
 - Added headless backup, tray, import-watcher, Python-package, updater, rollback and console-free restart tests.
 
 ## 0.6.0 — 2026-10-26

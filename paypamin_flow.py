@@ -719,6 +719,25 @@ class ReminderApp(tk.Tk):
         try:self.row_menu.tk_popup(event.x_root,event.y_root)
         finally:self.row_menu.grab_release()
 
+    def dismiss_row_context_menu(self):
+        """Do not leave a second active menu grab above a modal preview."""
+        menu=getattr(self,'row_menu',None)
+        if menu is None:return
+        try:menu.unpost()
+        except tk.TclError:pass
+        try:menu.grab_release()
+        except tk.TclError:pass
+
+    def close_invoice_preview(self,win,doc):
+        """Release the modal grab and close both PDF and window on every exit."""
+        try:win.grab_release()
+        except tk.TclError:pass
+        try:doc.close()
+        finally:
+            try:
+                if win.winfo_exists():win.destroy()
+            except tk.TclError:pass
+
     def refresh_logo_choices(self):
         SVG_DIR.mkdir(exist_ok=True)
         files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
@@ -833,6 +852,7 @@ class ReminderApp(tk.Tk):
         return guess
 
     def preview_invoice(self,path,guess,vendor='',page_indexes=None):
+        self.dismiss_row_context_menu()
         try:
             import fitz
             doc=fitz.open(path)
@@ -843,7 +863,7 @@ class ReminderApp(tk.Tk):
         if not available_pages:
             doc.close()
             return guess
-        win=tk.Toplevel(self);win.title(_('Förhandsgranska faktura – markera fält att läsa'));win.geometry('950x760');win.transient(self);win.grab_set()
+        win=tk.Toplevel(self);win.title(_('Förhandsgranska faktura – markera fält att läsa'));win.geometry('950x760');win.transient(self)
         top=ttk.Frame(win,padding=(12,8));top.pack(fill='x')
         ttk.Label(top,text=_('Leverantör / mallnamn:')).pack(side='left')
         vendor_var=tk.StringVar(value=vendor or Path(path).stem)
@@ -885,7 +905,11 @@ class ReminderApp(tk.Tk):
             lab=ttk.Label(right,text=str(guess.get(key,'') or '—'),wraplength=210,foreground='#344054');lab.pack(anchor='w')
             result_labels[key]=lab
         ttk.Label(right,textvariable=status,wraplength=210,foreground='#475467').pack(anchor='w',pady=8)
-        pending={};state={'page':available_pages[0],'scale':1.0,'photo':None,'start':None,'rect':None,'image_w':1,'image_h':1}
+        pending={};state={'page':available_pages[0],'scale':1.0,'photo':None,'start':None,'rect':None,'image_w':1,'image_h':1,'closed':False}
+        def close_preview():
+            if state['closed']:return
+            state['closed']=True
+            self.close_invoice_preview(win,doc)
         def draw_saved():
             canvas.delete('zone')
             current_vendor=vendor_var.get().strip()
@@ -941,7 +965,7 @@ class ReminderApp(tk.Tk):
             color='#1d8c66';canvas.create_rectangle(xa,ya,xb,yb,outline=color,width=2,tags='zone');canvas.create_text(xa+3,ya+3,text=field_labels[field],anchor='nw',fill=color,tags='zone')
             status.set(_('{label} avläst: {value}',label=field_var.get(),value=value))
         canvas.bind('<ButtonPress-1>',start_draw);canvas.bind('<B1-Motion>',move_draw);canvas.bind('<ButtonRelease-1>',parse_zone)
-        def finish(save):
+        def save_and_finish(save):
             guess['template_vendor']=vendor_var.get().strip()
             selected_logo=preview_logo_var.get()
             save_logo=selected_logo not in (_('(Välj logotyp för mallen)'),'')
@@ -974,12 +998,25 @@ class ReminderApp(tk.Tk):
                     self.logo_var.set(selected_logo if selected_logo in logo_files else _('(Ingen logotyp)'))
                     self.on_logo_select()
                 logger.info('Updated learned invoice template: vendor=%s fields=%s logo_set=%s',vendor_key,','.join(pending),save_logo)
-            doc.close();win.destroy()
+            close_preview()
+        def finish(save):
+            if state['closed']:return
+            try:save_and_finish(save)
+            except Exception as exc:
+                logger.exception('Invoice template could not be saved from PDF preview')
+                messagebox.showerror(_('Mallen kunde inte sparas'),_('PDF-granskningen är fortfarande öppen. Försök igen eller fortsätt utan att spara mall.\n\n{error}',error=exc),parent=win)
         buttons=ttk.Frame(right);buttons.pack(side='bottom',fill='x',pady=8)
         ttk.Button(buttons,text=_('Fortsätt utan att spara mall'),command=lambda:finish(False)).pack(fill='x',pady=3)
         ttk.Button(buttons,text=_('Spara markerade fält som mall och fortsätt'),command=lambda:finish(True),style='Accent.TButton').pack(fill='x',pady=3)
         win.protocol('WM_DELETE_WINDOW',lambda:finish(False))
-        render_page();win.wait_window();return guess
+        try:
+            render_page()
+            # Grab only after the complete preview has rendered successfully.
+            win.grab_set()
+            win.wait_window()
+        finally:
+            close_preview()
+        return guess
 
 
     def _run_scheduled_import_scan(self):
