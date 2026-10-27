@@ -22,6 +22,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "app_backup.py",
     "app_info.py",
     "autostart.py",
+    "cache_cleaner.py",
     "console_free.py",
     "currency.py",
     "i18n.py",

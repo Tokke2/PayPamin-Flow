@@ -12,6 +12,8 @@
 - Added license-free Fortnox PDF import with automatic folder monitoring, stable-file detection, reviewed imports, duplicate suppression and an automatic-import setting.
 - Improved invoice PDF parsing with English payable labels, safe Swedish/European/English number normalization, currency detection near totals and safeguards against reading VAT, subtotals, invoice numbers or dates as the payable amount.
 - Added import of multiple invoices from one PDF, including multi-page invoice sections, per-invoice review/page ranges and stable per-section duplicate handling that can resume partially imported bundles.
+- Added conservative smart cache cleanup with manual and once-daily automatic modes, 24-hour age/type filters and strict protection for invoices, import files, settings and backups.
+- Added one-click paid marking and paid-invoice import suppression by invoice number or PDF identity, with silent automatic skips and separate manual summary counts.
 - Added headless backup, tray, import-watcher, Python-package, updater, rollback and console-free restart tests.
 
 ## 0.6.0 — 2026-10-26

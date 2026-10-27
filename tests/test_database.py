@@ -59,6 +59,8 @@ class DatabaseTests(unittest.TestCase):
                 app.init_db()  # Migration must also be safe on subsequent starts.
                 self.assertEqual(app.setting('update_auto'), '1')
                 self.assertEqual(app.setting('auto_import'), '1')
+                self.assertEqual(app.setting('cache_auto'), '1')
+                self.assertEqual(app.setting('cache_last_cleanup'), '')
 
                 with app.connect() as db:
                     columns = {row[1] for row in db.execute("PRAGMA table_info(invoices)")}

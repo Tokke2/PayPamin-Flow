@@ -24,6 +24,7 @@ from app_backup import (
     suggested_backup_filename,
 )
 from autostart import AutostartError, autostart_location, set_autostart
+from cache_cleaner import clean_cache
 from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from console_free import configure_console_free_subprocesses
@@ -41,6 +42,7 @@ from update_installer import (
 )
 
 IMPORT_WATCH_INTERVAL_MS = 5000
+CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 
 APP_DIR = Path.home() / ".paminnelseapp"
 APP_DIR.mkdir(parents=True,exist_ok=True)
@@ -143,7 +145,7 @@ def init_db():
             id INTEGER PRIMARY KEY, vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
             x0 REAL NOT NULL, y0 REAL NOT NULL, x1 REAL NOT NULL, y1 REAL NOT NULL, created TEXT NOT NULL)""")
         db.execute("CREATE TABLE IF NOT EXISTS vendor_logos (vendor TEXT PRIMARY KEY, logo_file TEXT NOT NULL DEFAULT '')")
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','auto_import':'1','language':'sv'}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','auto_import':'1','cache_auto':'1','cache_last_cleanup':'','language':'sv'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
 
@@ -253,10 +255,16 @@ def dparse(s):
     except Exception: return None
 
 
+def is_fully_paid(row):
+    """Use the same settled threshold for display and import suppression."""
+
+    return float(row['amount'] or 0)-float(row['paid'] or 0)<=0.005
+
+
 def next_stage(row):
     if row['ignored']:return 'Ignorerad'
+    if is_fully_paid(row): return 'Avslutad'
     if not row['reviewed']:return 'Granska uppgifter'
-    if float(row['amount'] or 0)-float(row['paid'] or 0) <= 0.005: return 'Avslutad'
     today=date.today(); due=dparse(row['due_date'])
     if not due: return 'Kontrollera datum'
     if not row['p1_date']:
@@ -282,6 +290,7 @@ class ReminderApp(tk.Tk):
         self.after(250,self.check_python_addons)
         self.after(2000,self._run_scheduled_update_check)
         self.after(1500,self._run_scheduled_import_scan)
+        self.after(3000,self._run_scheduled_cache_cleanup)
 
     def start_tray(self):
         """Start the tray icon lazily so unsupported desktops can still run the app."""
@@ -599,6 +608,7 @@ class ReminderApp(tk.Tk):
         file_menu=tk.Menu(menu,tearoff=0)
         file_menu.add_command(label=_('Säkerhetskopiera inställningar och påminnelser'),command=self.create_backup)
         file_menu.add_command(label=_('Återställ säkerhetskopia'),command=self.restore_backup)
+        file_menu.add_command(label=_('Rensa cache nu'),command=self.clear_cache_now)
         file_menu.add_separator()
         file_menu.add_command(label=_('Dölj till systemfältet'),command=self.hide_to_tray)
         file_menu.add_command(label=_('Avsluta helt'),command=self.quit_app)
@@ -622,7 +632,7 @@ class ReminderApp(tk.Tk):
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)
         bar=ttk.Frame(self,padding=(22,5,22,12)); bar.pack(fill='x')
-        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
+        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
             ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
         controls=ttk.Frame(self,padding=(22,0,22,10));controls.pack(fill='x')
         ttk.Label(controls,text=_('Visa:')).pack(side='left')
@@ -652,6 +662,7 @@ class ReminderApp(tk.Tk):
         self.tree.bind('<Button-2>',self.show_row_context_menu)
         self.row_menu=tk.Menu(self,tearoff=0)
         self.row_menu.add_command(label=_('Redigera faktura'),command=self.edit_invoice)
+        self.row_menu.add_command(label=_('Markera som betald'),command=self.mark_invoice_paid)
         self.row_menu.add_command(label=_('Ignorera / återaktivera'),command=self.toggle_ignore)
         self.row_menu.add_separator()
         self.row_menu.add_command(label=_('Ta bort fakturarad'),command=self.delete_invoice)
@@ -738,6 +749,33 @@ class ReminderApp(tk.Tk):
         logger.info('User opened diagnostic log')
         try:open_path(LOG_PATH)
         except Exception:logger.exception('Could not open diagnostic log')
+
+    def clear_cache_now(self):
+        """Run the same conservative age/type filter as the daily cleanup."""
+
+        try:
+            report=clean_cache(APP_FOLDER)
+            set_setting('cache_last_cleanup',date.today().isoformat())
+            logger.info('Manual smart cache cleanup: files=%d directories=%d bytes=%d errors=%d',report.removed_files,report.removed_directories,report.freed_bytes,report.errors)
+            size=f'{report.freed_bytes:,}'.replace(',',' ')
+            messagebox.showinfo(_('Cache rensad'),_('Tillfälliga filer rensade: {files}\nFrigjort utrymme: {bytes} byte\nFel: {errors}\n\nFakturor, importmapp, inställningar och säkerhetskopior har inte rörts.',files=report.removed_files,bytes=size,errors=report.errors),parent=self)
+        except Exception as exc:
+            logger.exception('Manual smart cache cleanup failed')
+            messagebox.showerror(_('Kunde inte rensa cache'),str(exc),parent=self)
+
+    def _run_scheduled_cache_cleanup(self):
+        """Clean at most once per calendar day while the app is running."""
+
+        if self._quitting:return
+        try:
+            today=date.today().isoformat()
+            if setting('cache_auto')=='1' and setting('cache_last_cleanup')!=today:
+                report=clean_cache(APP_FOLDER)
+                set_setting('cache_last_cleanup',today)
+                logger.info('Automatic smart cache cleanup: files=%d directories=%d bytes=%d errors=%d',report.removed_files,report.removed_directories,report.freed_bytes,report.errors)
+        except Exception:
+            logger.exception('Automatic smart cache cleanup failed')
+        if not self._quitting:self.after(CACHE_CLEANUP_INTERVAL_MS,self._run_scheduled_cache_cleanup)
 
     def guess_supplier(self,text):
         for line in [re.sub(r'\s+',' ',x).strip() for x in text.splitlines()[:18]]:
@@ -967,7 +1005,7 @@ class ReminderApp(tk.Tk):
             if not files:
                 if not automatic:messagebox.showinfo(_('Importmapp tom'),_('Lägg faktura-PDF:er i mappen:\n{folder}',folder=IMPORT_DIR),parent=self)
                 return
-            imported=skipped=failed=duplicates=0
+            imported=skipped=failed=duplicates=paid_skipped=0
             for path in files:
                 try:
                     candidates=read_invoice_candidates(path)
@@ -976,6 +1014,10 @@ class ReminderApp(tk.Tk):
                         try:
                             source=str(path.resolve())
                             duplicate=find_duplicate_invoice(guess.get('invoice_no',''),candidate_hash)
+                            if duplicate and is_fully_paid(duplicate):
+                                paid_skipped+=1
+                                logger.info('Paid invoice import skipped: existing_id=%s file=%s pages=%s',duplicate['id'],path.name,','.join(str(index+1) for index in section.page_indexes))
+                                continue
                             if duplicate:
                                 duplicates+=1
                                 logger.info('Duplicate import blocked: existing_id=%s file=%s pages=%s',duplicate['id'],path.name,','.join(str(index+1) for index in section.page_indexes))
@@ -993,13 +1035,13 @@ class ReminderApp(tk.Tk):
                             logger.exception('Invoice section import failed for %s pages=%s',path.name,section.page_indexes);failed+=1
                 except Exception:
                     logger.exception('Import folder scan failed for %s',path.name);failed+=1
-            logger.info('Import folder scan complete: automatic=%s imported=%d duplicates=%d skipped=%d failed=%d',automatic,imported,duplicates,skipped,failed)
+            logger.info('Import folder scan complete: automatic=%s imported=%d duplicates=%d paid_skipped=%d skipped=%d failed=%d',automatic,imported,duplicates,paid_skipped,skipped,failed)
             self.refresh()
             # Automatic duplicate-only and user-cancelled batches must not add
             # another popup after the review dialog. Manual scans always report.
             if not automatic or imported or failed:
                 title=_('Automatisk import klar') if automatic else _('Skanning klar')
-                messagebox.showinfo(title,_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,skipped=skipped,failed=failed),parent=self)
+                messagebox.showinfo(title,_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nBetalda som hoppades över: {paid}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,paid=paid_skipped,skipped=skipped,failed=failed),parent=self)
         finally:
             self._import_scan_running=False
 
@@ -1017,10 +1059,17 @@ class ReminderApp(tk.Tk):
             logger.exception('Invoice PDF read failed: %s',path)
             messagebox.showerror(_('Kunde inte läsa PDF'),_(str(e)));return
         multiple=len(candidates)>1
-        imported=skipped=failed=duplicates=0
+        imported=skipped=failed=duplicates=paid_skipped=0
         for section,guess,candidate_hash in candidates:
             try:
                 duplicate=find_duplicate_invoice(guess.get('invoice_no',''),candidate_hash)
+                if duplicate and is_fully_paid(duplicate):
+                    paid_skipped+=1
+                    logger.info('Paid invoice import skipped: existing_id=%s pages=%s',duplicate['id'],section.page_indexes)
+                    if not multiple:
+                        messagebox.showinfo(_('Betald faktura'),_('Faktura {invoice_no} är redan betald och importeras inte igen.',invoice_no=duplicate['invoice_no']),parent=self)
+                        return
+                    continue
                 if duplicate:
                     duplicates+=1
                     logger.info('Duplicate import blocked: existing_id=%s pages=%s',duplicate['id'],section.page_indexes)
@@ -1045,7 +1094,7 @@ class ReminderApp(tk.Tk):
                     messagebox.showerror(_('Kunde inte läsa PDF'),_(str(e)),parent=self);return
         if multiple:
             self.refresh()
-            messagebox.showinfo(_('Skanning klar'),_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,skipped=skipped,failed=failed),parent=self)
+            messagebox.showinfo(_('Skanning klar'),_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nBetalda som hoppades över: {paid}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,paid=paid_skipped,skipped=skipped,failed=failed),parent=self)
 
     def add_invoice(self,source='',guess=None,source_hash=''):
         self.invoice_dialog('Lägg till faktura',source=source,guess=guess,source_hash=source_hash)
@@ -1088,6 +1137,16 @@ class ReminderApp(tk.Tk):
             w.destroy();self.refresh()
         ttk.Button(form,text=_('Spara'),command=save,style='Accent.TButton').grid(row=len(fields)+1,column=1,sticky='e',pady=(12,0))
         w.wait_window()
+
+    def mark_invoice_paid(self):
+        """Settle the selected invoice and suppress future matching PDF imports."""
+
+        r=self.selected()
+        if not r:return
+        with connect() as db:
+            db.execute('UPDATE invoices SET paid=amount WHERE id=?',(r['id'],))
+        logger.info('Invoice marked as fully paid: id=%s',r['id'])
+        self.refresh()
 
     def toggle_ignore(self):
         r=self.selected()
@@ -1233,6 +1292,9 @@ class ReminderApp(tk.Tk):
         ttk.Label(form,text=_('Obs: påminnelseavgiften använder fakturans valuta. Kontrollera att avgift, ränta och villkor gäller för era kunder.'),style='Sub.TLabel').grid(row=len(fields)+7,column=0,columnspan=3,sticky='w',pady=(8,0))
         automatic_import_var=tk.BooleanVar(value=setting('auto_import')=='1')
         ttk.Checkbutton(form,text=_('Bevaka importmappen och importera nya PDF:er automatiskt'),variable=automatic_import_var).grid(row=len(fields)+8,column=0,columnspan=3,sticky='w',pady=(10,3))
+        automatic_cache_var=tk.BooleanVar(value=setting('cache_auto')=='1')
+        ttk.Checkbutton(form,text=_('Rensa gamla cachefiler automatiskt en gång per dygn'),variable=automatic_cache_var).grid(row=len(fields)+9,column=0,columnspan=3,sticky='w',pady=(10,3))
+        ttk.Label(form,text=_('Endast appens cachefiler äldre än 24 timmar. Fakturor och importmappen rörs inte.'),style='Sub.TLabel').grid(row=len(fields)+10,column=0,columnspan=3,sticky='w')
         def save():
             try:
                 for k,e in entries.items():
@@ -1252,13 +1314,14 @@ class ReminderApp(tk.Tk):
             set_setting('autostart','1' if autostart_var.get() else '0')
             set_setting('update_auto','1' if automatic_updates_var.get() else '0')
             set_setting('auto_import','1' if automatic_import_var.get() else '0')
+            set_setting('cache_auto','1' if automatic_cache_var.get() else '0')
             set_setting('language',new_language)
             set_language(new_language)
-            logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s automatic_import=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),new_language)
+            logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s automatic_import=%s cache_auto=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(automatic_cache_var.get()),new_language)
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()
-        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+9,column=1,sticky='e',pady=(15,0))
+        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+11,column=1,sticky='e',pady=(15,0))
 
 def main():
     configure_console_free_subprocesses()

@@ -82,6 +82,13 @@ Om skrivbordsmiljön inte har ett fungerande systemfält lämnas fönstret synli
 
 På Windows använder appen en egen app-identitet för aktivitetsfältets PayPamin Flow-ikon. Systemfältsikonen kan placeras under **^ / Dolda ikoner** av Windows; dra den till det synliga fältet om du vill ha den framme hela tiden. Start- och ikonfel loggas i `%USERPROFILE%\.paminnelseapp\app.log`.
 
+## Smart cache-rensning och betalda fakturor
+
+- **Arkiv → Rensa cache nu** kör samma smarta filter som den automatiska rensningen. Automatisk rensning är aktiverad som standard och körs högst en gång per kalenderdygn; den kan stängas av under **Inställningar**.
+- Filtret tar endast bort appens egna Python-cachefiler och identifierbara tillfälliga uppdaterings-/backupkataloger som är äldre än 24 timmar. Det följer inte symlänkar och rör aldrig import-PDF:er, fakturadatabasen, inställningar, mallar, logotyper, exporter, loggar eller säkerhetskopior.
+- Markera en faktura och välj **Markera som betald** i knappraden eller högerklicksmenyn. Beloppet **Redan betalt** sätts till hela fakturabeloppet och statusen blir **Avslutad**. Betalda fakturor visas under **Visa → Alla** och kan korrigeras via **Redigera faktura** vid behov.
+- Om samma faktura ligger kvar i importmappen hoppas den över vid senare import via fakturanummer eller PDF-identitet. Automatisk import hoppar över betalda fakturor tyst; manuella sammanfattningar visar dem separat från vanliga dubbletter. Cache-rensningen tar inte bort PDF:en från importmappen.
+
 ## Säkerhetskopiering och återställning
 
 Välj **Arkiv → Säkerhetskopiera inställningar och påminnelser** och spara ZIP-filen på en säker plats. Säkerhetskopian innehåller:
@@ -204,7 +211,7 @@ Parser-, importbevaknings-, autostart-, ikon-, språk-, valuta-, databas-, säke
 ## Begränsningar
 
 - PDF-layout och OCR kan misstolka fält. Kontrollera fakturan före godkännande.
-- Betalstatus uppdateras inte via Fortnox. Kontrollera betalningar manuellt före utskick.
+- Betalstatus hämtas inte via Fortnox. Kontrollera betalningar manuellt före utskick och använd **Markera som betald** när betalningen är verifierad.
 - Dagregler, avgifter, ränta och avtalsvillkor måste verifieras för verksamheten.
 - Automatisk e-post eller automatisk ansökan till Kronofogden ingår inte.
 
