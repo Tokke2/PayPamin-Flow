@@ -8,6 +8,7 @@ Copyright © 2026 Rickard Länkvist.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date
 
 from currency import find_currency_code, normalize_currency
@@ -85,25 +86,100 @@ def _payable_amount(text, payable_labels):
     return 0.0
 
 
-def extract_pdf(path):
-    """Best-effort text extraction; no silent auto-import of guessed invoice rows."""
+@dataclass(frozen=True)
+class InvoiceSection:
+    """One invoice and its zero-based page indexes in the source PDF."""
+
+    page_indexes: tuple[int, ...]
+    text: str
+
+
+def extract_pdf_pages(path):
+    """Extract text page by page, retaining OCR support for scanned PDFs."""
+
     try:
         import fitz
-        with fitz.open(path) as doc:
-            text='\n'.join(page.get_text('text') for page in doc)
+    except ImportError as exc:
+        raise ValueError(_('PDF-läsning kräver PyMuPDF. Installera med: pip install pymupdf')) from exc
+    with fitz.open(path) as doc:
+        pages=[page.get_text('text') for page in doc]
+    if not any(text.strip() for text in pages):
+        # Optional OCR fallback for scanned PDFs (requires pytesseract + Tesseract + pdf2image).
+        try:
+            from pdf2image import convert_from_path
+            import pytesseract
+            images=convert_from_path(path, dpi=220)
+            pages=[pytesseract.image_to_string(image, lang='swe+eng') for image in images]
+        except Exception as exc:
+            raise ValueError(_('PDF verkar vara skannad. OCR kräver Tesseract, svenska språkdata, pdf2image och Poppler. Se README för installation.')) from exc
+    if not any(text.strip() for text in pages):
+        raise ValueError(_('Ingen läsbar text hittades i PDF:en.'))
+    return pages
+
+
+def extract_pdf(path):
+    """Best-effort text extraction retained for single-invoice callers."""
+
+    return '\n'.join(extract_pdf_pages(path))
+
+
+def _continuation_page(text):
+    match=re.search(r'\b(?:sida|page)\s+(\d+)\s+(?:av|of)\s+(\d+)\b',text,re.I)
+    if match and int(match.group(1))>1:
+        return True
+    return bool(re.search(r'\b(?:fortsättning|forts\.|continuation|continued)\b',text,re.I))
+
+
+def split_invoice_pages(page_texts):
+    """Group continuation pages and split when a new invoice number begins.
+
+    A repeated invoice number belongs to the same invoice. A page without a
+    new number is also treated as a continuation, which prevents totals or
+    references on a later page from becoming separate invoices accidentally.
+    """
+
+    sections=[]
+    page_texts=list(page_texts)
+    current=[]
+    current_number=''
+    current_complete=False
+
+    def finish():
+        if current:
+            sections.append(InvoiceSection(tuple(current),'\n'.join(str(page_texts[index]) for index in current)))
+
+    for index,text in enumerate(page_texts):
+        text=str(text)
         if not text.strip():
-            # Optional OCR fallback for scanned PDFs (requires pytesseract + Tesseract + pdf2image).
-            try:
-                from pdf2image import convert_from_path
-                import pytesseract
-                pages=convert_from_path(path, dpi=220)
-                text='\n'.join(pytesseract.image_to_string(page, lang='swe+eng') for page in pages)
-            except Exception as exc:
-                raise ValueError(_('PDF verkar vara skannad. OCR kräver Tesseract, svenska språkdata, pdf2image och Poppler. Se README för installation.')) from exc
-        if not text.strip(): raise ValueError(_('Ingen läsbar text hittades i PDF:en.'))
-        return text
-    except ImportError:
-        raise ValueError(_('PDF-läsning kräver PyMuPDF. Installera med: pip install pymupdf'))
+            if current:
+                current.append(index)
+            continue
+        page_guess=parse_invoice_text(text)
+        number=page_guess.get('invoice_no','')
+        normalized=''.join(number.split()).casefold()
+        current_normalized=''.join(current_number.split()).casefold()
+        starts_new=bool(current) and bool(normalized) and (
+            (bool(current_normalized) and normalized!=current_normalized)
+            or (not current_normalized and current_complete and not _continuation_page(text))
+        )
+        if starts_new:
+            finish()
+            current=[]
+            current_number=''
+            current_complete=False
+        current.append(index)
+        if number:
+            current_number=number
+        if re.search(rf'(?:{PAYABLE_LABEL_PATTERN}|{TOTAL_LABEL_PATTERN})',text,re.I):
+            current_complete=True
+    finish()
+    return sections
+
+
+def extract_invoice_sections(path):
+    """Return every invoice in a PDF, including invoices spanning pages."""
+
+    return split_invoice_pages(extract_pdf_pages(path))
 
 
 def detect_invoice_currency(text,payable_labels=()):

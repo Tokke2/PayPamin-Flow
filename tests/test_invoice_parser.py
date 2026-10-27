@@ -1,6 +1,9 @@
+import sys
+import types
 import unittest
+from unittest.mock import patch
 
-from invoice_parser import normalize_amount, parse_invoice_text
+from invoice_parser import extract_invoice_sections, normalize_amount, parse_invoice_text, split_invoice_pages
 from paypaminn_flow import parse_invoice_text as legacy_parse_invoice_text
 
 
@@ -107,6 +110,73 @@ class InvoiceParserTests(unittest.TestCase):
     def test_defaults_to_sek_when_no_currency_is_detectable(self):
         text = "Fakturanummer 7003\nATT BETALA 6 563,00"
         self.assertEqual(parse_invoice_text(text)["currency"], "SEK")
+
+
+class MultiInvoicePdfTests(unittest.TestCase):
+    def test_two_single_page_invoices_are_split(self):
+        sections = split_invoice_pages([
+            "Fakturanummer 8001\nFörfallodatum 2026-11-01\nATT BETALA 100,00 SEK",
+            "Fakturanummer 8002\nFörfallodatum 2026-11-02\nATT BETALA 200,00 SEK",
+        ])
+        self.assertEqual([section.page_indexes for section in sections], [(0,), (1,)])
+        self.assertEqual([parse_invoice_text(section.text)["amount"] for section in sections], [100.0, 200.0])
+
+    def test_continuation_pages_stay_with_their_invoice(self):
+        sections = split_invoice_pages([
+            "Fakturanummer 8101\nFakturadatum 2026-10-01\nBeskrivning\nFörsta sidans arbete",
+            "Fakturanummer 8101\nFortsättning\nBeskrivning\nAndra sidans arbete\nATT BETALA 300,00 SEK",
+            "Fakturanummer 8102\nFörfallodatum 2026-11-15\nATT BETALA 450,00 SEK",
+        ])
+        self.assertEqual([section.page_indexes for section in sections], [(0, 1), (2,)])
+        first = parse_invoice_text(sections[0].text)
+        self.assertEqual(first["invoice_no"], "8101")
+        self.assertEqual(first["amount"], 300.0)
+        self.assertIn("Andra sidans arbete", sections[0].text)
+
+    def test_page_without_repeated_number_is_a_continuation(self):
+        sections = split_invoice_pages([
+            "Fakturanummer 8201\nBeskrivning\nFörsta sidan",
+            "Specifikation fortsättning\nBeskrivning\nAndra sidan\nATT BETALA 500,00 SEK",
+            "Fakturanummer 8202\nATT BETALA 600,00 SEK",
+        ])
+        self.assertEqual([section.page_indexes for section in sections], [(0, 1), (2,)])
+
+    def test_pdf_extraction_keeps_page_boundaries_and_closes_document(self):
+        page_texts = [
+            "Fakturanummer 8301\nATT BETALA 700,00 SEK",
+            "Fakturanummer 8302\nATT BETALA 800,00 SEK",
+        ]
+
+        class FakePage:
+            def __init__(self, text):
+                self.text = text
+
+            def get_text(self, mode):
+                self.mode = mode
+                return self.text
+
+        class FakeDocument:
+            def __init__(self):
+                self.pages = [FakePage(text) for text in page_texts]
+                self.closed = False
+
+            def __iter__(self):
+                return iter(self.pages)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.closed = True
+
+        document = FakeDocument()
+        fake_fitz = types.ModuleType("fitz")
+        fake_fitz.open = lambda path: document
+        with patch.dict(sys.modules, {"fitz": fake_fitz}):
+            sections = extract_invoice_sections("bundled.pdf")
+        self.assertTrue(document.closed)
+        self.assertEqual([section.page_indexes for section in sections], [(0,), (1,)])
+        self.assertEqual([parse_invoice_text(section.text)["invoice_no"] for section in sections], ["8301", "8302"])
 
 
 if __name__ == "__main__":

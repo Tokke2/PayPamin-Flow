@@ -165,7 +165,8 @@ Appen behöver ingen Fortnox-integrationslicens för PDF-importen:
 1. Exportera eller spara en faktura-PDF från Fortnox i appens `import/`-mapp. Knappen **Öppna importmapp** öppnar rätt plats.
 2. Appen kontrollerar mappen var femte sekund. En ny eller ändrad PDF måste ha samma storlek och tidsstämpel vid två kontroller, så att appen inte läser en halvfärdig export.
 3. Den färdiga PDF:en öppnas automatiskt i den befintliga förhandsgranskningen. Kontrollera och godkänn uppgifterna innan fakturan sparas.
-4. Dubbletter stoppas utan extra popup vid automatisk körning. En sammanfattning visas när något importerats eller när ett fel behöver åtgärdas.
+4. En PDF kan innehålla **flera fakturor och flera sidor per faktura**. Appen startar en ny faktura när ett nytt fakturanummer börjar och behåller sidor med samma eller inget nytt fakturanummer som fortsättningssidor. Varje faktura granskas och sparas separat med sitt eget sidintervall. För automatisk delning mellan två fakturor behöver den nya fakturan ha ett läsbart fakturanummer.
+5. Dubbletter stoppas per faktura utan extra popup vid automatisk körning. Om bara vissa fakturor i en samlings-PDF sparats kan en ny skanning fortsätta med de återstående. En sammanfattning visas när något importerats eller när ett fel behöver åtgärdas.
 
 Bevakningen fungerar även när huvudfönstret ligger i systemfältet; fönstret öppnas när en faktura behöver granskas. Stäng av eller aktivera funktionen under **Inställningar → Bevaka importmappen och importera nya PDF:er automatiskt**. **Skanna importmapp** kan alltid användas manuellt, även för en fil som du tidigare avbrutit.
 

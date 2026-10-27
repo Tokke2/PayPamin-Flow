@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from invoice_parser import InvoiceSection
 from test_database import load_headless_app
 
 
@@ -82,6 +83,26 @@ class DuplicateInvoiceTests(unittest.TestCase):
         renamed.write_bytes(b"different synthetic PDF bytes")
         self.assertNotEqual(self.app.file_sha256(first), self.app.file_sha256(renamed))
 
+    def test_multi_invoice_section_hashes_are_distinct_and_stable(self):
+        file_hash = "a" * 64
+        first = self.app.invoice_section_hash(file_hash, (0, 1), 2)
+        second = self.app.invoice_section_hash(file_hash, (2,), 2)
+        self.assertNotEqual(first, second)
+        self.assertEqual(first, self.app.invoice_section_hash(file_hash, (0, 1), 2))
+        self.assertEqual(self.app.invoice_section_hash(file_hash, (0, 1), 1), file_hash)
+
+    def test_two_invoices_from_the_same_pdf_can_be_saved(self):
+        file_hash = "b" * 64
+        source = str(self.workspace / "bundled.pdf")
+        first_hash = self.app.invoice_section_hash(file_hash, (0,), 2)
+        second_hash = self.app.invoice_section_hash(file_hash, (1,), 2)
+        self.assertIsNone(self.app.save_invoice_record(self.record("F-2001", source, first_hash)))
+        self.assertIsNone(self.app.save_invoice_record(self.record("F-2002", source, second_hash)))
+        self.assertEqual(self.invoice_count(), 2)
+        self.assertIsNotNone(self.app.save_invoice_record(self.record("F-2001", source, first_hash)))
+        self.assertIsNotNone(self.app.save_invoice_record(self.record("F-2002", source, second_hash)))
+        self.assertEqual(self.invoice_count(), 2)
+
     def test_editing_allows_self_but_not_another_invoices_number(self):
         self.app.save_invoice_record(self.record())
         self.app.save_invoice_record(self.record("F-1002", "second.pdf", "b" * 64))
@@ -108,7 +129,7 @@ class DuplicateInvoiceTests(unittest.TestCase):
         )
         with (
             patch.object(self.app.filedialog, "askopenfilename", create=True, return_value=str(pdf)),
-            patch.object(self.app, "extract_pdf", return_value="synthetic text"),
+            patch.object(self.app, "extract_invoice_sections", return_value=[InvoiceSection((0,), "synthetic text")]),
             patch.object(self.app, "parse_invoice_text", return_value={"invoice_no": " f-1001 "}),
             patch.object(self.app.messagebox, "showwarning", create=True) as warning,
         ):
@@ -129,7 +150,7 @@ class DuplicateInvoiceTests(unittest.TestCase):
             add_invoice=lambda **kwargs: self.fail("Duplicate must not open the save dialog"),
         )
         with (
-            patch.object(self.app, "extract_pdf", return_value="synthetic text"),
+            patch.object(self.app, "extract_invoice_sections", return_value=[InvoiceSection((0,), "synthetic text")]),
             patch.object(self.app, "parse_invoice_text", return_value={"invoice_no": "F-9999"}),
             patch.object(self.app.messagebox, "showinfo", create=True) as info,
         ):
@@ -151,7 +172,7 @@ class DuplicateInvoiceTests(unittest.TestCase):
             add_invoice=lambda **kwargs: self.fail("Duplicate must not open the save dialog"),
         )
         with (
-            patch.object(self.app, "extract_pdf", return_value="synthetic text"),
+            patch.object(self.app, "extract_invoice_sections", return_value=[InvoiceSection((0,), "synthetic text")]),
             patch.object(self.app, "parse_invoice_text", return_value={"invoice_no": "F-9999"}),
             patch.object(self.app.messagebox, "showinfo", create=True) as info,
         ):

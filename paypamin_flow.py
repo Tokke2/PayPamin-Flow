@@ -28,7 +28,7 @@ from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from console_free import configure_console_free_subprocesses
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
-from invoice_parser import extract_pdf, normalize_amount, normalize_date, parse_invoice_text
+from invoice_parser import extract_invoice_sections, normalize_amount, normalize_date, parse_invoice_text
 from import_watcher import ImportFolderMonitor
 from update_checker import UPDATE_CHECK_INTERVAL_MS, UpdateCheckError, fetch_latest_release, is_newer_version
 from update_installer import (
@@ -170,6 +170,26 @@ def file_sha256(path):
         for chunk in iter(lambda:source.read(1024*1024),b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def invoice_section_hash(source_hash,page_indexes,section_count):
+    """Keep single-PDF hashes compatible and distinguish bundled invoices."""
+
+    if section_count<=1:
+        return source_hash
+    pages=','.join(str(index+1) for index in page_indexes)
+    return hashlib.sha256(f'{source_hash}:invoice-pages:{pages}'.encode('ascii')).hexdigest()
+
+
+def read_invoice_candidates(path):
+    """Parse every invoice section and assign a stable per-invoice identity."""
+
+    source_hash=file_sha256(path)
+    sections=extract_invoice_sections(str(path))
+    return [
+        (section,parse_invoice_text(section.text),invoice_section_hash(source_hash,section.page_indexes,len(sections)))
+        for section in sections
+    ]
 
 
 def find_duplicate_invoice(invoice_no='',source_hash='',exclude_id=None,db=None):
@@ -741,7 +761,7 @@ class ReminderApp(tk.Tk):
         if field=='customer':return raw.splitlines()[0][:100]
         return raw[:300]
 
-    def apply_saved_zones(self,path,vendor,guess):
+    def apply_saved_zones(self,path,vendor,guess,page_indexes=None):
         if not vendor:return guess
         try:
             import fitz
@@ -758,23 +778,31 @@ class ReminderApp(tk.Tk):
                     self.logo_var.set(_('(Ingen logotyp)'));set_setting('logo_file','');set_setting('logo_path','')
                 else:logger.warning('Matched SVG logo is missing from svg folder')
             if not zones:return guess
-            doc=fitz.open(path);applied=[]
-            for z in zones:
-                if z['page_index']>=len(doc):continue
-                page=doc[z['page_index']];r=fitz.Rect(z['x0']*page.rect.width,z['y0']*page.rect.height,z['x1']*page.rect.width,z['y1']*page.rect.height)
-                val=self.parse_zone_value(z['field'],page.get_text('text',clip=r))
-                if val!='':guess[z['field']]=val;applied.append(z['field'])
-            doc.close()
+            applied=[]
+            with fitz.open(path) as doc:
+                available_pages=list(page_indexes) if page_indexes is not None else list(range(len(doc)))
+                for z in zones:
+                    relative_page=z['page_index']
+                    if relative_page<0 or relative_page>=len(available_pages):continue
+                    source_page=available_pages[relative_page]
+                    if source_page<0 or source_page>=len(doc):continue
+                    page=doc[source_page];r=fitz.Rect(z['x0']*page.rect.width,z['y0']*page.rect.height,z['x1']*page.rect.width,z['y1']*page.rect.height)
+                    val=self.parse_zone_value(z['field'],page.get_text('text',clip=r))
+                    if val!='':guess[z['field']]=val;applied.append(z['field'])
             if applied:logger.info('Applied saved PDF field zones: vendor=%s fields=%s',vendor,','.join(applied))
         except Exception:logger.exception('Saved PDF zones could not be applied')
         return guess
 
-    def preview_invoice(self,path,guess,vendor=''):
+    def preview_invoice(self,path,guess,vendor='',page_indexes=None):
         try:
             import fitz
             doc=fitz.open(path)
         except Exception:
             logger.exception('Could not open PDF preview')
+            return guess
+        available_pages=[index for index in (page_indexes if page_indexes is not None else range(len(doc))) if 0<=index<len(doc)]
+        if not available_pages:
+            doc.close()
             return guess
         win=tk.Toplevel(self);win.title(_('Förhandsgranska faktura – markera fält att läsa'));win.geometry('950x760');win.transient(self);win.grab_set()
         top=ttk.Frame(win,padding=(12,8));top.pack(fill='x')
@@ -818,11 +846,12 @@ class ReminderApp(tk.Tk):
             lab=ttk.Label(right,text=str(guess.get(key,'') or '—'),wraplength=210,foreground='#344054');lab.pack(anchor='w')
             result_labels[key]=lab
         ttk.Label(right,textvariable=status,wraplength=210,foreground='#475467').pack(anchor='w',pady=8)
-        pending={};state={'page':0,'scale':1.0,'photo':None,'start':None,'rect':None,'image_w':1,'image_h':1}
+        pending={};state={'page':available_pages[0],'scale':1.0,'photo':None,'start':None,'rect':None,'image_w':1,'image_h':1}
         def draw_saved():
             canvas.delete('zone')
             current_vendor=vendor_var.get().strip()
-            with connect() as db:zs=db.execute('SELECT * FROM pdf_zones WHERE lower(vendor)=lower(?) AND page_index=?',(current_vendor,state['page'])).fetchall()
+            relative_page=available_pages.index(state['page'])
+            with connect() as db:zs=db.execute('SELECT * FROM pdf_zones WHERE lower(vendor)=lower(?) AND page_index=?',(current_vendor,relative_page)).fetchall()
             for z in zs:
                 p=doc[state['page']];x0=z['x0']*p.rect.width*state['scale'];y0=z['y0']*p.rect.height*state['scale'];x1=z['x1']*p.rect.width*state['scale'];y1=z['y1']*p.rect.height*state['scale']
                 canvas.create_rectangle(x0,y0,x1,y1,outline='#e13f43',width=2,tags='zone')
@@ -837,7 +866,9 @@ class ReminderApp(tk.Tk):
             canvas.create_image(0,0,image=state['photo'],anchor='nw',tags='page')
             page_var.set(_('Sida {page} av {pages}',page=state['page']+1,pages=len(doc)));draw_saved()
         def change_page(delta):
-            state['page']=max(0,min(len(doc)-1,state['page']+delta));render_page()
+            position=available_pages.index(state['page'])
+            position=max(0,min(len(available_pages)-1,position+delta))
+            state['page']=available_pages[position];render_page()
         def start_draw(event):
             state['start']=(canvas.canvasx(event.x),canvas.canvasy(event.y))
             if state['rect']:canvas.delete(state['rect'])
@@ -866,7 +897,7 @@ class ReminderApp(tk.Tk):
             if value=='':status.set(_('Ingen text hittades i rutan. Försök igen eller kontrollera OCR.'));return
             guess[field]=value;result_labels[field].configure(text=str(value))
             p=doc[state['page']]
-            pending[field]={'page_index':state['page'],'x0':rect.x0/p.rect.width,'y0':rect.y0/p.rect.height,'x1':rect.x1/p.rect.width,'y1':rect.y1/p.rect.height}
+            pending[field]={'page_index':available_pages.index(state['page']),'x0':rect.x0/p.rect.width,'y0':rect.y0/p.rect.height,'x1':rect.x1/p.rect.width,'y1':rect.y1/p.rect.height}
             if state['rect']:canvas.delete(state['rect']);state['rect']=None
             color='#1d8c66';canvas.create_rectangle(xa,ya,xb,yb,outline=color,width=2,tags='zone');canvas.create_text(xa+3,ya+3,text=field_labels[field],anchor='nw',fill=color,tags='zone')
             status.set(_('{label} avläst: {value}',label=field_var.get(),value=value))
@@ -939,29 +970,27 @@ class ReminderApp(tk.Tk):
             imported=skipped=failed=duplicates=0
             for path in files:
                 try:
-                    source=str(path.resolve())
-                    with connect() as db:
-                        existing_source=db.execute('SELECT 1 FROM invoices WHERE source=? LIMIT 1',(source,)).fetchone()
-                    if existing_source:
-                        duplicates+=1
-                        logger.info('Duplicate import blocked by source path: file=%s',path.name)
-                        continue
-                    source_hash=file_sha256(path)
-                    text=extract_pdf(str(path));guess=parse_invoice_text(text)
-                    duplicate=find_duplicate_invoice(guess.get('invoice_no',''),source_hash)
-                    if duplicate:
-                        duplicates+=1
-                        logger.info('Duplicate import blocked: existing_id=%s file=%s',duplicate['id'],path.name)
-                        continue
-                    vendor=self.guess_supplier(text)
-                    guess['template_vendor']=vendor
-                    guess=self.apply_saved_zones(str(path),vendor,guess)
-                    guess=self.preview_invoice(str(path),guess,vendor)
-                    self.add_invoice(source=source,guess=guess,source_hash=source_hash)
-                    with connect() as db:
-                        saved=db.execute('SELECT 1 FROM invoices WHERE source=? LIMIT 1',(source,)).fetchone()
-                    if saved:imported+=1
-                    else:skipped+=1
+                    candidates=read_invoice_candidates(path)
+                    logger.info('PDF import found %d invoice section(s): file=%s',len(candidates),path.name)
+                    for section,guess,candidate_hash in candidates:
+                        try:
+                            source=str(path.resolve())
+                            duplicate=find_duplicate_invoice(guess.get('invoice_no',''),candidate_hash)
+                            if duplicate:
+                                duplicates+=1
+                                logger.info('Duplicate import blocked: existing_id=%s file=%s pages=%s',duplicate['id'],path.name,','.join(str(index+1) for index in section.page_indexes))
+                                continue
+                            vendor=self.guess_supplier(section.text)
+                            guess['template_vendor']=vendor
+                            guess=self.apply_saved_zones(str(path),vendor,guess,page_indexes=section.page_indexes)
+                            guess=self.preview_invoice(str(path),guess,vendor,page_indexes=section.page_indexes)
+                            self.add_invoice(source=source,guess=guess,source_hash=candidate_hash)
+                            with connect() as db:
+                                saved=db.execute('SELECT 1 FROM invoices WHERE source_hash=? LIMIT 1',(candidate_hash,)).fetchone()
+                            if saved:imported+=1
+                            else:skipped+=1
+                        except Exception:
+                            logger.exception('Invoice section import failed for %s pages=%s',path.name,section.page_indexes);failed+=1
                 except Exception:
                     logger.exception('Import folder scan failed for %s',path.name);failed+=1
             logger.info('Import folder scan complete: automatic=%s imported=%d duplicates=%d skipped=%d failed=%d',automatic,imported,duplicates,skipped,failed)
@@ -983,22 +1012,40 @@ class ReminderApp(tk.Tk):
         path=filedialog.askopenfilename(title=_('Välj faktura-PDF'),filetypes=[('PDF','*.pdf')])
         if not path:return
         try:
-            source_hash=file_sha256(path)
-            text=extract_pdf(path); guess=parse_invoice_text(text)
-            duplicate=find_duplicate_invoice(guess.get('invoice_no',''),source_hash)
-            if duplicate:
-                logger.info('Duplicate import blocked: existing_id=%s',duplicate['id'])
-                show_duplicate_invoice(duplicate,parent=self)
-                return
-            vendor=self.guess_supplier(text)
-            guess['template_vendor']=vendor
-            guess=self.apply_saved_zones(path,vendor,guess)
-            logger.info('Invoice PDF read: extracted_chars=%s suggested_fields=%s',len(text),','.join(k for k,v in guess.items() if v))
+            candidates=read_invoice_candidates(path)
         except Exception as e:
             logger.exception('Invoice PDF read failed: %s',path)
             messagebox.showerror(_('Kunde inte läsa PDF'),_(str(e)));return
-        guess=self.preview_invoice(path,guess,vendor)
-        self.add_invoice(source=str(Path(path).resolve()),guess=guess,source_hash=source_hash)
+        multiple=len(candidates)>1
+        imported=skipped=failed=duplicates=0
+        for section,guess,candidate_hash in candidates:
+            try:
+                duplicate=find_duplicate_invoice(guess.get('invoice_no',''),candidate_hash)
+                if duplicate:
+                    duplicates+=1
+                    logger.info('Duplicate import blocked: existing_id=%s pages=%s',duplicate['id'],section.page_indexes)
+                    if not multiple:
+                        show_duplicate_invoice(duplicate,parent=self)
+                        return
+                    continue
+                vendor=self.guess_supplier(section.text)
+                guess['template_vendor']=vendor
+                guess=self.apply_saved_zones(path,vendor,guess,page_indexes=section.page_indexes)
+                logger.info('Invoice PDF section read: pages=%s extracted_chars=%s suggested_fields=%s',section.page_indexes,len(section.text),','.join(k for k,v in guess.items() if v))
+                guess=self.preview_invoice(path,guess,vendor,page_indexes=section.page_indexes)
+                self.add_invoice(source=str(Path(path).resolve()),guess=guess,source_hash=candidate_hash)
+                with connect() as db:
+                    saved=db.execute('SELECT 1 FROM invoices WHERE source_hash=? LIMIT 1',(candidate_hash,)).fetchone()
+                if saved:imported+=1
+                else:skipped+=1
+            except Exception as e:
+                failed+=1
+                logger.exception('Invoice PDF section import failed: %s pages=%s',path,section.page_indexes)
+                if not multiple:
+                    messagebox.showerror(_('Kunde inte läsa PDF'),_(str(e)),parent=self);return
+        if multiple:
+            self.refresh()
+            messagebox.showinfo(_('Skanning klar'),_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,skipped=skipped,failed=failed),parent=self)
 
     def add_invoice(self,source='',guess=None,source_hash=''):
         self.invoice_dialog('Lägg till faktura',source=source,guess=guess,source_hash=source_hash)

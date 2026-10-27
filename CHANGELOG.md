@@ -11,6 +11,7 @@
 - Added File and Help menus, with update checks available inside the app and automatic checks retained every 12 hours.
 - Added license-free Fortnox PDF import with automatic folder monitoring, stable-file detection, reviewed imports, duplicate suppression and an automatic-import setting.
 - Improved invoice PDF parsing with English payable labels, safe Swedish/European/English number normalization, currency detection near totals and safeguards against reading VAT, subtotals, invoice numbers or dates as the payable amount.
+- Added import of multiple invoices from one PDF, including multi-page invoice sections, per-invoice review/page ranges and stable per-section duplicate handling that can resume partially imported bundles.
 - Added headless backup, tray, import-watcher, Python-package, updater, rollback and console-free restart tests.
 
 ## 0.6.0 — 2026-10-26
