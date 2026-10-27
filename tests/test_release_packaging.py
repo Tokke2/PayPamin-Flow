@@ -50,6 +50,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("app_backup.py", names)
                 self.assertIn("build_info.py", names)
                 self.assertIn("tray.py", names)
+                self.assertIn("reminder_journal.py", names)
                 self.assertIn("assets/paypamin_flow.ico", names)
                 self.assertIn("assets/paypamin_flow.icns", names)
                 self.assertTrue(all(is_python_package_file(name) for name in names))

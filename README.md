@@ -106,6 +106,14 @@ Importerade originalfakturor i `import/` och diagnostikloggar ingår inte. Kopie
 
 Välj **Arkiv → Återställ säkerhetskopia** för att återställa. Arkivets sökvägar, filtyper, kontrollsummor och SQLite-integritet kontrolleras först. Appen skapar alltid en säkerhetskopia av nuvarande data innan något ersätts. Den sparas under `~/.paminnelseapp/backups`. Om ersättningen misslyckas återställs de tidigare filerna automatiskt.
 
+## JSON-journal och automatisk veckokopia
+
+Efter varje **lyckad P1/P2-generering** uppdateras **`~/.paminnelseapp/reminder_journal.json`** atomiskt. Journalen innehåller aktuella fakturor, inställningar, leverantörslogotypval, PDF-fältmallar och en bestående historik för varje påminnelse med nivå, datum, avgift, villkor, språk, logotypval, PDF-filnamn och fakturans innehåll vid tillfället. Äldre P1/P2-datum utan tidigare journal tas med automatiskt.
+
+- En automatisk kopia skapas **en gång per ISO-vecka medan appen körs**. Kontrollen görs vid start och därefter en gång i timmen. Kopiorna sparas som `reminder-journal-ÅÅÅÅ-Wvv.json` under **`~/.paminnelseapp/backups/journal/`**.
+- Efter ominstallation väljer du **Arkiv → Importera JSON-journal** och väljer huvudfilen eller en veckokopia. Fakturor, inställningar, mallar och påminnelsehistorik återställs. Befintliga fakturor slås samman utan dubbletter; lokala fakturaändringar skrivs inte över, medan saknad påminnelsehistorik kompletteras.
+- JSON-filen innehåller PDF-filnamn men inte själva PDF- eller SVG-filerna. Använd den befintliga ZIP-säkerhetskopian för att även flytta genererade PDF:er och logotypfiler. Påminnelsehistoriken finns även i databasen och följer därför med ZIP-säkerhetskopior.
+
 ## Uppdateringar i appen
 
 Appen kontrollerar den senaste stabila GitHub-releasen en kort stund efter start och därefter **var 12:e timme medan appen körs**, även när fönstret ligger i systemfältet. Automatiska uppdateringar är aktiverade som standard och kan stängas av under **Inställningar**.

@@ -14,6 +14,7 @@ TRANSLATED_MODULES = [
     ROOT / "app_backup.py",
     ROOT / "autostart.py",
     ROOT / "invoice_parser.py",
+    ROOT / "reminder_journal.py",
     ROOT / "update_checker.py",
     ROOT / "update_installer.py",
 ]

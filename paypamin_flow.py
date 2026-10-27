@@ -31,6 +31,15 @@ from console_free import configure_console_free_subprocesses
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
 from invoice_parser import extract_invoice_sections, normalize_amount, normalize_date, parse_invoice_text
 from import_watcher import ImportFolderMonitor
+from reminder_journal import (
+    JOURNAL_FILENAME,
+    JournalError,
+    create_weekly_backup as create_weekly_journal_backup,
+    ensure_journal_schema,
+    export_journal as export_reminder_journal,
+    import_journal as import_reminder_journal_file,
+    record_reminder as record_reminder_journal,
+)
 from update_checker import UPDATE_CHECK_INTERVAL_MS, UpdateCheckError, fetch_latest_release, is_update_available
 from update_installer import (
     UpdateInstallError,
@@ -45,10 +54,13 @@ from update_installer import (
 
 IMPORT_WATCH_INTERVAL_MS = 5000
 CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
+JOURNAL_BACKUP_INTERVAL_MS = 60 * 60 * 1000
 
 APP_DIR = Path.home() / ".paminnelseapp"
 APP_DIR.mkdir(parents=True,exist_ok=True)
 DB_PATH = APP_DIR / "paminnelseapp.sqlite3"
+JOURNAL_PATH = APP_DIR / JOURNAL_FILENAME
+JOURNAL_BACKUP_DIR = APP_DIR / "backups" / "journal"
 APP_FOLDER = Path(__file__).resolve().parent
 RESOURCE_DIR = Path(getattr(sys,'_MEIPASS',APP_FOLDER))
 # A frozen app must not write invoices to its temporary bundle or Program Files.
@@ -138,6 +150,7 @@ def init_db():
         if 'currency' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN currency TEXT NOT NULL DEFAULT 'SEK'")
         if 'source_hash' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''")
         if 'p1_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p1_snapshot TEXT DEFAULT ''")
+        ensure_journal_schema(db)
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         db.execute("""CREATE TABLE IF NOT EXISTS pdf_zones (
             vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
@@ -363,6 +376,7 @@ class ReminderApp(tk.Tk):
         self.after(2000,self._run_scheduled_update_check)
         self.after(1500,self._run_scheduled_import_scan)
         self.after(3000,self._run_scheduled_cache_cleanup)
+        self.after(4000,self._run_scheduled_journal_backup)
 
     def start_tray(self):
         """Start the tray icon lazily so unsupported desktops can still run the app."""
@@ -435,6 +449,32 @@ class ReminderApp(tk.Tk):
         except BackupError as exc:
             logger.error('Local restore failed: %s',exc)
             messagebox.showerror(_('Återställningen misslyckades'),str(exc),parent=self)
+
+    def import_journal(self):
+        """Import a portable JSON journal after reinstalling or on another copy."""
+        initial_dir=JOURNAL_BACKUP_DIR if JOURNAL_BACKUP_DIR.is_dir() else APP_DIR
+        selected=filedialog.askopenfilename(
+            parent=self,title=_('Importera JSON-journal'),initialdir=str(initial_dir),
+            filetypes=[(_('JSON-journal'),'*.json')],
+        )
+        if not selected:return
+        if not messagebox.askyesno(
+            _('Importera JSON-journal'),
+            _('JSON-journalen slås samman med befintliga fakturor och påminnelser. Dubbletter skapas inte. Importerade inställningar och mallar återställs. Vill du fortsätta?'),
+            parent=self,
+        ):return
+        try:
+            result=import_reminder_journal_file(DB_PATH,JOURNAL_PATH,selected)
+            init_db();set_language(setting('language') or 'sv');self.sync_autostart();self.rebuild_ui()
+            logger.info('JSON journal imported: invoices_added=%s invoices_merged=%s reminders_added=%s reminders_skipped=%s',result.invoices_added,result.invoices_merged,result.reminders_added,result.reminders_skipped)
+            messagebox.showinfo(
+                _('JSON-journal importerad'),
+                _('Fakturor tillagda: {added}\nBefintliga fakturor sammanfogade: {merged}\nPåminnelser tillagda: {reminders}\nDubbletter som hoppades över: {skipped}',added=result.invoices_added,merged=result.invoices_merged,reminders=result.reminders_added,skipped=result.reminders_skipped),
+                parent=self,
+            )
+        except JournalError as exc:
+            logger.error('JSON journal import failed: %s',exc)
+            messagebox.showerror(_('JSON-journalen kunde inte importeras'),str(exc),parent=self)
 
     def _configure_icons(self):
         """Use the same product icon for the window, dialogs and OS taskbar/dock."""
@@ -716,6 +756,7 @@ class ReminderApp(tk.Tk):
         file_menu=tk.Menu(menu,tearoff=0)
         file_menu.add_command(label=_('Säkerhetskopiera inställningar och påminnelser'),command=self.create_backup)
         file_menu.add_command(label=_('Återställ säkerhetskopia'),command=self.restore_backup)
+        file_menu.add_command(label=_('Importera JSON-journal'),command=self.import_journal)
         file_menu.add_command(label=_('Rensa cache nu'),command=self.clear_cache_now)
         file_menu.add_separator()
         file_menu.add_command(label=_('Dölj till systemfältet'),command=self.hide_to_tray)
@@ -927,6 +968,16 @@ class ReminderApp(tk.Tk):
         except Exception:
             logger.exception('Automatic smart cache cleanup failed')
         if not self._quitting:self.after(CACHE_CLEANUP_INTERVAL_MS,self._run_scheduled_cache_cleanup)
+
+    def _run_scheduled_journal_backup(self):
+        """Refresh the JSON journal and keep one automatic copy per ISO week."""
+        if self._quitting:return
+        try:
+            backup=create_weekly_journal_backup(DB_PATH,JOURNAL_PATH,JOURNAL_BACKUP_DIR)
+            if backup:logger.info('Weekly JSON journal backup created: %s',backup)
+        except Exception:
+            logger.exception('Weekly JSON journal backup failed')
+        if not self._quitting:self.after(JOURNAL_BACKUP_INTERVAL_MS,self._run_scheduled_journal_backup)
 
     def guess_supplier(self,text):
         for line in [re.sub(r'\s+',' ',x).strip() for x in text.splitlines()[:18]]:
@@ -1353,7 +1404,19 @@ class ReminderApp(tk.Tk):
         with connect() as db:
             if level=='P1':db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1 WHERE id=?',(day,p1_snapshot,r['id']))
             else:db.execute('UPDATE invoices SET p2_date=?,sent_count=sent_count+1 WHERE id=?',(day,r['id']))
-        self.write_letter(r,level,fee,logo_path)
+        result=self.write_letter(r,level,fee,logo_path)
+        if result:
+            try:
+                record_reminder_journal(
+                    DB_PATH,JOURNAL_PATH,r['id'],level,day,fee,current_reminder_terms(fee),
+                    get_language(),Path(logo_path).name if logo_path else (r['logo_file'] or ''),Path(str(result)).name,
+                )
+                logger.info('Reminder journal updated: invoice=%s level=%s date=%s',r['id'],level,day)
+            except Exception as exc:
+                # The PDF and SQLite reminder are already valid; do not undo
+                # them because the supplementary journal could not be written.
+                logger.exception('Reminder was created but JSON journal update failed')
+                messagebox.showwarning(_('JSON-journalen kunde inte uppdateras'),str(exc),parent=self)
         self.refresh()
 
     def edit_p1(self):
@@ -1424,6 +1487,12 @@ class ReminderApp(tk.Tk):
                 # for this successful regeneration before any later edit.
                 snapshot_text=capture_p1_snapshot(updated,fee,original_date.isoformat())
                 db.execute('UPDATE invoices SET logo_file=?,p1_snapshot=? WHERE id=?',(logo_file,snapshot_text,row['id']))
+        try:
+            export_reminder_journal(DB_PATH,JOURNAL_PATH)
+        except Exception as exc:
+            logger.exception('P1 logo was updated but JSON journal refresh failed')
+            dialog_options={'parent':parent} if parent is not None else {}
+            messagebox.showwarning(_('JSON-journalen kunde inte uppdateras'),str(exc),**dialog_options)
         logger.info('P1 regenerated with a replacement logo: id=%s path=%s',row['id'],result)
         return result
 

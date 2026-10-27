@@ -31,6 +31,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "invoice_parser.py",
     "paypamin_flow.py",
     "paypamin_flow.pyw",
+    "reminder_journal.py",
     "tray.py",
     "update_checker.py",
     "update_installer.py",
