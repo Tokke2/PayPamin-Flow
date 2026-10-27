@@ -44,7 +44,7 @@ Använd `py -m pip` i Windows om det är det kommando som pekar på din Python-i
 
 1. Installera Python från python.org och välj **Add Python to PATH**. Den officiella installationen innehåller Tkinter och `pythonw.exe`.
 2. Installera tilläggen enligt ovan.
-3. Dubbelklicka på **`start_paypamin_flow.vbs`**. Startaren använder `pythonw.exe` och öppnar inget konsolfönster.
+3. Dubbelklicka på **`start_paypamin_flow.vbs`**. Startaren använder `pythonw.exe` och öppnar inget konsolfönster. Appen lägger dessutom `CREATE_NO_WINDOW` på hjälpprogram som startas för exempelvis PDF/OCR, så att inga extra konsolfönster öppnas i bakgrunden.
 
 För felsökning från en redan öppen PowerShell kan `py paypamin_flow.py` användas.
 

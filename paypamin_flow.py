@@ -26,6 +26,7 @@ from app_backup import (
 from autostart import AutostartError, autostart_location, set_autostart
 from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
+from console_free import configure_console_free_subprocesses
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
 from invoice_parser import extract_pdf, normalize_amount, normalize_date, parse_invoice_text
 from import_watcher import ImportFolderMonitor
@@ -1190,6 +1191,7 @@ class ReminderApp(tk.Tk):
         ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+9,column=1,sticky='e',pady=(15,0))
 
 def main():
+    configure_console_free_subprocesses()
     init_db()
     logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
     try: ReminderApp().mainloop()
