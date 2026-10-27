@@ -7,7 +7,7 @@ OCR för skannade PDF: se README.
 Copyright © 2026 Rickard Länkvist. Skapare: Rickard Länkvist.
 """
 from __future__ import annotations
-import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib
+import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib, tempfile
 from logging.handlers import RotatingFileHandler
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -247,6 +247,15 @@ def show_duplicate_invoice(duplicate,parent=None):
           invoice_no=duplicate['invoice_no'],customer=duplicate['customer']),
         parent=parent,
     )
+
+
+def reminder_file_path(row,level,day,prefix=None):
+    """Build the reminder filename, optionally matching its original language."""
+    reminder_number='1' if level=='P1' else '2'
+    safe_invoice_no=re.sub(r'[^A-Za-z0-9_-]','_',str(row['invoice_no']))
+    safe_customer=re.sub(r'[^\w-]+','_',str(row['customer']),flags=re.UNICODE).strip('_')[:60] or 'kund'
+    prefix=prefix or ('reminder' if get_language()=='en' else 'paminnelse')
+    return EXPORT_DIR/f"{prefix}({reminder_number})_{safe_invoice_no}_{safe_customer}_{day.isoformat()}.pdf"
 
 
 def money(x,currency='SEK'):
@@ -651,7 +660,7 @@ class ReminderApp(tk.Tk):
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)
         bar=ttk.Frame(self,padding=(22,5,22,12)); bar.pack(fill='x')
-        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
+        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Redigera P1',self.edit_p1,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
             ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
         controls=ttk.Frame(self,padding=(22,0,22,10));controls.pack(fill='x')
         ttk.Label(controls,text=_('Visa:')).pack(side='left')
@@ -681,6 +690,7 @@ class ReminderApp(tk.Tk):
         self.tree.bind('<Button-2>',self.show_row_context_menu)
         self.row_menu=tk.Menu(self,tearoff=0)
         self.row_menu.add_command(label=_('Redigera faktura'),command=self.edit_invoice)
+        self.row_menu.add_command(label=_('Redigera P1'),command=self.edit_p1)
         self.row_menu.add_command(label=_('Markera som betald'),command=self.mark_invoice_paid)
         self.row_menu.add_command(label=_('Ignorera / återaktivera'),command=self.toggle_ignore)
         self.row_menu.add_separator()
@@ -1261,33 +1271,88 @@ class ReminderApp(tk.Tk):
         self.write_letter(r,level,fee,logo_path)
         self.refresh()
 
-    def write_letter(self,r,level,fee,logo_path=''):
-        today=date.today();remaining=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
+    def edit_p1(self):
+        """Choose a replacement logo and regenerate an existing P1 safely."""
+        r=self.selected()
+        if not r:return
+        if not r['p1_date']:
+            messagebox.showinfo(_('P1 saknas'),_('Skapa P1 innan den kan redigeras.'),parent=self);return
+        logo_files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
+        _,current_logo=self.invoice_logo(r)
+        choices=[_('(Ingen logotyp)')]+logo_files
+        w=self._new_toplevel(_('Redigera P1'));w.grab_set();w.resizable(False,False)
+        form=ttk.Frame(w,padding=20);form.pack()
+        ttk.Label(form,text=_('Välj ny logotyp för P1. PDF:en skrivs om med ursprungligt P1-datum.'),wraplength=390).pack(anchor='w',pady=(0,10))
+        logo_var=tk.StringVar(value=current_logo if current_logo in logo_files else choices[0])
+        combo=ttk.Combobox(form,textvariable=logo_var,state='readonly',values=choices,width=42)
+        combo.pack(fill='x',pady=(0,12))
+        def save():
+            selected=logo_var.get()
+            result=self.update_p1_logo(r,selected if selected in logo_files else '',parent=w)
+            if not result:return
+            w.destroy();self.refresh()
+            messagebox.showinfo(_('P1 uppdaterad'),_('P1 har skrivits om med vald logotyp. P1-datum och historik är oförändrade.'),parent=self)
+        buttons=ttk.Frame(form);buttons.pack(fill='x')
+        ttk.Button(buttons,text=_('Spara och skriv om P1'),command=save,style='Accent.TButton').pack(side='left')
+        ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='right')
+        w.wait_window()
+
+    def update_p1_logo(self,row,logo_file,parent=None):
+        """Regenerate P1 without changing its date, P2 state or sent count."""
+        original_date=dparse(row['p1_date'])
+        if not original_date:return None
+        updated=dict(row);updated['logo_file']=logo_file
+        logo_path,_=self.invoice_logo(updated)
+        prefixes=('reminder','paminnelse') if get_language()=='en' else ('paminnelse','reminder')
+        output_path=None
+        for prefix in prefixes:
+            candidate=reminder_file_path(row,'P1',original_date,prefix)
+            if candidate.is_file():output_path=candidate;break
+        result=self.write_letter(
+            updated,'P1',float(setting('fee') or 0),logo_path,
+            reminder_date=original_date,output_path=output_path,parent=parent,
+        )
+        if not result:return None
+        with connect() as db:
+            db.execute('UPDATE invoices SET logo_file=? WHERE id=?',(logo_file,row['id']))
+        logger.info('P1 regenerated with a replacement logo: id=%s path=%s',row['id'],result)
+        return result
+
+    def write_letter(self,r,level,fee,logo_path='',reminder_date=None,output_path=None,parent=None):
+        today=reminder_date or date.today();remaining=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
         p1_fee=fee; p2_fee=fee if level=='P2' else 0; total=remaining+p1_fee+p2_fee
         deadline_date=today+timedelta(days=int(setting('payment_deadline_days') or 5))
         deadline=format_long_date(deadline_date)
         p2_warning=_('Ansökan om betalningsföreläggande lämnas in till Kronofogden om betalning inte kommit oss tillhanda senast den {deadline}. Kostnader för att driva ärendet kan tillkomma till dess full betalning har skett.',deadline=deadline) if level=='P2' else ''
         logger.info('Reminder generated: level=%s',level)
-        reminder_number='1' if level=='P1' else '2'
-        safe_invoice_no=re.sub(r'[^A-Za-z0-9_-]','_',str(r['invoice_no']))
-        safe_customer=re.sub(r'[^\w-]+','_',str(r['customer']),flags=re.UNICODE).strip('_')[:60] or 'kund'
-        filename_prefix='reminder' if get_language()=='en' else 'paminnelse'
-        pdf_out=EXPORT_DIR/f"{filename_prefix}({reminder_number})_{safe_invoice_no}_{safe_customer}_{today.isoformat()}.pdf"
+        pdf_out=Path(output_path) if output_path else reminder_file_path(r,level,today)
+        temporary_pdf=None;dialog_options={'parent':parent} if parent is not None else {}
         try:
-            self.write_pdf(pdf_out,r,level,fee,today,remaining,total,p2_warning,logo_path)
+            descriptor,temporary_name=tempfile.mkstemp(prefix='.paypamin-reminder-',suffix='.pdf',dir=EXPORT_DIR)
+            os.close(descriptor);temporary_pdf=Path(temporary_name)
+            self.write_pdf(temporary_pdf,r,level,fee,today,remaining,total,p2_warning,logo_path)
+            os.replace(temporary_pdf,pdf_out)
             logger.info('Reminder PDF created: path=%s',pdf_out)
             try:
                 open_path(pdf_out)
                 logger.info('Opened generated PDF in default viewer')
             except Exception as open_exc:
                 logger.exception('Could not automatically open generated PDF')
-                messagebox.showwarning(_('PDF skapad'),_('PDF:en sparades men kunde inte öppnas automatiskt.\n{path}\n\n{error}',path=pdf_out,error=open_exc))
+                messagebox.showwarning(_('PDF skapad'),_('PDF:en sparades men kunde inte öppnas automatiskt.\n{path}\n\n{error}',path=pdf_out,error=open_exc),**dialog_options)
+            return pdf_out
         except ImportError:
             logger.exception('PDF generation dependency missing')
-            messagebox.showerror(_('PDF-tillägg saknas'),_('Kunde inte skapa PDF eftersom ett PDF-tillägg saknas. Öppna felloggen eller starta om appen med internetanslutning.'))
+            messagebox.showerror(_('PDF-tillägg saknas'),_('Kunde inte skapa PDF eftersom ett PDF-tillägg saknas. Öppna felloggen eller starta om appen med internetanslutning.'),**dialog_options)
+            return None
         except Exception as exc:
             logger.exception('Reminder PDF generation failed: invoice=%s',r['invoice_no'])
-            messagebox.showerror(_('PDF kunde inte skapas'),_('Ett fel loggades. Öppna felloggen för detaljer.\n\n{error}',error=exc))
+            messagebox.showerror(_('PDF kunde inte skapas'),_('Ett fel loggades. Öppna felloggen för detaljer.\n\n{error}',error=exc),**dialog_options)
+            return None
+        finally:
+            if temporary_pdf is not None:
+                try:temporary_pdf.unlink()
+                except FileNotFoundError:pass
+                except OSError:logger.warning('Temporary reminder PDF could not be removed: %s',temporary_pdf)
 
     def write_pdf(self,path,r,level,fee,today,remaining,total,p2_warning,logo_path=''):
         from reportlab.lib import colors
