@@ -443,6 +443,28 @@ def next_stage(row):
     return 'Väntar – efter P2'
 
 
+def p1_file_candidates(row):
+    """Return possible original P1 paths in snapshot/language order."""
+    original_date = dparse(row['p1_date'])
+    if not original_date:
+        return []
+    snapshot = read_p1_snapshot(row['p1_snapshot'] if 'p1_snapshot' in row.keys() else '')
+    base = dict(row)
+    language = get_language()
+    if snapshot:
+        base.update(snapshot['row'])
+        snapshot_language = str(snapshot.get('language') or '')
+        if snapshot_language in SUPPORTED_LANGUAGES:
+            language = snapshot_language
+    prefixes = ('reminder', 'paminnelse') if language == 'en' else ('paminnelse', 'reminder')
+    return list(dict.fromkeys(reminder_file_path(base, 'P1', original_date, prefix) for prefix in prefixes))
+
+
+def p1_file_missing(row):
+    """A recorded P1 whose PDF no longer exists can be recreated safely."""
+    return bool(row['p1_date']) and not any(path.is_file() for path in p1_file_candidates(row))
+
+
 class ReminderApp(tk.Tk):
     def __init__(self):
         set_language(setting('language') or 'sv')
@@ -1473,6 +1495,8 @@ class ReminderApp(tk.Tk):
         r=self.selected()
         if not r:return
         stage=next_stage(r)
+        if r['p1_date'] and stage not in ('Avslutad', 'Ignorerad') and p1_file_missing(r):
+            return self.recreate_p1(r)
         if stage not in ('P1 att skapa','P2 att skapa'):
             messagebox.showwarning(_('Inte redo'),_('Fakturan är inte redo för påminnelse. Status: {stage}',stage=_(stage)));return
         level='P1' if stage.startswith('P1') else 'P2'
@@ -1542,6 +1566,23 @@ class ReminderApp(tk.Tk):
                 messagebox.showwarning(_('JSON-journalen kunde inte uppdateras'),str(exc),parent=self)
         self.refresh()
 
+    def recreate_p1(self,row=None):
+        """Recreate a missing P1 PDF without creating a new reminder event."""
+        r=row or self.selected()
+        if not r:return None
+        if not dparse(r['p1_date']):
+            messagebox.showinfo(_('P1 saknas'),_('Skapa P1 innan den kan återskapas.'),parent=self)
+            return None
+        confirmation=_('P1-PDF:en saknas. Skapa en ny kopia med ursprungligt P1-datum och oförändrad påminnelsehistorik?')
+        if not messagebox.askyesno(_('Återskapa P1'),confirmation,parent=self):
+            return None
+        logo_file=r['logo_file'] if 'logo_file' in r.keys() else None
+        result=self.update_p1_logo(r,logo_file,parent=self)
+        if result:
+            self.refresh()
+            messagebox.showinfo(_('P1 återskapad'),_('P1-PDF:en har återskapats med ursprungligt P1-datum. Påminnelsehistoriken är oförändrad.'),parent=self)
+        return result
+
     def edit_p1(self):
         """Choose a replacement logo and regenerate an existing P1 safely."""
         r=self.selected()
@@ -1584,12 +1625,7 @@ class ReminderApp(tk.Tk):
         fee_value=reminder_terms.get('fee')
         fee=float(setting('fee') or 0) if fee_value is None else float(fee_value or 0)
         logo_path,_logo_name=self.invoice_logo(updated)
-        path_language=snapshot_language if snapshot_language in SUPPORTED_LANGUAGES else get_language()
-        prefixes=('reminder','paminnelse') if path_language=='en' else ('paminnelse','reminder')
-        output_path=None
-        for prefix in prefixes:
-            candidate=reminder_file_path(updated,'P1',original_date,prefix)
-            if candidate.is_file():output_path=candidate;break
+        output_path=next((path for path in p1_file_candidates(row) if path.is_file()),None)
         previous_language=get_language()
         if snapshot_language in SUPPORTED_LANGUAGES and snapshot_language!=previous_language:
             set_language(snapshot_language)

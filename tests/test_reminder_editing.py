@@ -66,6 +66,40 @@ class ReminderEditingTests(unittest.TestCase):
         original_path.write_bytes(b"original P1")
         return row, original_path
 
+    def test_missing_p1_pdf_can_be_recreated_without_new_reminder_history(self):
+        row, original_path = self.save_p1()
+        snapshot = self.app.capture_p1_snapshot(row, 150.0, self.original_date.isoformat())
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p1_snapshot=? WHERE id=?", (snapshot, row["id"]))
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertFalse(self.app.p1_file_missing(row))
+        original_path.unlink()
+        self.assertTrue(self.app.p1_file_missing(row))
+
+        self.owner.selected = lambda: row
+        self.owner.refresh = Mock()
+        self.owner.write_letter = Mock(return_value=original_path)
+        self.owner.update_p1_logo = MethodType(self.app.ReminderApp.update_p1_logo, self.owner)
+        self.owner.recreate_p1 = MethodType(self.app.ReminderApp.recreate_p1, self.owner)
+        with (
+            patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm,
+            patch.object(self.app.messagebox, "showinfo", create=True),
+        ):
+            result = self.app.ReminderApp.make_reminder(self.owner)
+
+        self.assertEqual(result, original_path)
+        self.assertIn("saknas", confirm.call_args.args[1])
+        args, kwargs = self.owner.write_letter.call_args
+        self.assertEqual(args[1], "P1")
+        self.assertEqual(kwargs["reminder_date"], self.original_date)
+        self.assertIsNone(kwargs["output_path"])
+        with self.app.connect() as db:
+            saved = db.execute(
+                "SELECT p1_date,p2_date,sent_count,p1_snapshot,logo_file FROM invoices WHERE id=?",
+                (row["id"],),
+            ).fetchone()
+        self.assertEqual(tuple(saved), (self.original_date.isoformat(), "2026-10-10", 2, snapshot, "old.svg"))
+
     def test_replacement_logo_regenerates_original_p1_without_changing_history(self):
         row, original_path = self.save_p1()
         self.app.set_language("en")
