@@ -382,6 +382,21 @@ class ReminderApp(tk.Tk):
         except tk.TclError:
             logger.exception('Application icon could not be loaded')
 
+    def _set_window_icon(self,window):
+        """Explicitly brand every secondary window on every desktop platform."""
+        try:
+            if self._window_icons:window.iconphoto(False,*self._window_icons)
+            if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
+                window.iconbitmap(str(ICON_DIR/'paypamin_flow.ico'))
+        except tk.TclError:
+            logger.exception('Secondary window icon could not be loaded')
+
+    def _new_toplevel(self,title):
+        window=tk.Toplevel(self)
+        window.title(title);window.transient(self)
+        self._set_window_icon(window)
+        return window
+
     def _configure_macos_dock_icon(self):
         if sys.platform!='darwin':return
         try:
@@ -402,7 +417,7 @@ class ReminderApp(tk.Tk):
             messagebox.showwarning(_('Autostart kunde inte uppdateras'),_('Inställningen för autostart kunde inte sparas.\n\nPlats: {location}\n\n{error}',location=autostart_location(),error=_(str(exc))),parent=self)
 
     def show_about(self):
-        w=tk.Toplevel(self);w.title(_('Om {app_name}',app_name=APP_NAME));w.transient(self);w.resizable(False,False);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_('Om {app_name}',app_name=APP_NAME));w.resizable(False,False);w.configure(bg='#f3f5f8')
         form=ttk.Frame(w,padding=24);form.pack()
         if self._header_icon:ttk.Label(form,image=self._header_icon).pack(pady=(0,10))
         ttk.Label(form,text=APP_NAME,style='Title.TLabel').pack()
@@ -505,7 +520,7 @@ class ReminderApp(tk.Tk):
         messagebox.showerror(_('Uppdateringen kunde inte installeras'),_('{error}\n\nDu kan ladda ner uppdateringen manuellt:\n{url}',error=details,url=release.url),parent=self)
 
     def show_update_available(self,release):
-        w=tk.Toplevel(self);w.title(_('Uppdatering tillgänglig'));w.transient(self);w.resizable(False,False);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_('Uppdatering tillgänglig'));w.resizable(False,False);w.configure(bg='#f3f5f8')
         form=ttk.Frame(w,padding=24);form.pack()
         heading=_('Uppdaterat bygge av version {version} är tillgänglig',version=release.version) if release.version==APP_VERSION else _('Version {version} är tillgänglig',version=release.version)
         ttk.Label(form,text=heading,style='Title.TLabel').pack(anchor='w')
@@ -550,7 +565,7 @@ class ReminderApp(tk.Tk):
         if not missing:
             self._python_addons_ready=True
             return
-        win=tk.Toplevel(self);win.title(_('Förbereder appen'));win.transient(self);win.resizable(False,False)
+        win=self._new_toplevel(_('Förbereder appen'));win.resizable(False,False)
         win.protocol('WM_DELETE_WINDOW',lambda:None)
         box=ttk.Frame(win,padding=22);box.pack()
         ttk.Label(box,text=_('Installerar saknade Python-tillägg'),font=(self.font_family,11,'bold')).pack(anchor='w')
@@ -863,7 +878,7 @@ class ReminderApp(tk.Tk):
         if not available_pages:
             doc.close()
             return guess
-        win=tk.Toplevel(self);win.title(_('Förhandsgranska faktura – markera fält att läsa'));win.geometry('950x760');win.transient(self)
+        win=self._new_toplevel(_('Förhandsgranska faktura – markera fält att läsa'));win.geometry('950x760')
         top=ttk.Frame(win,padding=(12,8));top.pack(fill='x')
         ttk.Label(top,text=_('Leverantör / mallnamn:')).pack(side='left')
         vendor_var=tk.StringVar(value=vendor or Path(path).stem)
@@ -1142,7 +1157,7 @@ class ReminderApp(tk.Tk):
         if r:self.invoice_dialog('Redigera faktura',row=r)
 
     def invoice_dialog(self,title,row=None,source='',guess=None,source_hash=''):
-        w=tk.Toplevel(self);w.title(_(title));w.transient(self);w.grab_set();w.resizable(False,False);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_(title));w.grab_set();w.resizable(False,False);w.configure(bg='#f3f5f8')
         fields=[('Kundnamn','customer'),('Fakturanummer','invoice_no'),('Fakturadatum (ÅÅÅÅ-MM-DD)','invoice_date'),('Förfallodatum (ÅÅÅÅ-MM-DD)','due_date'),('Fakturabelopp','amount'),('Valuta (ISO-kod, t.ex. SEK/EUR)','currency'),('Redan betalt','paid'),('E-post','email'),('Fakturatext / Avser','note')]
         vals={k:(row[k] if row else (guess or {}).get(k,'')) for _,k in fields}
         vals['currency']=normalize_currency(vals.get('currency'))
@@ -1308,7 +1323,7 @@ class ReminderApp(tk.Tk):
         story += [Spacer(1,2*mm),HRFlowable(width='100%',thickness=.4,color=colors.HexColor('#999999')),Spacer(1,2*mm),Paragraph(terms,styles['SmallText'])]
         doc.build(story)
     def settings(self):
-        w=tk.Toplevel(self);w.title(_('Inställningar'));w.transient(self);w.grab_set();w.resizable(False,False);form=ttk.Frame(w,padding=20);form.pack()
+        w=self._new_toplevel(_('Inställningar'));w.grab_set();w.resizable(False,False);form=ttk.Frame(w,padding=20);form.pack()
         language_var=tk.StringVar(value=SUPPORTED_LANGUAGES[get_language()])
         ttk.Label(form,text=_('Språk')).grid(row=0,column=0,sticky='w',padx=(0,14),pady=6)
         ttk.Combobox(form,textvariable=language_var,state='readonly',values=list(SUPPORTED_LANGUAGES.values()),width=15).grid(row=0,column=1,sticky='w',pady=6)
