@@ -209,6 +209,13 @@ _ENGLISH = {
     # Reminder creation and errors
     "Inte redo": "Not ready",
     "Fakturan är inte redo för påminnelse. Status: {stage}": "The invoice is not ready for a reminder. Status: {stage}",
+    "Originalfakturan kunde inte kontrolleras": "The original invoice could not be checked",
+    "P1 skapades inte eftersom original-PDF:en kunde inte läsas.\n\n{error}": "P1 was not created because the original PDF could not be read.\n\n{error}",
+    "Fakturan stämmer inte med original-PDF:en": "The invoice does not match the original PDF",
+    "P1 skapades inte. Kontrollera och redigera fakturan innan du försöker igen.\n\n{details}": "P1 was not created. Check and edit the invoice before trying again.\n\n{details}",
+    "Original-PDF / fakturadel": "Original PDF / invoice section",
+    "hittades inte": "not found",
+    "{label}: sparat {saved} · PDF {actual}": "{label}: saved {saved} · PDF {actual}",
     "Bekräfta påminnelse": "Confirm reminder",
     "Redigera P1": "Edit P1",
     "P1 saknas": "P1 missing",

@@ -21,6 +21,7 @@
 - Preserved the supplier logo selected during PDF matching on the invoice itself and used it for P1/P2 export even without saving field zones, after restart or after changing the global logo.
 - Added **Edit P1** for replacing the logo and atomically regenerating the original P1 PDF without changing its date, P2 state or sent count; failed writes preserve the previous PDF and invoice selection.
 - Added internal P1 snapshots for original invoice data, fee, interest, payment deadline, objection terms and language, with safe legacy-row handling; broken SVG logos now show an error instead of silently generating a text-logo PDF.
+- Added pre-P1 verification against the original invoice PDF, including saved field zones and multi-invoice section matching; mismatches stop creation without changing invoice or reminder history.
 - Made the shared console-free launcher report import/startup failures with a native message and `~/.paminnelseapp/startup.log`; normal launch, autostart and update restart use the same entry point on all three platforms.
 - Removed obsolete legacy module duplicates and native-build leftovers; only active Python launchers and application files are shipped.
 - Added an atomic JSON journal after every successful P1/P2 with invoice data, settings, templates and persistent reminder history; legacy reminder dates are included.

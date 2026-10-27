@@ -212,6 +212,89 @@ def read_invoice_candidates(path):
     ]
 
 
+INVOICE_PDF_COMPARE_FIELDS = (
+    ('invoice_no', 'Fakturanummer'),
+    ('customer', 'Kundnamn'),
+    ('invoice_date', 'Fakturadatum'),
+    ('due_date', 'Förfallodatum'),
+    ('amount', 'Fakturabelopp'),
+    ('currency', 'Valuta'),
+    ('note', 'Fakturatext / Avser'),
+)
+
+
+def find_invoice_pdf_candidate(row, candidates):
+    """Find the same invoice section, including in a multi-invoice PDF."""
+    values = dict(row)
+    source_hash = str(values.get('source_hash') or '').strip()
+    if source_hash:
+        for candidate in candidates:
+            if len(candidate) > 2 and candidate[2] == source_hash:
+                return candidate
+    invoice_key = normalize_invoice_number(values.get('invoice_no'))
+    if not invoice_key:
+        return None
+    matches = []
+    for candidate in candidates:
+        if len(candidate) > 1 and normalize_invoice_number((candidate[1] or {}).get('invoice_no')) == invoice_key:
+            matches.append(candidate)
+    return matches[0] if len(matches) == 1 else None
+
+
+def compare_invoice_pdf_values(row, pdf_values):
+    """Return saved/PDF differences without changing the reviewed invoice."""
+    saved = dict(row)
+    pdf_values = pdf_values or {}
+    differences = []
+    for field, _label in INVOICE_PDF_COMPARE_FIELDS:
+        if field not in pdf_values:
+            continue
+        actual = pdf_values.get(field)
+        if actual is None or (isinstance(actual, str) and not actual.strip()):
+            # A parser that could not read a field must not invent a mismatch.
+            continue
+        expected = saved.get(field)
+        if field == 'invoice_no':
+            different = normalize_invoice_number(expected) != normalize_invoice_number(actual)
+        elif field in ('invoice_date', 'due_date'):
+            different = normalize_date(str(expected or '')) != normalize_date(str(actual or ''))
+        elif field == 'amount':
+            try:
+                different = abs(float(expected or 0) - float(actual or 0)) > 0.005
+            except (TypeError, ValueError):
+                different = str(expected or '').strip() != str(actual or '').strip()
+        elif field == 'currency':
+            different = normalize_currency(expected, default='') != normalize_currency(actual, default='')
+        else:
+            normalize_text = lambda value: re.sub(r'\s+', ' ', str(value or '')).strip().casefold()
+            different = normalize_text(expected) != normalize_text(actual)
+        if different:
+            differences.append({'field': field, 'saved': expected, 'pdf': actual})
+    return differences
+
+
+def verify_invoice_source(row, zone_applier=None):
+    """Check an existing source PDF before P1; manual/missing sources are unchanged."""
+    values = dict(row)
+    source = str(values.get('source') or '').strip()
+    if not source:
+        return []
+    path = Path(source).expanduser()
+    if path.suffix.lower() != '.pdf' or not path.is_file():
+        return []
+    candidates = read_invoice_candidates(path)
+    if zone_applier is not None:
+        candidates = [
+            (section, zone_applier(path, section, dict(pdf_values)), candidate_hash)
+            for section, pdf_values, candidate_hash in candidates
+        ]
+    candidate = find_invoice_pdf_candidate(values, candidates)
+    if candidate is None:
+        return [{'field': 'source', 'saved': values.get('invoice_no', ''), 'pdf': ''}]
+    _section, pdf_values, _candidate_hash = candidate
+    return compare_invoice_pdf_values(values, pdf_values)
+
+
 def find_duplicate_invoice(invoice_no='',source_hash='',exclude_id=None,db=None):
     """Return an existing invoice matched by number or identical PDF content."""
     own_connection=db is None
@@ -1001,7 +1084,7 @@ class ReminderApp(tk.Tk):
         if field=='customer':return raw.splitlines()[0][:100]
         return raw[:300]
 
-    def apply_saved_zones(self,path,vendor,guess,page_indexes=None):
+    def apply_saved_zones(self,path,vendor,guess,page_indexes=None,update_logo=True):
         if not vendor:return guess
         try:
             import fitz
@@ -1009,7 +1092,7 @@ class ReminderApp(tk.Tk):
             with connect() as db:
                 zones=db.execute('SELECT * FROM pdf_zones WHERE lower(vendor)=lower(?)',(vendor_key,)).fetchall()
                 logo=db.execute('SELECT logo_file FROM vendor_logos WHERE lower(vendor)=lower(?)',(vendor_key,)).fetchone()
-            if logo:
+            if logo and update_logo:
                 logo_file=logo['logo_file']
                 if logo_file and (SVG_DIR/logo_file).is_file():
                     self.logo_var.set(logo_file);set_setting('logo_file',logo_file);set_setting('logo_path',str(SVG_DIR/logo_file))
@@ -1392,8 +1475,48 @@ class ReminderApp(tk.Tk):
         stage=next_stage(r)
         if stage not in ('P1 att skapa','P2 att skapa'):
             messagebox.showwarning(_('Inte redo'),_('Fakturan är inte redo för påminnelse. Status: {stage}',stage=_(stage)));return
-        fee=float(setting('fee') or 0);locked=setting('fee_locked')=='1'
         level='P1' if stage.startswith('P1') else 'P2'
+        if level == 'P1':
+            try:
+                apply_zones = getattr(self, 'apply_saved_zones', None)
+                zone_applier = None
+                if r['template_vendor'] and apply_zones:
+                    def zone_applier(path, section, pdf_values):
+                        # Reuse learned fields without changing the selected logo.
+                        return apply_zones(
+                            path, r['template_vendor'], pdf_values,
+                            page_indexes=section.page_indexes, update_logo=False,
+                        )
+                source_differences = verify_invoice_source(r, zone_applier=zone_applier)
+            except Exception as exc:
+                logger.exception('Original invoice verification failed before P1: invoice=%s',r['id'])
+                messagebox.showerror(
+                    _('Originalfakturan kunde inte kontrolleras'),
+                    _('P1 skapades inte eftersom original-PDF:en kunde inte läsas.\n\n{error}',error=exc),
+                    parent=self,
+                )
+                return
+            if source_differences:
+                labels = dict(INVOICE_PDF_COMPARE_FIELDS)
+                details = []
+                for difference in source_differences:
+                    field = difference['field']
+                    label = _('Original-PDF / fakturadel') if field == 'source' else _(labels.get(field, field))
+                    saved = difference.get('saved')
+                    actual = difference.get('pdf')
+                    if field == 'source':
+                        actual = _('hittades inte')
+                    saved = '—' if saved in (None, '') else str(saved)
+                    actual = '—' if actual in (None, '') else str(actual)
+                    details.append(_('{label}: sparat {saved} · PDF {actual}',label=label,saved=saved,actual=actual))
+                logger.warning('P1 blocked because saved invoice differs from source PDF: invoice=%s fields=%s',r['id'],','.join(item['field'] for item in source_differences))
+                messagebox.showwarning(
+                    _('Fakturan stämmer inte med original-PDF:en'),
+                    _('P1 skapades inte. Kontrollera och redigera fakturan innan du försöker igen.\n\n{details}',details='\n'.join(details)),
+                    parent=self,
+                )
+                return
+        fee=float(setting('fee') or 0);locked=setting('fee_locked')=='1'
         template_name=r['template_vendor'] or _('Ingen matchad mall')
         logo_path,logo_name=self.invoice_logo(r)
         confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nAppen skickar inte e-post automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
