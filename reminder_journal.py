@@ -346,7 +346,7 @@ def record_reminder(
 def create_weekly_backup(database_path, journal_path, backup_dir, *, now: datetime | None = None):
     """Create at most one JSON copy per ISO week; return its path or None."""
     moment = _utc(now)
-    year, week, _ = moment.isocalendar()
+    year, week, _weekday = moment.isocalendar()
     backup_dir = Path(backup_dir).expanduser().resolve()
     destination = backup_dir / f"{JOURNAL_BACKUP_PREFIX}{year}-W{week:02d}.json"
     if destination.is_file():
@@ -481,7 +481,7 @@ def import_journal(database_path, journal_path, source_path, *, now: datetime | 
                         db.execute(f"UPDATE invoices SET {','.join(updates)} WHERE id=?", parameters)
                 else:
                     columns = ",".join(INVOICE_COLUMNS)
-                    placeholders = ",".join("?" for _ in INVOICE_COLUMNS)
+                    placeholders = ",".join("?" for _column in INVOICE_COLUMNS)
                     cursor = db.execute(
                         f"INSERT INTO invoices({columns}) VALUES({placeholders})",
                         tuple(values[column] for column in INVOICE_COLUMNS),

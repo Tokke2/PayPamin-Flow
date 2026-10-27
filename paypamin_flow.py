@@ -855,7 +855,7 @@ class ReminderApp(tk.Tk):
         with connect() as db:r=db.execute('SELECT * FROM invoices WHERE id=?',(int(sel[0]),)).fetchone()
         if r:
             vendor=r['template_vendor'] or _('Ingen leverantörsmall')
-            _,logo_name=self.invoice_logo(r)
+            _logo_path,logo_name=self.invoice_logo(r)
             review=_('Granskad') if r['reviewed'] else _('KRÄVER GRANSKNING')
             note=r['note'] or _('Ingen fakturatext')
             self.detail.configure(text=_('{customer} · {invoice_no} · Belopp: {amount} · {stage} · {review} · Mall: {vendor} · Logotyp: {logo} · {note}',customer=r['customer'],invoice_no=r['invoice_no'],amount=money(float(r['amount'] or 0),r['currency']),stage=_(next_stage(r)),review=review,vendor=vendor,logo=logo_name,note=note))
@@ -1329,7 +1329,7 @@ class ReminderApp(tk.Tk):
     def invoice_dialog(self,title,row=None,source='',guess=None,source_hash=''):
         w=self._new_toplevel(_(title));w.grab_set();w.resizable(False,False);w.configure(bg='#f3f5f8')
         fields=[('Kundnamn','customer'),('Fakturanummer','invoice_no'),('Fakturadatum (ÅÅÅÅ-MM-DD)','invoice_date'),('Förfallodatum (ÅÅÅÅ-MM-DD)','due_date'),('Fakturabelopp','amount'),('Valuta (ISO-kod, t.ex. SEK/EUR)','currency'),('Redan betalt','paid'),('E-post','email'),('Fakturatext / Avser','note')]
-        vals={k:(row[k] if row else (guess or {}).get(k,'')) for _,k in fields}
+        vals={k:(row[k] if row else (guess or {}).get(k,'')) for _label,k in fields}
         vals['currency']=normalize_currency(vals.get('currency'))
         vals['source']=row['source'] if row else source
         vals['source_hash']=row['source_hash'] if row else source_hash
@@ -1426,7 +1426,7 @@ class ReminderApp(tk.Tk):
         if not r['p1_date']:
             messagebox.showinfo(_('P1 saknas'),_('Skapa P1 innan den kan redigeras.'),parent=self);return
         logo_files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
-        _,current_logo=self.invoice_logo(r)
+        _current_logo_path,current_logo=self.invoice_logo(r)
         choices=[_('(Ingen logotyp)')]+logo_files
         w=self._new_toplevel(_('Redigera P1'));w.grab_set();w.resizable(False,False)
         form=ttk.Frame(w,padding=20);form.pack()
@@ -1460,7 +1460,7 @@ class ReminderApp(tk.Tk):
         updated['id']=row['id'];updated['logo_file']=logo_file
         fee_value=reminder_terms.get('fee')
         fee=float(setting('fee') or 0) if fee_value is None else float(fee_value or 0)
-        logo_path,_=self.invoice_logo(updated)
+        logo_path,_logo_name=self.invoice_logo(updated)
         path_language=snapshot_language if snapshot_language in SUPPORTED_LANGUAGES else get_language()
         prefixes=('reminder','paminnelse') if path_language=='en' else ('paminnelse','reminder')
         output_path=None
