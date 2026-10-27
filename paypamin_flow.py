@@ -123,6 +123,7 @@ def init_db():
         db.execute("""CREATE TABLE IF NOT EXISTS invoices (
             id INTEGER PRIMARY KEY, customer TEXT NOT NULL, invoice_no TEXT NOT NULL,
             due_date TEXT NOT NULL, invoice_date TEXT DEFAULT '', template_vendor TEXT DEFAULT '', reviewed INTEGER NOT NULL DEFAULT 1,
+            logo_file TEXT,
             amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'SEK', paid REAL NOT NULL DEFAULT 0,
             email TEXT DEFAULT '', source TEXT DEFAULT '', source_hash TEXT NOT NULL DEFAULT '', ignored INTEGER NOT NULL DEFAULT 0,
             note TEXT DEFAULT '', p1_date TEXT DEFAULT '', p2_date TEXT DEFAULT '', sent_count INTEGER NOT NULL DEFAULT 0,
@@ -131,6 +132,7 @@ def init_db():
         if 'invoice_date' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN invoice_date TEXT DEFAULT ''")
         if 'template_vendor' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN template_vendor TEXT DEFAULT ''")
         if 'reviewed' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 1")
+        if 'logo_file' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN logo_file TEXT")
         if 'currency' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN currency TEXT NOT NULL DEFAULT 'SEK'")
         if 'source_hash' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''")
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -224,15 +226,16 @@ def save_invoice_record(values,row_id=None):
                 values['customer'],values['invoice_no'],values['invoice_date'],values['due_date'],
                 values['template_vendor'],values['amount'],values['currency'],values['paid'],
                 values['email'],values['source'],values.get('source_hash',''),values['note'],values['reviewed'],
+                values.get('logo_file'),
             )
             if row_id is None:
                 db.execute('''INSERT INTO invoices(
                     customer,invoice_no,invoice_date,due_date,template_vendor,amount,currency,paid,email,
-                    source,source_hash,note,reviewed,created
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',params+(datetime.now().isoformat(timespec='seconds'),))
+                    source,source_hash,note,reviewed,logo_file,created
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',params+(datetime.now().isoformat(timespec='seconds'),))
             else:
                 db.execute('''UPDATE invoices SET customer=?,invoice_no=?,invoice_date=?,due_date=?,
-                    template_vendor=?,amount=?,currency=?,paid=?,email=?,source_hash=?,note=?,reviewed=?
+                    template_vendor=?,amount=?,currency=?,paid=?,email=?,source_hash=?,note=?,reviewed=?,logo_file=?
                     WHERE id=?''',params[:9]+params[10:]+(row_id,))
     return duplicate
 
@@ -721,8 +724,7 @@ class ReminderApp(tk.Tk):
         with connect() as db:r=db.execute('SELECT * FROM invoices WHERE id=?',(int(sel[0]),)).fetchone()
         if r:
             vendor=r['template_vendor'] or _('Ingen leverantörsmall')
-            with connect() as db:logo=db.execute('SELECT logo_file FROM vendor_logos WHERE lower(vendor)=lower(?)',(vendor,)).fetchone()
-            logo_name=logo['logo_file'] if logo and logo['logo_file'] else _('ingen matchad logotyp')
+            _,logo_name=self.invoice_logo(r)
             review=_('Granskad') if r['reviewed'] else _('KRÄVER GRANSKNING')
             note=r['note'] or _('Ingen fakturatext')
             self.detail.configure(text=_('{customer} · {invoice_no} · Belopp: {amount} · {stage} · {review} · Mall: {vendor} · Logotyp: {logo} · {note}',customer=r['customer'],invoice_no=r['invoice_no'],amount=money(float(r['amount'] or 0),r['currency']),stage=_(next_stage(r)),review=review,vendor=vendor,logo=logo_name,note=note))
@@ -774,6 +776,26 @@ class ReminderApp(tk.Tk):
         selected=self.logo_var.get()
         path=SVG_DIR/selected
         return str(path) if selected and path.is_file() else ''
+
+    def logo_file_path(self,filename):
+        """Resolve one safe supplier-logo filename inside the user's SVG folder."""
+        if not filename:return '',_('(Ingen logotyp)')
+        root=SVG_DIR.resolve();path=(SVG_DIR/filename).resolve()
+        if path.parent!=root or not path.is_file():
+            logger.warning('Invoice logo is missing or outside the SVG folder: %s',filename)
+            return '',filename
+        return str(path),filename
+
+    def invoice_logo(self,row):
+        """Return the invoice's persistent logo, then template/global fallbacks."""
+        selected=row['logo_file'] if 'logo_file' in row.keys() else None
+        if selected is not None:return self.logo_file_path(selected)
+        vendor=(row['template_vendor'] or '').strip()
+        if vendor:
+            with connect() as db:
+                mapped=db.execute('SELECT logo_file FROM vendor_logos WHERE lower(vendor)=lower(?)',(vendor,)).fetchone()
+            if mapped is not None:return self.logo_file_path(mapped['logo_file'])
+        return self.selected_logo_path(),self.logo_var.get() or _('(Ingen logotyp)')
 
     def open_svg_folder(self):
         SVG_DIR.mkdir(exist_ok=True)
@@ -984,6 +1006,9 @@ class ReminderApp(tk.Tk):
             guess['template_vendor']=vendor_var.get().strip()
             selected_logo=preview_logo_var.get()
             save_logo=selected_logo not in (_('(Välj logotyp för mallen)'),'')
+            if save_logo:
+                # Keep the choice on this invoice even without saving field zones.
+                guess['logo_file']=selected_logo if selected_logo in logo_files else ''
             if save and (pending or save_logo):
                 mall=vendor_var.get().strip()
                 if not mall:messagebox.showerror(_('Mallnamn saknas'),_('Ange leverantör eller mallnamn.'),parent=win);return
@@ -1164,6 +1189,7 @@ class ReminderApp(tk.Tk):
         vals['source']=row['source'] if row else source
         vals['source_hash']=row['source_hash'] if row else source_hash
         vals['template_vendor']=row['template_vendor'] if row else (guess or {}).get('template_vendor','')
+        vals['logo_file']=row['logo_file'] if row else (guess or {}).get('logo_file')
         reviewed_var=tk.BooleanVar(value=bool(row['reviewed']) if row else not bool(source))
         entries={};form=ttk.Frame(w,padding=18);form.pack()
         for i,(lab,k) in enumerate(fields):
@@ -1180,6 +1206,7 @@ class ReminderApp(tk.Tk):
             record.update(
                 template_vendor=vals['template_vendor'],amount=amount,currency=currency,paid=paid,
                 source=vals['source'],source_hash=vals['source_hash'],reviewed=int(reviewed_var.get()),
+                logo_file=vals['logo_file'],
             )
             duplicate=save_invoice_record(record,row['id'] if row else None)
             if duplicate:
@@ -1223,11 +1250,10 @@ class ReminderApp(tk.Tk):
         fee=float(setting('fee') or 0);locked=setting('fee_locked')=='1'
         level='P1' if stage.startswith('P1') else 'P2'
         template_name=r['template_vendor'] or _('Ingen matchad mall')
-        logo_name=self.logo_var.get() or _('(Ingen logotyp)')
+        logo_path,logo_name=self.invoice_logo(r)
         confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nAppen skickar inte e-post automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
         if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
             return
-        logo_path=self.selected_logo_path()
         day=date.today().isoformat()
         with connect() as db:
             if level=='P1':db.execute('UPDATE invoices SET p1_date=?,sent_count=sent_count+1 WHERE id=?',(day,r['id']))

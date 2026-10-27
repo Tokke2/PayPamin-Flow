@@ -17,6 +17,7 @@
 - Added one-click paid marking and paid-invoice import suppression by invoice number or PDF identity, with silent automatic skips and separate manual summary counts.
 - Fixed modal PDF preview lockups by dismissing lingering invoice menus, delaying the preview grab until rendering succeeds, releasing it on every close and reporting template-save errors without trapping the window.
 - Applied the PayPamin Flow PNG and native Windows icon explicitly to every secondary app window through one shared window factory.
+- Preserved the supplier logo selected during PDF matching on the invoice itself and used it for P1/P2 export even without saving field zones, after restart or after changing the global logo.
 - Added headless backup, tray, import-watcher, Python-package, updater, rollback and console-free restart tests.
 
 ## 0.6.0 — 2026-10-26
