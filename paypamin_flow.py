@@ -15,7 +15,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
-from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_ID, APP_NAME, APP_SLUG, APP_VERSION, SUPPORTED_PLATFORMS
+from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_ID, APP_NAME, APP_SLUG, APP_VERSION, MINIMIZED_START_ARG, SUPPORTED_PLATFORMS
 from app_backup import (
     BackupError,
     BackupPaths,
@@ -1891,6 +1891,9 @@ def main():
         after_idle=getattr(window,'after_idle',None)
         if after_idle is not None:after_idle(mark_update_ready)
         else:mark_update_ready()
+        if MINIMIZED_START_ARG in sys.argv[1:]:
+            window.hide_to_tray()
+            if getattr(window,'_quitting',False):return
         window.mainloop()
     except Exception as e:
         if not isinstance(e,getattr(tk,'TclError',())):

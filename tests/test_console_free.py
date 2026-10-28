@@ -71,6 +71,29 @@ class ApplicationStartupTests(unittest.TestCase):
                     handler.close()
             self.assertEqual(events, ["console-free", "windows-identity", "database", "mainloop"])
 
+    def test_minimized_start_flag_hides_window_before_mainloop(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            events = []
+            fake_window = SimpleNamespace(
+                hide_to_tray=lambda: events.append("hidden"),
+                mainloop=lambda: events.append("mainloop"),
+            )
+            try:
+                with patch.object(
+                    app, "configure_console_free_subprocesses", side_effect=lambda: events.append("console-free")
+                ), patch.object(
+                    app, "configure_windows_app_identity", side_effect=lambda: events.append("windows-identity")
+                ), patch.object(app, "init_db", side_effect=lambda: events.append("database")), patch.object(
+                    app, "ReminderApp", return_value=fake_window
+                ), patch.object(app.sys, "argv", ["paypamin_flow.pyw", app.MINIMIZED_START_ARG]):
+                    app.main()
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
+            self.assertEqual(events, ["console-free", "windows-identity", "database", "hidden", "mainloop"])
+
     def test_unexpected_startup_errors_are_logged_and_reraised_for_the_gui_launcher(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = load_headless_app(Path(temporary_directory))

@@ -13,6 +13,7 @@ APP_DESCRIPTION_SV = "Lokal app för fakturor och betalningspåminnelser"
 APP_REPOSITORY = "Tokke2/PayPamin-Flow"
 APP_RELEASES_URL = f"https://github.com/{APP_REPOSITORY}/releases"
 APP_LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
+MINIMIZED_START_ARG = "--minimized"
 PYTHON_RELEASE_ASSET = "PayPamin-Flow-Python.zip"
 # Every desktop platform uses the same Python-only release package.
 RELEASE_ASSET_NAMES = {

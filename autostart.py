@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from app_info import APP_DESCRIPTION, APP_DESCRIPTION_SV, APP_ID, APP_NAME, APP_SLUG
+from app_info import APP_DESCRIPTION, APP_DESCRIPTION_SV, APP_ID, APP_NAME, APP_SLUG, MINIMIZED_START_ARG
 from i18n import _
 
 SOURCE_DIR = Path(__file__).resolve().parent
@@ -26,11 +26,11 @@ class AutostartError(RuntimeError):
 
 
 def launch_command() -> list[str]:
-    """Return an argument vector that starts this source tree or frozen app."""
+    """Return an argument vector that starts minimized at OS login."""
     if getattr(sys, "frozen", False):
         if not sys.executable:
             raise AutostartError(_("Det går inte att hitta appens programfil."))
-        return [str(Path(sys.executable).resolve())]
+        return [str(Path(sys.executable).resolve()), MINIMIZED_START_ARG]
 
     if not sys.executable:
         raise AutostartError(_("Det går inte att hitta Python-installationen."))
@@ -44,7 +44,7 @@ def launch_command() -> list[str]:
         executable = pythonw
     if not script.is_file():
         raise AutostartError(_("Startfilen saknas: {script}", script=script))
-    return [str(executable), str(script)]
+    return [str(executable), str(script), MINIMIZED_START_ARG]
 
 
 def autostart_location() -> str:

@@ -27,6 +27,7 @@
 - Added an in-app **Open export folder** button and File-menu command for opening generated reminder PDFs in the system file manager.
 - Added a bilingual post-scan dialog listing invoices ready for P1/P2 using the existing workflow rules; paid, ignored, unreviewed and waiting invoices are excluded and no reminder is created automatically.
 - Added automatic non-destructive archiving of recognized P1/P2 PDFs more than seven days old to `export/arkiv/`; archived P1s remain editable, invoice/journal history is unchanged and existing archive files are never overwritten.
+- Added minimized OS-login autostart through a shared `--minimized` argument on Windows, macOS and Linux; manual launches remain visible and existing login entries are refreshed automatically.
 - Made the shared console-free launcher report import/startup failures with a native message and `~/.paminnelseapp/startup.log`; normal launch, autostart and update restart use the same entry point on all three platforms.
 - Removed obsolete legacy module duplicates and native-build leftovers; only active Python launchers and application files are shipped.
 - Added an atomic JSON journal after every successful P1/P2 with invoice data, settings, templates and persistent reminder history; legacy reminder dates are included.

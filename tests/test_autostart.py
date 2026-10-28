@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 import autostart
-from app_info import APP_ID, APP_NAME, APP_SLUG
+from app_info import APP_ID, APP_NAME, APP_SLUG, MINIMIZED_START_ARG
 
 
 class AutostartTests(unittest.TestCase):
@@ -18,6 +18,7 @@ class AutostartTests(unittest.TestCase):
         expected_script = "paypamin_flow.pyw"
         self.assertTrue(command[1].endswith(expected_script))
         self.assertTrue(Path(command[1]).is_file())
+        self.assertEqual(command[2], MINIMIZED_START_ARG)
 
     def test_linux_autostart_writes_and_removes_xdg_desktop_entry(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -38,6 +39,7 @@ class AutostartTests(unittest.TestCase):
                 self.assertIn("Comment=Local invoice and payment reminder app", content)
                 self.assertIn("Comment[sv]=Lokal app för fakturor och betalningspåminnelser", content)
                 self.assertIn("X-GNOME-Autostart-enabled=true", content)
+                self.assertIn(f'"{MINIMIZED_START_ARG}"', content)
                 self.assertTrue((data / "paypamin_flow.png").is_file())
                 self.assertTrue(autostart.is_autostart_enabled())
 
@@ -60,7 +62,7 @@ class AutostartTests(unittest.TestCase):
                     mock.patch.object(autostart.sys, "executable", str(python)), \
                     mock.patch.object(autostart, "SOURCE_DIR", source):
                 command = autostart.launch_command()
-                self.assertEqual(command, [str(pythonw.resolve()), str(source / "paypamin_flow.pyw")])
+                self.assertEqual(command, [str(pythonw.resolve()), str(source / "paypamin_flow.pyw"), MINIMIZED_START_ARG])
                 pythonw.unlink()
                 with self.assertRaises(autostart.AutostartError):
                     autostart.launch_command()
@@ -89,13 +91,14 @@ class AutostartTests(unittest.TestCase):
 
         fake_winreg.QueryValueEx.side_effect = query_value
         fake_winreg.DeleteValue.side_effect = delete_value
-        command = [r"C:\Python\pythonw.exe", r"C:\Pay Pamin\paypamin_flow.pyw"]
+        command = [r"C:\Python\pythonw.exe", r"C:\Pay Pamin\paypamin_flow.pyw", MINIMIZED_START_ARG]
         with mock.patch.dict(sys.modules, {"winreg": fake_winreg}), \
                 mock.patch.object(autostart.sys, "platform", "win32"), \
                 mock.patch.object(autostart, "launch_command", return_value=command):
             autostart.set_autostart(True)
             self.assertIn(autostart.WINDOWS_VALUE_NAME, values)
             self.assertIn('"C:\\Pay Pamin\\paypamin_flow.pyw"', values[autostart.WINDOWS_VALUE_NAME])
+            self.assertIn(MINIMIZED_START_ARG, values[autostart.WINDOWS_VALUE_NAME])
             self.assertTrue(autostart.is_autostart_enabled())
 
             autostart.set_autostart(False)
@@ -115,6 +118,7 @@ class AutostartTests(unittest.TestCase):
                 self.assertTrue(payload["RunAtLoad"])
                 self.assertEqual(payload["LimitLoadToSessionType"], "Aqua")
                 self.assertTrue(payload["ProgramArguments"][1].endswith("paypamin_flow.pyw"))
+                self.assertEqual(payload["ProgramArguments"][2], MINIMIZED_START_ARG)
                 self.assertTrue(autostart.is_autostart_enabled())
 
                 autostart.set_autostart(False)
