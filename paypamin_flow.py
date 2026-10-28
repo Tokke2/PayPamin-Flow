@@ -31,6 +31,7 @@ from console_free import configure_console_free_subprocesses
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
 from invoice_parser import extract_invoice_sections, normalize_amount, normalize_date, parse_invoice_text
 from import_watcher import ImportFolderMonitor
+from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders
 from reminder_journal import (
     JOURNAL_FILENAME,
     JournalError,
@@ -55,6 +56,7 @@ from update_installer import (
 IMPORT_WATCH_INTERVAL_MS = 5000
 CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 JOURNAL_BACKUP_INTERVAL_MS = 60 * 60 * 1000
+REMINDER_ARCHIVE_INTERVAL_MS = 60 * 60 * 1000
 
 APP_DIR = Path.home() / ".paminnelseapp"
 APP_DIR.mkdir(parents=True,exist_ok=True)
@@ -481,7 +483,11 @@ def p1_file_candidates(row):
         if snapshot_language in SUPPORTED_LANGUAGES:
             language = snapshot_language
     prefixes = ('reminder', 'paminnelse') if language == 'en' else ('paminnelse', 'reminder')
-    return list(dict.fromkeys(reminder_file_path(base, 'P1', original_date, prefix) for prefix in prefixes))
+    paths=[]
+    for prefix in prefixes:
+        path=reminder_file_path(base, 'P1', original_date, prefix)
+        paths.extend((path,path.parent/ARCHIVE_FOLDER_NAME/path.name))
+    return list(dict.fromkeys(paths))
 
 
 def p1_file_missing(row):
@@ -507,6 +513,7 @@ class ReminderApp(tk.Tk):
         self.after(1500,self._run_scheduled_import_scan)
         self.after(3000,self._run_scheduled_cache_cleanup)
         self.after(4000,self._run_scheduled_journal_backup)
+        self.after(4500,self._run_scheduled_reminder_archive)
 
     def start_tray(self):
         """Start the tray icon lazily so unsupported desktops can still run the app."""
@@ -1127,6 +1134,17 @@ class ReminderApp(tk.Tk):
         except Exception:
             logger.exception('Weekly JSON journal backup failed')
         if not self._quitting:self.after(JOURNAL_BACKUP_INTERVAL_MS,self._run_scheduled_journal_backup)
+
+    def _run_scheduled_reminder_archive(self):
+        """Archive old reminder PDFs without changing invoice or journal history."""
+        if self._quitting:return
+        try:
+            report=archive_old_reminders(EXPORT_DIR)
+            if report.archived or report.conflicts or report.errors:
+                logger.info('Reminder archive: archived=%d conflicts=%d errors=%d',report.archived,report.conflicts,report.errors)
+        except Exception:
+            logger.exception('Automatic reminder archive failed')
+        if not self._quitting:self.after(REMINDER_ARCHIVE_INTERVAL_MS,self._run_scheduled_reminder_archive)
 
     def guess_supplier(self,text):
         for line in [re.sub(r'\s+',' ',x).strip() for x in text.splitlines()[:18]]:

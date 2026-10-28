@@ -24,6 +24,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
 - **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med SHA-256-verifiering och tyst omstart. Både nyare versioner och nya officiella release-byggen med samma versionsnummer kan upptäckas. Manuell sökning och installation finns i appen via **Hjälp → Sök efter uppdateringar**.
 - PDF sparas lokalt och öppnas i datorns standardprogram. **Öppna exportmapp** i knappraden eller under **Arkiv** öppnar mappen med skapade påminnelser i datorns filhanterare. Fellogg öppnas via **Visa fellogg**.
+- **Automatiskt påminnelsearkiv:** vid appstart och därefter regelbundet flyttas igenkända P1/P2-PDF:er vars ursprungliga påminnelsedatum är mer än 7 dagar gammalt från `export/` till `export/arkiv/`. Fakturor och påminnelsehistorik ändras inte, arkiverad P1 kan fortfarande redigeras och befintliga arkivfiler skrivs aldrig över.
 
 ## Python-only – ingen EXE eller native-app
 
