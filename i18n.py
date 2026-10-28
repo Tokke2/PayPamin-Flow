@@ -292,6 +292,9 @@ _ENGLISH = {
 
     # Automatic Fortnox PDF folder import
     "Automatisk import klar": "Automatic import complete",
+    "Dags att skapa P1/P2": "Time to create P1/P2",
+    "Följande fakturor är redo för P1 eller P2:\n\n{reminders}\n\nVälj en faktura i listan och klicka på Skapa påminnelse.": "The following invoices are ready for P1 or P2:\n\n{reminders}\n\nSelect an invoice in the list and click Create reminder.",
+    "… och {count} till": "… and {count} more",
     "Bevaka importmappen och importera nya PDF:er automatiskt": "Watch the import folder and import new PDFs automatically",
     "Rensa gamla cachefiler automatiskt en gång per dygn": "Clear old cache files automatically once a day",
     "Endast appens cachefiler äldre än 24 timmar. Fakturor och importmappen rörs inte.": "Only app cache files older than 24 hours. Invoices and the import folder are not touched.",

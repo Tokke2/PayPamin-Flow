@@ -443,6 +443,30 @@ def next_stage(row):
     return 'Väntar – efter P2'
 
 
+def due_reminder_invoices():
+    """Return unpaid, reviewed invoices whose normal workflow is ready for P1/P2."""
+    with connect() as db:
+        rows=db.execute('SELECT * FROM invoices ORDER BY due_date,invoice_no').fetchall()
+    return [row for row in rows if next_stage(row) in ('P1 att skapa','P2 att skapa')]
+
+
+def show_due_reminder_dialog(parent=None):
+    """Tell the user which invoices are ready after an import-folder scan."""
+    rows=due_reminder_invoices()
+    if not rows:return False
+    lines=[]
+    for row in rows[:12]:
+        level='P1' if next_stage(row)=='P1 att skapa' else 'P2'
+        lines.append(f"{level}: {row['invoice_no']} – {row['customer']}")
+    if len(rows)>12:lines.append(_('… och {count} till',count=len(rows)-12))
+    messagebox.showinfo(
+        _('Dags att skapa P1/P2'),
+        _('Följande fakturor är redo för P1 eller P2:\n\n{reminders}\n\nVälj en faktura i listan och klicka på Skapa påminnelse.',reminders='\n'.join(lines)),
+        parent=parent,
+    )
+    return True
+
+
 def p1_file_candidates(row):
     """Return possible original P1 paths in snapshot/language order."""
     original_date = dparse(row['p1_date'])
@@ -1390,6 +1414,7 @@ class ReminderApp(tk.Tk):
             if not automatic or imported or failed:
                 title=_('Automatisk import klar') if automatic else _('Skanning klar')
                 messagebox.showinfo(title,_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nBetalda som hoppades över: {paid}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,paid=paid_skipped,skipped=skipped,failed=failed),parent=self)
+            show_due_reminder_dialog(parent=self)
         finally:
             self._import_scan_running=False
 
