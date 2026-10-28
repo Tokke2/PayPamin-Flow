@@ -17,7 +17,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 - SVG-logotyp kan kopplas till en leverantörsmall och återanvändas vid export. Ett logotypval i PDF-matchningen sparas även direkt på fakturan och följer med till P1/P2 utan att fältmallen behöver sparas; valet påverkas inte av en senare global logotypändring.
 - Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta. **Redigera P1** kan byta logotyp och skriva om den befintliga P1-PDF:en med ursprungligt datum, originaldata och oförändrade villkor/historik via en intern P1-snapshot; den gamla filen bevaras om skrivningen misslyckas. Om en registrerad P1-PDF saknas kan **Skapa påminnelse** återskapa den med ursprungligt datum och oförändrad historik. En skadad eller oläsbar SVG ger ett tydligt fel i stället för att tyst ersättas med textlogotyp.
 - Samma PayPamin Flow-ikon i fönster, dialoger, programmenyer och systemfältet.
-- **Stäng till systemfältet:** fönstrets stängknapp döljer appen medan schemalagda kontroller fortsätter. **Arkiv → Avsluta helt** eller systemfältets **Avsluta helt** stänger appen helt.
+- **Stäng eller minimera till systemfältet:** fönstrets stäng- och minimeringsknappar döljer appen medan schemalagda kontroller fortsätter. **Arkiv → Avsluta helt** eller systemfältets **Avsluta helt** stänger appen helt.
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
 - **Autostart vid inloggning** på Windows, macOS och Linux. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
@@ -77,7 +77,7 @@ Kontrollera först att **Python 3.10 eller senare med Tkinter** är installerat 
 
 ## Systemfält och fullständig avslutning
 
-När du stänger huvudfönstret döljs det i systemfältet. Appen fortsätter då med bland annat schemalagda uppdateringskontroller.
+När du stänger eller minimerar huvudfönstret döljs det i systemfältet. Appen fortsätter då med bland annat schemalagda uppdateringskontroller.
 
 - Klicka på PayPamin Flow-ikonen eller välj **Öppna PayPamin Flow** i systemfältet för att visa fönstret igen.
 - Välj **Arkiv → Dölj till systemfältet** för att dölja det utan musens stängknapp.

@@ -165,6 +165,48 @@ class WindowCloseTests(unittest.TestCase):
         self.app.ReminderApp.hide_to_tray(fake)
         self.assertEqual(events, ["withdrawn"])
 
+    def test_minimize_hides_main_window_to_system_tray(self):
+        events = []
+        fake = SimpleNamespace(
+            _quitting=False,
+            state=lambda: "iconic",
+            hide_to_tray=lambda: events.append("hidden"),
+        )
+        self.app.ReminderApp._hide_minimized_window(fake)
+        self.assertEqual(events, ["hidden"])
+
+    def test_withdraw_does_not_retrigger_minimize_to_tray(self):
+        events = []
+        fake = SimpleNamespace(
+            _quitting=False,
+            state=lambda: "withdrawn",
+            hide_to_tray=lambda: events.append("hidden"),
+        )
+        self.app.ReminderApp._hide_minimized_window(fake)
+        self.assertEqual(events, [])
+
+    def test_unmap_defers_state_check_for_main_window_only(self):
+        scheduled = []
+        callback = lambda: None
+        fake = SimpleNamespace(_quitting=False, after_idle=scheduled.append, _hide_minimized_window=callback)
+        self.app.ReminderApp._on_main_window_unmap(fake, SimpleNamespace(widget=fake))
+        self.app.ReminderApp._on_main_window_unmap(fake, SimpleNamespace(widget=object()))
+        self.assertEqual(scheduled, [callback])
+
+    def test_minimized_window_is_restored_if_system_tray_is_unavailable(self):
+        events = []
+        fake = SimpleNamespace(
+            _quitting=False,
+            tray=SimpleNamespace(running=False),
+            start_tray=lambda: None,
+            state=lambda: "iconic",
+            deiconify=lambda: events.append("shown"),
+            quit_app=lambda: events.append("quit"),
+        )
+        with patch.object(self.app.messagebox, "askyesno", return_value=False, create=True):
+            self.app.ReminderApp.hide_to_tray(fake)
+        self.assertEqual(events, ["shown"])
+
     def test_explicit_exit_stops_tray_and_destroys_window(self):
         events = []
         fake = SimpleNamespace(

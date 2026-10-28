@@ -475,6 +475,7 @@ class ReminderApp(tk.Tk):
         self._import_monitor=ImportFolderMonitor(IMPORT_DIR);self._import_scan_running=False;self._python_addons_ready=False
         self.build(); self.refresh()
         self.protocol('WM_DELETE_WINDOW',self.hide_to_tray)
+        self.bind('<Unmap>',self._on_main_window_unmap,add='+')
         self.start_tray()
         self.after(100,self.sync_autostart)
         self.after(250,self.check_python_addons)
@@ -508,11 +509,26 @@ class ReminderApp(tk.Tk):
         try:self.focus_force()
         except tk.TclError:pass
 
+    def _on_main_window_unmap(self,event):
+        """Handle a window-manager minimize after Tk has updated its state."""
+        if event.widget is not self or self._quitting:return
+        self.after_idle(self._hide_minimized_window)
+
+    def _hide_minimized_window(self):
+        """Minimize hides to the tray; our own withdraw must not retrigger it."""
+        if self._quitting:return
+        try:minimized=self.state()=='iconic'
+        except tk.TclError:return
+        if minimized:self.hide_to_tray()
+
     def hide_to_tray(self):
-        """Close hides the window; background checks continue until full exit."""
+        """Close and minimize hide the window until the user chooses full exit."""
         if self._quitting:return
         if self.tray is None or not self.tray.running:self.start_tray()
         if self.tray is None or not self.tray.running:
+            try:
+                if self.state()=='iconic':self.deiconify()
+            except tk.TclError:pass
             if messagebox.askyesno(_('Systemfältet är inte tillgängligt'),_('Fönstret kan inte döljas i systemfältet på den här datorn. Vill du avsluta appen helt?'),parent=self):self.quit_app()
             return
         self.withdraw();logger.info('Main window hidden to system tray')

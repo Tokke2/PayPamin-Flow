@@ -9,6 +9,7 @@
 - Prevented Windows console windows from PDF/OCR and other child processes while preserving existing subprocess flags; GUI launch and autostart continue to use `pythonw.exe`.
 - Fixed tray startup through pystray's detached GUI integration and backend-ready visibility callback; added a distinct Windows taskbar app identity and mandatory validation of every application icon in Python updates.
 - Added close-to-system-tray behavior, an explicit full-exit path and the PayPamin Flow icon in the tray.
+- Added minimize-to-system-tray behavior for the window-manager minimize button, without retriggering on the app's own withdraw and with safe restoration if the tray is unavailable.
 - Added bilingual File-menu backup and restore for settings, invoices, reminders, templates and logos, including checksum/SQLite validation and a pre-restore safety backup.
 - Added File and Help menus, with update checks available inside the app and automatic checks retained every 12 hours.
 - Added license-free Fortnox PDF import with automatic folder monitoring, stable-file detection, reviewed imports, duplicate suppression and an automatic-import setting.
