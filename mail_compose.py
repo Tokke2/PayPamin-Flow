@@ -130,7 +130,11 @@ def build_thunderbird_compose(content, pdf_path):
     Thunderbird percent-decodes unquoted option values after splitting the options.
     Encoding every value therefore preserves commas, quotes, Unicode and newlines.
     """
-    attachment = Path(pdf_path).expanduser().resolve().as_uri()
+    native_path = Path(pdf_path).expanduser().resolve()
+    # Native paths avoid file-URI resolution differences on Windows. Keep a
+    # file URI for comma-containing paths so Thunderbird's own URI comma
+    # workaround can preserve the attachment boundary.
+    attachment = native_path.as_uri() if "," in str(native_path) else str(native_path)
     fields = {
         "to": ",".join(content["recipients"]),
         "bcc": content["bcc"],

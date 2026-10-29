@@ -90,6 +90,17 @@ class ThunderbirdComposeTests(unittest.TestCase):
             "body": "Hej!\n\nKundens text, med 'citat' och åäö.\nBifogad P2.",
         }
 
+    def test_compose_uses_native_path_for_regular_reminder_filename(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            pdf = Path(temporary_directory) / "paminnelse(2)_6258.pdf"
+            pdf.write_bytes(b"pdf")
+            compose = mail_compose.build_thunderbird_compose(self.content(), pdf)
+            fields = dict(part.split("=", 1) for part in compose.split(","))
+
+        attachment = unquote(fields["attachment"])
+        self.assertEqual(attachment, str(pdf.resolve()))
+        self.assertFalse(attachment.startswith("file:"))
+
     def test_compose_percent_encodes_fields_and_pdf_uri(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             pdf = Path(temporary_directory) / "Påminnelse 2, kundens 'kopia'.pdf"
