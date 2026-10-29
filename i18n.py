@@ -259,6 +259,8 @@ _ENGLISH = {
     "Dold kopia (BCC): {email}": "Blind copy (BCC): {email}",
     "PDF att bifoga manuellt: {path}": "PDF to attach manually: {path}",
     "PDF som bifogas automatiskt i Thunderbird: {path}": "PDF that will be attached automatically in Thunderbird: {path}",
+    "Thunderbird är standardapp men programfilen hittades inte. PDF att bifoga manuellt: {path}": "Thunderbird is the default app, but its executable could not be found. PDF to attach manually: {path}",
+    "Thunderbird hittades inte för automatisk bilaga. Utkastet öppnas via mailto; bifoga PDF:en och skicka mejlet manuellt.": "Thunderbird could not be found for automatic attachment. The draft will open through mailto; attach the PDF and send the email manually.",
     "Ämne": "Subject",
     "Meddelande": "Message",
     "Ändringarna gäller bara detta utkast. Bifoga PDF:en och skicka mejlet manuellt i e-postappen.": "The changes apply only to this draft. Attach the PDF and send the email manually in the email app.",

@@ -44,6 +44,16 @@ class ThunderbirdDetectionTests(unittest.TestCase):
             with patch.object(mail_compose, "_registry_value", side_effect=lambda root, path, name="": values.get((root, path, name), "")):
                 self.assertTrue(mail_compose.windows_uses_thunderbird())
 
+    def test_system_default_is_fallback_when_user_values_are_missing(self):
+        values = {
+            ("HKCU", mail_compose.USERCHOICE_MAILTO_KEY, "ProgId"): "",
+            ("HKCU", mail_compose.REGISTERED_MAIL_CLIENT_KEY, ""): "",
+            ("HKLM", mail_compose.REGISTERED_MAIL_CLIENT_KEY, ""): "Mozilla Thunderbird",
+        }
+        with patch.object(mail_compose.sys, "platform", "win32"):
+            with patch.object(mail_compose, "_registry_value", side_effect=lambda root, path, name="": values.get((root, path, name), "")):
+                self.assertTrue(mail_compose.windows_uses_thunderbird())
+
     def test_executable_lookup_uses_registered_app_path(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             executable = Path(temporary_directory) / "thunderbird.exe"
@@ -53,6 +63,16 @@ class ThunderbirdDetectionTests(unittest.TestCase):
                     with patch.object(mail_compose.shutil, "which") as which:
                         self.assertEqual(mail_compose._find_thunderbird_executable(), str(executable))
             which.assert_not_called()
+
+    def test_registered_command_supports_quotes_spaces_and_unc_paths(self):
+        cases = (
+            (r'"C:\Program Files\Mozilla Thunderbird\thunderbird.exe" -mail', r'C:\Program Files\Mozilla Thunderbird\thunderbird.exe'),
+            (r'C:\Thunderbird Test\thunderbird.exe -mail', r'C:\Thunderbird Test\thunderbird.exe'),
+            (r'"\\server\share\Mozilla Thunderbird\thunderbird.exe" -mail', r'\\server\share\Mozilla Thunderbird\thunderbird.exe'),
+        )
+        for command, expected in cases:
+            with self.subTest(command=command):
+                self.assertEqual(mail_compose._executable_from_command(command), expected)
 
     def test_default_executable_is_not_looked_up_for_another_mailer(self):
         with patch.object(mail_compose, "windows_uses_thunderbird", return_value=False):
@@ -96,6 +116,7 @@ class ThunderbirdComposeTests(unittest.TestCase):
             with patch.object(mail_compose.sys, "platform", "win32"):
                 with patch.object(mail_compose.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True):
                     with patch.object(mail_compose.subprocess, "Popen") as popen:
+                        popen.return_value.poll.return_value = None
                         opened = mail_compose.open_thunderbird_draft(executable, self.content(), pdf)
 
         self.assertTrue(opened)
@@ -115,6 +136,24 @@ class ThunderbirdComposeTests(unittest.TestCase):
                     "thunderbird.exe", self.content(), Path("/definitely/missing/reminder.pdf")
                 )
         popen.assert_not_called()
+
+    def test_empty_pdf_never_starts_thunderbird(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            pdf = Path(temporary_directory) / "empty.pdf"
+            pdf.write_bytes(b"")
+            with patch.object(mail_compose.subprocess, "Popen") as popen:
+                with self.assertRaises(ValueError):
+                    mail_compose.open_thunderbird_draft("thunderbird.exe", self.content(), pdf)
+        popen.assert_not_called()
+
+    def test_immediate_thunderbird_failure_is_reported(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            pdf = Path(temporary_directory) / "reminder.pdf"
+            pdf.write_bytes(b"pdf")
+            with patch.object(mail_compose.subprocess, "Popen") as popen:
+                popen.return_value.poll.return_value = 2
+                with self.assertRaisesRegex(RuntimeError, "code 2"):
+                    mail_compose.open_thunderbird_draft("thunderbird.exe", self.content(), pdf)
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ from invoice_parser import (
     parse_amount_value, parse_invoice_text,
 )
 from import_watcher import ImportFolderMonitor
-from mail_compose import default_thunderbird_executable, open_thunderbird_draft
+from mail_compose import default_thunderbird_executable, open_thunderbird_draft, windows_uses_thunderbird
 from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders
 from reminder_journal import (
     JOURNAL_FILENAME,
@@ -1837,26 +1837,28 @@ class ReminderApp(tk.Tk):
         w=self._new_toplevel(_('Förhandsgranska e-post'));w.grab_set();w.resizable(True,True)
         form=ttk.Frame(w,padding=20);form.pack(fill='both',expand=True)
         thunderbird=content.get('attachment_handler')=='thunderbird'
+        thunderbird_unavailable=content.get('attachment_handler')=='thunderbird_unavailable'
+        if thunderbird:
+            pdf_label=_('PDF som bifogas automatiskt i Thunderbird: {path}',path=pdf_path)
+            instructions=_('Ändringarna gäller bara detta utkast. PDF:en bifogas automatiskt i Thunderbird. Granska och skicka mejlet manuellt.')
+        elif thunderbird_unavailable:
+            pdf_label=_('Thunderbird är standardapp men programfilen hittades inte. PDF att bifoga manuellt: {path}',path=pdf_path)
+            instructions=_('Thunderbird hittades inte för automatisk bilaga. Utkastet öppnas via mailto; bifoga PDF:en och skicka mejlet manuellt.')
+        else:
+            pdf_label=_('PDF att bifoga manuellt: {path}',path=pdf_path)
+            instructions=_('Ändringarna gäller bara detta utkast. Bifoga PDF:en och skicka mejlet manuellt i e-postappen.')
         ttk.Label(
             form,text=_('Mottagare: {recipients}',recipients=', '.join(content['recipients'])),wraplength=680,
         ).pack(anchor='w',pady=(0,6))
         ttk.Label(form,text=_('Dold kopia (BCC): {email}',email=REMINDER_BCC)).pack(anchor='w',pady=(0,6))
-        ttk.Label(
-            form,
-            text=_('PDF som bifogas automatiskt i Thunderbird: {path}',path=pdf_path) if thunderbird else _('PDF att bifoga manuellt: {path}',path=pdf_path),
-            wraplength=680,
-        ).pack(anchor='w',pady=(0,12))
+        ttk.Label(form,text=pdf_label,wraplength=680).pack(anchor='w',pady=(0,12))
         ttk.Label(form,text=_('Ämne')).pack(anchor='w')
         subject_var=tk.StringVar(value=content['subject'])
         ttk.Entry(form,textvariable=subject_var,width=90).pack(fill='x',pady=(3,10))
         ttk.Label(form,text=_('Meddelande')).pack(anchor='w')
         body_text=tk.Text(form,width=90,height=20,wrap='word',undo=True)
         body_text.insert('1.0',content['body']);body_text.pack(fill='both',expand=True,pady=(3,10))
-        ttk.Label(
-            form,
-            text=_('Ändringarna gäller bara detta utkast. PDF:en bifogas automatiskt i Thunderbird. Granska och skicka mejlet manuellt.') if thunderbird else _('Ändringarna gäller bara detta utkast. Bifoga PDF:en och skicka mejlet manuellt i e-postappen.'),
-            wraplength=680,
-        ).pack(anchor='w',pady=(0,12))
+        ttk.Label(form,text=instructions,wraplength=680).pack(anchor='w',pady=(0,12))
         def accept():
             nonlocal result
             subject=subject_var.get().strip();body=body_text.get('1.0','end-1c').strip()
@@ -1907,11 +1909,14 @@ class ReminderApp(tk.Tk):
             recipients=reminder_email_addresses(r)
             if not recipients:return False
             content=build_reminder_email_content(r,level,recipients)
-            try:thunderbird=default_thunderbird_executable()
+            thunderbird_unavailable=False
+            try:
+                thunderbird=default_thunderbird_executable()
+                thunderbird_unavailable=not thunderbird and windows_uses_thunderbird()
             except Exception:
                 logger.exception('Thunderbird detection failed; using standard mailto')
                 thunderbird=None
-            content['attachment_handler']='thunderbird' if thunderbird else 'manual'
+            content['attachment_handler']='thunderbird' if thunderbird else ('thunderbird_unavailable' if thunderbird_unavailable else 'manual')
             preview=getattr(self,'preview_reminder_email',None)
             if preview:
                 content=preview(content,pdf_path)
@@ -1929,6 +1934,7 @@ class ReminderApp(tk.Tk):
                 parent=self,
             )
             return False
+        if thunderbird:logger.info('Thunderbird compose requested with PDF: invoice=%s level=%s path=%s',r['id'],level,pdf_path)
         logger.info('Opened reminder email draft: invoice=%s level=%s recipients=%d handler=%s',r['id'],level,len(recipients),'thunderbird' if thunderbird else 'mailto')
         try:
             record_reminder_draft_opened(r,level)

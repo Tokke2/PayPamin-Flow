@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,7 +50,19 @@ def windows_uses_thunderbird():
     if prog_id:
         return "thunderbird" in prog_id.casefold()
     client = _registry_value("HKCU", REGISTERED_MAIL_CLIENT_KEY)
-    return "thunderbird" in client.casefold()
+    if client:
+        return "thunderbird" in client.casefold()
+    system_client = _registry_value("HKLM", REGISTERED_MAIL_CLIENT_KEY)
+    return "thunderbird" in system_client.casefold()
+
+
+def _executable_from_command(command):
+    """Extract a quoted or unquoted Thunderbird path from a registered command."""
+    match = re.search(
+        r'((?:[A-Za-z]:[\\/]|\\\\)[^\r\n\"]*?thunderbird\.exe)',
+        str(command or ''), re.IGNORECASE,
+    )
+    return match.group(1) if match else ''
 
 
 def _existing_file(candidates):
@@ -57,7 +70,8 @@ def _existing_file(candidates):
         if not candidate:
             continue
         try:
-            path = Path(os.path.expandvars(str(candidate))).expanduser()
+            text = os.path.expandvars(str(candidate)).strip().strip('"')
+            path = Path(text).expanduser()
             if path.is_file():
                 return str(path)
         except (OSError, RuntimeError, ValueError):
@@ -70,6 +84,19 @@ def _find_thunderbird_executable():
         _registry_value(root, THUNDERBIRD_APP_PATHS_KEY)
         for root in ("HKCU", "HKLM")
     ]
+    found = _existing_file(registered)
+    if found:
+        return found
+    registered = []
+    for root in ("HKCU", "HKLM"):
+        command_keys = [r"SOFTWARE\Classes\Thunderbird.Url.mailto\shell\open\command"]
+        command_keys.extend(
+            rf"SOFTWARE\Clients\Mail\{client}\shell\open\command"
+            for client in ("Mozilla Thunderbird", "Thunderbird")
+        )
+        registered.extend(
+            _executable_from_command(_registry_value(root, key)) for key in command_keys
+        )
     found = _existing_file(registered)
     if found:
         return found
@@ -121,13 +148,21 @@ def open_thunderbird_draft(executable, content, pdf_path):
     pdf_path = Path(pdf_path).expanduser().resolve()
     if not pdf_path.is_file():
         raise FileNotFoundError(f"Reminder PDF does not exist: {pdf_path}")
+    with pdf_path.open("rb") as attachment:
+        if not attachment.read(1):
+            raise ValueError(f"Reminder PDF is empty: {pdf_path}")
     command = [str(executable), "-compose", build_thunderbird_compose(content, pdf_path)]
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-    subprocess.Popen(
+    # A successful launch means the compose request was handed to Thunderbird;
+    # only the user can visually confirm the attachment in the compose window.
+    process = subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=no_window,
     )
+    return_code = process.poll()
+    if return_code not in (None, 0):
+        raise RuntimeError(f"Thunderbird exited immediately with code {return_code}")
     return True

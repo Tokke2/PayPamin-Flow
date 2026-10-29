@@ -536,6 +536,28 @@ class CustomerContactTests(unittest.TestCase):
             self.assertEqual(tuple(saved), ("", date.today().isoformat(), "", "", 2))
             self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
 
+    def test_unavailable_thunderbird_uses_explained_manual_mailto_fallback(self):
+        row, pdf_path = self.existing_p1(email="current@example.com")
+        owner = SimpleNamespace(
+            preview_reminder_email=Mock(side_effect=lambda content, path: content), refresh=Mock(),
+        )
+        with patch.object(self.app, "default_thunderbird_executable", return_value=None):
+            with patch.object(self.app, "windows_uses_thunderbird", return_value=True):
+                with patch.object(self.app, "open_thunderbird_draft") as open_draft:
+                    with patch.object(self.app.webbrowser, "open", return_value=True) as open_url:
+                        opened = self.app.ReminderApp.open_reminder_email(owner, row, "P1", pdf_path)
+
+        self.assertTrue(opened)
+        open_draft.assert_not_called()
+        open_url.assert_called_once()
+        content = owner.preview_reminder_email.call_args.args[0]
+        self.assertEqual(content["attachment_handler"], "thunderbird_unavailable")
+        with self.app.connect() as db:
+            self.assertEqual(
+                db.execute("SELECT p1_draft_date FROM invoices").fetchone()[0],
+                date.today().isoformat(),
+            )
+
     def test_sent_status_requires_explicit_confirmation_and_changes_no_history(self):
         row, _ = self.existing_p1(email="current@example.com")
         owner = SimpleNamespace(selected=lambda: row, refresh=Mock())
