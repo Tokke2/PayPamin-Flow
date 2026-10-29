@@ -25,8 +25,8 @@
 - Fixed modal PDF preview lockups by dismissing lingering invoice menus, delaying the preview grab until rendering succeeds, releasing it on every close and reporting template-save errors without trapping the window.
 - Applied the PayPamin Flow PNG and native Windows icon explicitly to every secondary app window through one shared window factory.
 - Preserved the supplier logo selected during PDF matching on the invoice itself and used it for P1/P2 export even without saving field zones, after restart or after changing the global logo.
-- Added **Edit P1** for replacing the logo and atomically regenerating the original P1 PDF without changing its date, P2 state or sent count; failed writes preserve the previous PDF and invoice selection.
-- Added internal P1 snapshots for original invoice data, fee, interest, payment deadline, objection terms and language, with safe legacy-row handling; broken SVG logos now show an error instead of silently generating a text-logo PDF.
+- Added **Edit P1** and **Edit P2** in the toolbar and context menu for replacing either level's logo and atomically regenerating its original PDF without changing reminder dates, history or sent count; failed writes preserve the previous PDF and invoice selection, and no email draft is opened.
+- Added internal P1/P2 snapshots for original invoice data, fee, interest, payment deadline, objection terms and language, with safe legacy-row handling and P2 snapshot persistence through SQLite migrations and JSON restore; older P2s freeze their values on the first successful edit. Broken SVG logos now show an error instead of silently generating a text-logo PDF.
 - Added pre-P1 verification against the original invoice PDF, including saved field zones and multi-invoice section matching; mismatches stop creation without changing invoice or reminder history.
 - Added safe recreation of a missing P1 PDF from its original snapshot, date, terms and logo without adding a reminder event or changing P2/history counters.
 - Added an in-app **Open export folder** button and File-menu command for opening generated reminder PDFs in the system file manager.

@@ -151,7 +151,7 @@ def init_db():
             amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'SEK', paid REAL NOT NULL DEFAULT 0,
             email TEXT DEFAULT '', source TEXT DEFAULT '', source_hash TEXT NOT NULL DEFAULT '', ignored INTEGER NOT NULL DEFAULT 0,
             note TEXT DEFAULT '', p1_date TEXT DEFAULT '', p2_date TEXT DEFAULT '', sent_count INTEGER NOT NULL DEFAULT 0,
-            p1_snapshot TEXT DEFAULT '', created TEXT NOT NULL)""")
+            p1_snapshot TEXT DEFAULT '', p2_snapshot TEXT DEFAULT '', created TEXT NOT NULL)""")
         existing={row['name'] for row in db.execute('PRAGMA table_info(invoices)').fetchall()}
         if 'invoice_date' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN invoice_date TEXT DEFAULT ''")
         if 'template_vendor' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN template_vendor TEXT DEFAULT ''")
@@ -160,6 +160,7 @@ def init_db():
         if 'currency' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN currency TEXT NOT NULL DEFAULT 'SEK'")
         if 'source_hash' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''")
         if 'p1_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p1_snapshot TEXT DEFAULT ''")
+        if 'p2_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p2_snapshot TEXT DEFAULT ''")
         ensure_journal_schema(db)
         ensure_customer_contact_schema(db)
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -412,11 +413,13 @@ def current_reminder_terms(fee):
     }
 
 
-def capture_p1_snapshot(row,fee,day):
-    """Keep the original P1 content so a later logo edit changes only the logo."""
+def capture_reminder_snapshot(row,fee,day,level):
+    """Keep original P1/P2 content so a later logo edit changes only the logo."""
+    if level not in ('P1','P2'):raise ValueError('Unknown reminder level')
     snapshot_row=dict(row)
     snapshot_row.pop('p1_snapshot',None)
-    snapshot_row['p1_date']=day
+    snapshot_row.pop('p2_snapshot',None)
+    snapshot_row[level.lower()+'_date']=day
     return json.dumps({
         'version':1,
         'row':snapshot_row,
@@ -425,7 +428,11 @@ def capture_p1_snapshot(row,fee,day):
     },ensure_ascii=False,sort_keys=True)
 
 
-def read_p1_snapshot(value):
+def capture_p1_snapshot(row,fee,day):
+    return capture_reminder_snapshot(row,fee,day,'P1')
+
+
+def read_reminder_snapshot(value):
     try:
         payload=json.loads(value or '')
     except (TypeError,ValueError):
@@ -433,6 +440,10 @@ def read_p1_snapshot(value):
     if not isinstance(payload,dict) or not isinstance(payload.get('row'),dict) or not isinstance(payload.get('terms'),dict):
         return None
     return payload
+
+
+def read_p1_snapshot(value):
+    return read_reminder_snapshot(value)
 
 
 class LogoEmbedError(RuntimeError):
@@ -582,25 +593,32 @@ def show_due_reminder_dialog(parent=None):
     return True
 
 
-def p1_file_candidates(row):
-    """Return possible original P1 paths in snapshot/language order."""
-    original_date = dparse(row['p1_date'])
-    if not original_date:
-        return []
-    snapshot = read_p1_snapshot(row['p1_snapshot'] if 'p1_snapshot' in row.keys() else '')
-    base = dict(row)
-    language = get_language()
+def reminder_file_candidates(row,level):
+    """Return possible original P1/P2 paths in snapshot/language order."""
+    if level not in ('P1','P2'):return []
+    date_column=level.lower()+'_date';snapshot_column=level.lower()+'_snapshot'
+    original_date=dparse(row[date_column])
+    if not original_date:return []
+    snapshot=read_reminder_snapshot(row[snapshot_column] if snapshot_column in row.keys() else '')
+    base=dict(row);language=get_language()
     if snapshot:
         base.update(snapshot['row'])
-        snapshot_language = str(snapshot.get('language') or '')
-        if snapshot_language in SUPPORTED_LANGUAGES:
-            language = snapshot_language
-    prefixes = ('reminder', 'paminnelse') if language == 'en' else ('paminnelse', 'reminder')
+        snapshot_language=str(snapshot.get('language') or '')
+        if snapshot_language in SUPPORTED_LANGUAGES:language=snapshot_language
+    prefixes=('reminder','paminnelse') if language=='en' else ('paminnelse','reminder')
     paths=[]
     for prefix in prefixes:
-        path=reminder_file_path(base, 'P1', original_date, prefix)
+        path=reminder_file_path(base,level,original_date,prefix)
         paths.extend((path,path.parent/ARCHIVE_FOLDER_NAME/path.name))
     return list(dict.fromkeys(paths))
+
+
+def p1_file_candidates(row):
+    return reminder_file_candidates(row,'P1')
+
+
+def p2_file_candidates(row):
+    return reminder_file_candidates(row,'P2')
 
 
 def p1_file_missing(row):
@@ -1047,7 +1065,7 @@ class ReminderApp(tk.Tk):
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)
         bar=ttk.Frame(self,padding=(22,5,22,12)); bar.pack(fill='x')
-        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Redigera P1',self.edit_p1,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
+        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
             ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
         controls=ttk.Frame(self,padding=(22,0,22,10));controls.pack(fill='x')
         ttk.Label(controls,text=_('Visa:')).pack(side='left')
@@ -1079,6 +1097,7 @@ class ReminderApp(tk.Tk):
         self.row_menu.add_command(label=_('Redigera faktura'),command=self.edit_invoice)
         self.row_menu.add_command(label=_('Redigera kund'),command=self.edit_customer)
         self.row_menu.add_command(label=_('Redigera P1'),command=self.edit_p1)
+        self.row_menu.add_command(label=_('Redigera P2'),command=self.edit_p2)
         self.row_menu.add_command(label=_('Markera som betald'),command=self.mark_invoice_paid)
         self.row_menu.add_command(label=_('Ignorera / återaktivera'),command=self.toggle_ignore)
         self.row_menu.add_separator()
@@ -1802,10 +1821,10 @@ class ReminderApp(tk.Tk):
             if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
                 break
             day=date.today().isoformat()
-            p1_snapshot=capture_p1_snapshot(r,fee,day) if level=='P1' else ''
+            snapshot=capture_reminder_snapshot(r,fee,day,level)
             with connect() as db:
-                if level=='P1':db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1 WHERE id=?',(day,p1_snapshot,r['id']))
-                else:db.execute('UPDATE invoices SET p2_date=?,sent_count=sent_count+1 WHERE id=?',(day,r['id']))
+                if level=='P1':db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1 WHERE id=?',(day,snapshot,r['id']))
+                else:db.execute('UPDATE invoices SET p2_date=?,p2_snapshot=?,sent_count=sent_count+1 WHERE id=?',(day,snapshot,r['id']))
             result=self.write_letter(r,level,fee,logo_path)
             if result:
                 latest=(r,level,result)
@@ -1852,36 +1871,57 @@ class ReminderApp(tk.Tk):
         return result
 
     def edit_p1(self):
-        """Choose a replacement logo and regenerate an existing P1 safely."""
+        self.edit_reminder('P1')
+
+    def edit_p2(self):
+        self.edit_reminder('P2')
+
+    def edit_reminder(self,level):
+        """Choose a replacement logo and regenerate an existing P1 or P2 safely."""
+        if level not in ('P1','P2'):return
         r=self.selected()
         if not r:return
-        if not r['p1_date']:
-            messagebox.showinfo(_('P1 saknas'),_('Skapa P1 innan den kan redigeras.'),parent=self);return
+        if not r[level.lower()+'_date']:
+            messagebox.showinfo(
+                _('{level} saknas',level=level),
+                _('Skapa {level} innan den kan redigeras.',level=level),parent=self,
+            );return
         logo_files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
         _current_logo_path,current_logo=self.invoice_logo(r)
         choices=[_('(Ingen logotyp)')]+logo_files
-        w=self._new_toplevel(_('Redigera P1'));w.grab_set();w.resizable(False,False)
+        w=self._new_toplevel(_('Redigera {level}',level=level));w.grab_set();w.resizable(False,False)
         form=ttk.Frame(w,padding=20);form.pack()
-        ttk.Label(form,text=_('Välj ny logotyp för P1. PDF:en skrivs om med ursprungligt P1-datum.'),wraplength=390).pack(anchor='w',pady=(0,10))
+        ttk.Label(form,text=_('Välj ny logotyp för {level}. PDF:en skrivs om med ursprungligt påminnelsedatum.',level=level),wraplength=390).pack(anchor='w',pady=(0,10))
         logo_var=tk.StringVar(value=current_logo if current_logo in logo_files else choices[0])
         combo=ttk.Combobox(form,textvariable=logo_var,state='readonly',values=choices,width=42)
         combo.pack(fill='x',pady=(0,12))
         def save():
             selected=logo_var.get()
-            result=self.update_p1_logo(r,selected if selected in logo_files else '',parent=w)
+            result=self.update_reminder_logo(r,level,selected if selected in logo_files else '',parent=w)
             if not result:return
             w.destroy();self.refresh()
-            messagebox.showinfo(_('P1 uppdaterad'),_('P1 har skrivits om med vald logotyp. P1-datum och historik är oförändrade.'),parent=self)
+            messagebox.showinfo(
+                _('{level} uppdaterad',level=level),
+                _('{level} har skrivits om med vald logotyp. Påminnelsedatum och historik är oförändrade.',level=level),parent=self,
+            )
         buttons=ttk.Frame(form);buttons.pack(fill='x')
-        ttk.Button(buttons,text=_('Spara och skriv om P1'),command=save,style='Accent.TButton').pack(side='left')
+        ttk.Button(buttons,text=_('Spara och skriv om {level}',level=level),command=save,style='Accent.TButton').pack(side='left')
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='right')
         w.wait_window()
 
     def update_p1_logo(self,row,logo_file,parent=None):
-        """Regenerate P1 without changing its original content, date or history."""
-        original_date=dparse(row['p1_date'])
+        return self.update_reminder_logo(row,'P1',logo_file,parent=parent)
+
+    def update_p2_logo(self,row,logo_file,parent=None):
+        return self.update_reminder_logo(row,'P2',logo_file,parent=parent)
+
+    def update_reminder_logo(self,row,level,logo_file,parent=None):
+        """Regenerate P1/P2 without changing original content, date or history."""
+        if level not in ('P1','P2'):return None
+        date_column=level.lower()+'_date';snapshot_column=level.lower()+'_snapshot'
+        original_date=dparse(row[date_column])
         if not original_date:return None
-        snapshot=read_p1_snapshot(row['p1_snapshot'] if 'p1_snapshot' in row.keys() else '')
+        snapshot=read_reminder_snapshot(row[snapshot_column] if snapshot_column in row.keys() else '')
         updated=dict(row)
         reminder_terms=current_reminder_terms(float(setting('fee') or 0))
         snapshot_language=''
@@ -1893,13 +1933,13 @@ class ReminderApp(tk.Tk):
         fee_value=reminder_terms.get('fee')
         fee=float(setting('fee') or 0) if fee_value is None else float(fee_value or 0)
         logo_path,_logo_name=self.invoice_logo(updated)
-        output_path=next((path for path in p1_file_candidates(row) if path.is_file()),None)
+        output_path=next((path for path in reminder_file_candidates(row,level) if path.is_file()),None)
         previous_language=get_language()
         if snapshot_language in SUPPORTED_LANGUAGES and snapshot_language!=previous_language:
             set_language(snapshot_language)
         try:
             result=self.write_letter(
-                updated,'P1',fee,logo_path,
+                updated,level,fee,logo_path,
                 reminder_date=original_date,output_path=output_path,parent=parent,
                 reminder_terms=reminder_terms,
             )
@@ -1910,17 +1950,17 @@ class ReminderApp(tk.Tk):
             if snapshot:
                 db.execute('UPDATE invoices SET logo_file=? WHERE id=?',(logo_file,row['id']))
             else:
-                # Older P1s have no original snapshot. Freeze the values used
-                # for this successful regeneration before any later edit.
-                snapshot_text=capture_p1_snapshot(updated,fee,original_date.isoformat())
-                db.execute('UPDATE invoices SET logo_file=?,p1_snapshot=? WHERE id=?',(logo_file,snapshot_text,row['id']))
+                # Older reminders have no snapshot. Freeze the values used for
+                # this successful regeneration before any later edit.
+                snapshot_text=capture_reminder_snapshot(updated,fee,original_date.isoformat(),level)
+                db.execute(f'UPDATE invoices SET logo_file=?,{snapshot_column}=? WHERE id=?',(logo_file,snapshot_text,row['id']))
         try:
             export_reminder_journal(DB_PATH,JOURNAL_PATH)
         except Exception as exc:
-            logger.exception('P1 logo was updated but JSON journal refresh failed')
+            logger.exception('%s logo was updated but JSON journal refresh failed',level)
             dialog_options={'parent':parent} if parent is not None else {}
             messagebox.showwarning(_('JSON-journalen kunde inte uppdateras'),str(exc),**dialog_options)
-        logger.info('P1 regenerated with a replacement logo: id=%s path=%s',row['id'],result)
+        logger.info('%s regenerated with a replacement logo: id=%s path=%s',level,row['id'],result)
         return result
 
     def write_letter(self,r,level,fee,logo_path='',reminder_date=None,output_path=None,parent=None,reminder_terms=None):

@@ -36,7 +36,7 @@ INVOICE_COLUMNS = (
     "customer", "invoice_no", "due_date", "invoice_date", "template_vendor",
     "reviewed", "logo_file", "amount", "currency", "paid", "email", "source",
     "source_hash", "ignored", "note", "p1_date", "p2_date", "sent_count",
-    "p1_snapshot", "created",
+    "p1_snapshot", "p2_snapshot", "created",
 )
 
 
@@ -195,14 +195,14 @@ def _legacy_events(invoices, settings):
                 continue
             terms = dict(default_terms)
             language = str(settings.get("language") or "sv")
-            if level == "P1":
-                try:
-                    snapshot = json.loads(row.get("p1_snapshot") or "")
-                    if isinstance(snapshot.get("terms"), dict):
-                        terms.update(snapshot["terms"])
-                    language = str(snapshot.get("language") or language)
-                except (TypeError, ValueError, AttributeError):
-                    pass
+            snapshot_column = "p1_snapshot" if level == "P1" else "p2_snapshot"
+            try:
+                snapshot = json.loads(row.get(snapshot_column) or "")
+                if isinstance(snapshot.get("terms"), dict):
+                    terms.update(snapshot["terms"])
+                language = str(snapshot.get("language") or language)
+            except (TypeError, ValueError, AttributeError):
+                pass
             event_id = reminder_event_id(row.get("invoice_no"), level, reminder_date)
             yield {
                 "event_id": event_id,
@@ -572,7 +572,7 @@ def import_journal(database_path, journal_path, source_path, *, now: datetime | 
                     local = db.execute("SELECT * FROM invoices WHERE id=?", (local_id,)).fetchone()
                     updates = []
                     parameters = []
-                    for column in ("p1_date", "p2_date", "p1_snapshot"):
+                    for column in ("p1_date", "p2_date", "p1_snapshot", "p2_snapshot"):
                         if not local[column] and values[column]:
                             updates.append(f"{column}=?")
                             parameters.append(values[column])

@@ -63,6 +63,7 @@ class ReminderWorkflowTests(unittest.TestCase):
         )
         for name in ("selected_logo_path", "logo_file_path", "invoice_logo"):
             setattr(owner, name, MethodType(getattr(self.app.ReminderApp, name), owner))
+        owner.update_reminder_logo = MethodType(self.app.ReminderApp.update_reminder_logo, owner)
         return owner
 
     def test_one_click_creates_p1_then_due_p2_and_opens_only_latest_draft(self):
@@ -79,16 +80,22 @@ class ReminderWorkflowTests(unittest.TestCase):
         self.assertEqual([call.args[1] for call in owner.write_letter.call_args_list], ["P1", "P2"])
         self.assertEqual(confirm.call_count, 2)
         with self.app.connect() as db:
-            saved = db.execute("SELECT p1_date,p2_date,sent_count FROM invoices").fetchone()
+            saved = db.execute("SELECT p1_date,p2_date,sent_count,p1_snapshot,p2_snapshot FROM invoices").fetchone()
             events = db.execute("SELECT level FROM reminder_events ORDER BY level").fetchall()
         self.assertEqual(saved["p1_date"], date.today().isoformat())
         self.assertEqual(saved["p2_date"], date.today().isoformat())
         self.assertEqual(saved["sent_count"], 2)
+        p2_snapshot = self.app.read_reminder_snapshot(saved["p2_snapshot"])
+        self.assertIsNotNone(p2_snapshot)
+        self.assertEqual(p2_snapshot["row"]["p2_date"], date.today().isoformat())
+        self.assertEqual(p2_snapshot["terms"]["fee"], 150.0)
+        self.assertNotIn("p2_snapshot", p2_snapshot["row"])
         self.assertEqual([event[0] for event in events], ["P1", "P2"])
         self.assertEqual(owner.open_reminder_email.call_count, 1)
         self.assertEqual(owner.open_reminder_email.call_args.args[1:], ("P2", p2))
         payload = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
         self.assertEqual({event["level"] for event in payload["reminders"]}, {"P1", "P2"})
+        self.assertEqual(payload["invoices"][0]["p2_snapshot"], saved["p2_snapshot"])
 
     def test_new_p1_does_not_create_p2_before_p2_interval_has_passed(self):
         row = self.save_invoice()

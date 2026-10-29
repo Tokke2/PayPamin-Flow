@@ -56,7 +56,7 @@ class BrandingTests(unittest.TestCase):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "Toplevel":
                     raw_toplevel_creators.add(name)
         self.assertEqual(raw_toplevel_creators, {"_new_toplevel"})
-        expected = {"show_about", "show_update_available", "check_python_addons", "preview_invoice", "invoice_dialog", "edit_p1", "settings"}
+        expected = {"show_about", "show_update_available", "check_python_addons", "preview_invoice", "invoice_dialog", "edit_reminder", "settings"}
         for name in expected:
             with self.subTest(window=name):
                 calls = [node for node in ast.walk(methods[name]) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "_new_toplevel"]

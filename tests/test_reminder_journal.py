@@ -248,6 +248,34 @@ class ReminderJournalTests(unittest.TestCase):
         self.assertEqual(len(restored["reminders"]), 1)
         self.assertEqual(restored["reminders"][0]["language"], "en")
 
+    def test_p2_snapshot_is_included_and_restored_after_reinstall(self):
+        row = self.save_invoice("JSON-P2-SNAPSHOT")
+        snapshot = self.app.capture_reminder_snapshot(row, 175.0, "2026-10-25", "P2")
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET p1_date='2026-10-20',p2_date='2026-10-25',"
+                "sent_count=2,p2_snapshot=? WHERE id=?", (snapshot, row["id"]),
+            )
+        export_journal(self.app.DB_PATH, self.app.JOURNAL_PATH)
+        source = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(source["invoices"][0]["p2_snapshot"], snapshot)
+        p2_event = next(event for event in source["reminders"] if event["level"] == "P2")
+        self.assertEqual(p2_event["terms"]["fee"], 175.0)
+
+        target_db = self.workspace / "reinstalled-p2.sqlite3"
+        target_json = self.workspace / "reinstalled-p2.json"
+        self.app.DB_PATH = target_db
+        self.app.init_db()
+        import_journal(target_db, target_json, self.app.JOURNAL_PATH)
+
+        with closing(sqlite3.connect(target_db)) as db:
+            restored = db.execute(
+                "SELECT p1_date,p2_date,sent_count,p2_snapshot FROM invoices"
+            ).fetchone()
+        self.assertEqual(restored, ("2026-10-20", "2026-10-25", 2, snapshot))
+        restored_json = json.loads(target_json.read_text(encoding="utf-8"))
+        self.assertEqual(restored_json["invoices"][0]["p2_snapshot"], snapshot)
+
     def test_legacy_p1_and_p2_dates_are_included_without_event_rows(self):
         row = self.save_invoice("JSON-LEGACY")
         with self.app.connect() as db:

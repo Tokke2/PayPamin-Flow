@@ -27,6 +27,7 @@ class ReminderEditingTests(unittest.TestCase):
         self.owner = SimpleNamespace(logo_var=SimpleNamespace(get=lambda: "old.svg"))
         for name in ("selected_logo_path", "logo_file_path", "invoice_logo"):
             setattr(self.owner, name, MethodType(getattr(self.app.ReminderApp, name), self.owner))
+        self.owner.update_reminder_logo = MethodType(self.app.ReminderApp.update_reminder_logo, self.owner)
         self.original_date = date(2026, 10, 1)
 
         def cleanup():
@@ -65,6 +66,22 @@ class ReminderEditingTests(unittest.TestCase):
         original_path = self.app.reminder_file_path(row, "P1", self.original_date, "paminnelse")
         original_path.write_bytes(b"original P1")
         return row, original_path
+
+    def save_p2(self, with_snapshot=True, archived=False):
+        row, _ = self.save_p1()
+        p2_date = date(2026, 10, 10)
+        snapshot = ""
+        if with_snapshot:
+            snapshot = self.app.capture_reminder_snapshot(row, 150.0, p2_date.isoformat(), "P2")
+            with self.app.connect() as db:
+                db.execute("UPDATE invoices SET p2_snapshot=? WHERE id=?", (snapshot, row["id"]))
+                row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        original_path = self.app.reminder_file_path(row, "P2", p2_date, "paminnelse")
+        if archived:
+            original_path = original_path.parent / self.app.ARCHIVE_FOLDER_NAME / original_path.name
+            original_path.parent.mkdir(exist_ok=True)
+        original_path.write_bytes(b"original P2")
+        return row, original_path, snapshot
 
     def test_missing_p1_pdf_can_be_recreated_without_new_reminder_history(self):
         row, original_path = self.save_p1()
@@ -178,6 +195,121 @@ class ReminderEditingTests(unittest.TestCase):
         with self.app.connect() as db:
             saved = db.execute("SELECT logo_file,p1_date,p2_date,sent_count FROM invoices WHERE id=?", (row["id"],)).fetchone()
         self.assertEqual(tuple(saved), ("old.svg", "2026-10-01", "2026-10-10", 2))
+
+    def test_p2_logo_edit_uses_snapshot_terms_language_and_archived_path(self):
+        row, original_path, snapshot = self.save_p2(archived=True)
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET amount=9000,paid=100,customer='Changed after P2' WHERE id=?",
+                (row["id"],),
+            )
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.app.set_setting("fee", "999")
+        self.app.set_setting("interest", "99")
+        self.app.set_setting("objection_days", "30")
+        self.app.set_setting("payment_deadline_days", "30")
+        self.app.set_language("en")
+        languages = []
+
+        def write_letter(*args, **kwargs):
+            languages.append(self.app.get_language())
+            return original_path
+
+        self.owner.write_letter = Mock(side_effect=write_letter)
+        result = self.app.ReminderApp.update_p2_logo(self.owner, row, "new.svg")
+
+        self.assertEqual(result, original_path)
+        args, kwargs = self.owner.write_letter.call_args
+        updated, level, fee, logo_path = args
+        self.assertEqual(updated["customer"], "P1 Testkund AB")
+        self.assertEqual(updated["amount"], 1000.0)
+        self.assertEqual(updated["paid"], 0)
+        self.assertEqual((level, fee), ("P2", 150.0))
+        self.assertEqual(logo_path, str((self.app.SVG_DIR / "new.svg").resolve()))
+        self.assertEqual(kwargs["reminder_date"], date(2026, 10, 10))
+        self.assertEqual(kwargs["output_path"], original_path)
+        self.assertEqual(kwargs["reminder_terms"], {
+            "fee": 150.0,
+            "interest": "23",
+            "objection_days": "5",
+            "payment_deadline_days": "5",
+        })
+        self.assertEqual(languages, ["sv"])
+        self.assertEqual(self.app.get_language(), "en")
+        with self.app.connect() as db:
+            saved = db.execute(
+                "SELECT amount,paid,customer,logo_file,p1_date,p2_date,sent_count,p2_snapshot "
+                "FROM invoices WHERE id=?", (row["id"],),
+            ).fetchone()
+            event_count = db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0]
+        self.assertEqual(tuple(saved)[:-1], (
+            9000.0, 100.0, "Changed after P2", "new.svg", "2026-10-01", "2026-10-10", 2,
+        ))
+        self.assertEqual(saved["p2_snapshot"], snapshot)
+        self.assertEqual(event_count, 0)
+
+    def test_legacy_p2_edit_freezes_snapshot_without_changing_history(self):
+        row, original_path, _ = self.save_p2(with_snapshot=False)
+        self.owner.write_letter = Mock(return_value=original_path)
+
+        result = self.app.ReminderApp.update_p2_logo(self.owner, row, "new.svg")
+
+        self.assertEqual(result, original_path)
+        with self.app.connect() as db:
+            saved = db.execute(
+                "SELECT p1_date,p2_date,sent_count,p2_snapshot,logo_file FROM invoices WHERE id=?",
+                (row["id"],),
+            ).fetchone()
+        self.assertEqual(tuple(saved)[:3], ("2026-10-01", "2026-10-10", 2))
+        self.assertEqual(saved["logo_file"], "new.svg")
+        snapshot = self.app.read_reminder_snapshot(saved["p2_snapshot"])
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot["row"]["p2_date"], "2026-10-10")
+        self.assertEqual(snapshot["terms"]["fee"], 150.0)
+        self.assertNotIn("p2_snapshot", snapshot["row"])
+
+    def test_p2_edit_atomically_replaces_existing_pdf_with_original_date(self):
+        row, original_path, _ = self.save_p2()
+        self.owner.write_pdf = Mock(
+            side_effect=lambda path, *args: Path(path).write_bytes(b"replacement P2")
+        )
+        self.owner.write_letter = MethodType(self.app.ReminderApp.write_letter, self.owner)
+
+        with patch.object(self.app, "open_path", return_value=True):
+            result = self.app.ReminderApp.update_p2_logo(self.owner, row, "new.svg")
+
+        self.assertEqual(result, original_path)
+        self.assertEqual(original_path.read_bytes(), b"replacement P2")
+        args = self.owner.write_pdf.call_args.args
+        self.assertEqual(args[2], "P2")
+        self.assertEqual(args[4], date(2026, 10, 10))
+        self.assertNotEqual(args[0], original_path)
+        self.assertFalse(args[0].exists())
+        self.assertEqual(list(self.app.EXPORT_DIR.glob(".paypamin-reminder-*")), [])
+
+    def test_failed_p2_regeneration_preserves_pdf_logo_snapshot_and_history(self):
+        row, original_path, snapshot = self.save_p2()
+        self.owner.write_letter = Mock(return_value=None)
+
+        result = self.app.ReminderApp.update_p2_logo(self.owner, row, "new.svg")
+
+        self.assertIsNone(result)
+        self.assertEqual(original_path.read_bytes(), b"original P2")
+        with self.app.connect() as db:
+            saved = db.execute(
+                "SELECT logo_file,p1_date,p2_date,sent_count,p2_snapshot FROM invoices WHERE id=?",
+                (row["id"],),
+            ).fetchone()
+        self.assertEqual(tuple(saved), ("old.svg", "2026-10-01", "2026-10-10", 2, snapshot))
+
+    def test_invoice_without_p2_is_not_regenerated(self):
+        row, _, _ = self.save_p2()
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p2_date='',p2_snapshot='' WHERE id=?", (row["id"],))
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.owner.write_letter = Mock()
+        self.assertIsNone(self.app.ReminderApp.update_p2_logo(self.owner, row, "new.svg"))
+        self.owner.write_letter.assert_not_called()
 
     def test_broken_svg_is_a_visible_error_and_preserves_previous_pdf(self):
         row, original_path = self.save_p1()
