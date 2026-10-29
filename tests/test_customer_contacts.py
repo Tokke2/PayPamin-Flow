@@ -491,6 +491,51 @@ class CustomerContactTests(unittest.TestCase):
             )
             self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
 
+    def test_windows_thunderbird_attaches_latest_pdf_and_previewed_content(self):
+        row, _ = self.existing_p1(email="current@example.com")
+        snapshot = self.app.capture_reminder_snapshot(row, 150.0, "2026-10-10", "P2")
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET p2_date='2026-10-10',p2_snapshot=?,sent_count=2 WHERE id=?",
+                (snapshot, row["id"]),
+            )
+            row = db.execute("SELECT * FROM invoices").fetchone()
+        pdf_path = self.app.reminder_file_path(row, "P2", date(2026, 10, 10), "paminnelse")
+        pdf_path.write_bytes(b"latest P2")
+
+        def edit_preview(content, shown_path):
+            self.assertEqual(content["attachment_handler"], "thunderbird")
+            edited = dict(content)
+            edited["subject"] = "Redigerat Thunderbird-ämne"
+            edited["body"] = "Redigerad text, med komma och åäö"
+            return edited
+
+        owner = SimpleNamespace(
+            selected=lambda: row,
+            preview_reminder_email=Mock(side_effect=edit_preview), refresh=Mock(),
+        )
+        owner.open_reminder_email = MethodType(self.app.ReminderApp.open_reminder_email, owner)
+        executable = r"C:\Program Files\Mozilla Thunderbird\thunderbird.exe"
+        with patch.object(self.app, "default_thunderbird_executable", return_value=executable):
+            with patch.object(self.app, "open_thunderbird_draft", return_value=True) as open_draft:
+                with patch.object(self.app.webbrowser, "open") as open_url:
+                    opened = self.app.ReminderApp.create_reminder_email(owner)
+
+        self.assertTrue(opened)
+        open_url.assert_not_called()
+        called_executable, content, attached_path = open_draft.call_args.args
+        self.assertEqual(called_executable, executable)
+        self.assertEqual(attached_path, pdf_path)
+        self.assertEqual(content["subject"], "Redigerat Thunderbird-ämne")
+        self.assertEqual(content["body"], "Redigerad text, med komma och åäö")
+        self.assertEqual(content["bcc"], "rl@tadega.com")
+        with self.app.connect() as db:
+            saved = db.execute(
+                "SELECT p1_draft_date,p2_draft_date,p1_sent_date,p2_sent_date,sent_count FROM invoices"
+            ).fetchone()
+            self.assertEqual(tuple(saved), ("", date.today().isoformat(), "", "", 2))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
+
     def test_sent_status_requires_explicit_confirmation_and_changes_no_history(self):
         row, _ = self.existing_p1(email="current@example.com")
         owner = SimpleNamespace(selected=lambda: row, refresh=Mock())

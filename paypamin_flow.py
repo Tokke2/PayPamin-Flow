@@ -39,6 +39,7 @@ from invoice_parser import (
     parse_amount_value, parse_invoice_text,
 )
 from import_watcher import ImportFolderMonitor
+from mail_compose import default_thunderbird_executable, open_thunderbird_draft
 from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders
 from reminder_journal import (
     JOURNAL_FILENAME,
@@ -1835,12 +1836,15 @@ class ReminderApp(tk.Tk):
         result=None
         w=self._new_toplevel(_('Förhandsgranska e-post'));w.grab_set();w.resizable(True,True)
         form=ttk.Frame(w,padding=20);form.pack(fill='both',expand=True)
+        thunderbird=content.get('attachment_handler')=='thunderbird'
         ttk.Label(
             form,text=_('Mottagare: {recipients}',recipients=', '.join(content['recipients'])),wraplength=680,
         ).pack(anchor='w',pady=(0,6))
         ttk.Label(form,text=_('Dold kopia (BCC): {email}',email=REMINDER_BCC)).pack(anchor='w',pady=(0,6))
         ttk.Label(
-            form,text=_('PDF att bifoga manuellt: {path}',path=pdf_path),wraplength=680,
+            form,
+            text=_('PDF som bifogas automatiskt i Thunderbird: {path}',path=pdf_path) if thunderbird else _('PDF att bifoga manuellt: {path}',path=pdf_path),
+            wraplength=680,
         ).pack(anchor='w',pady=(0,12))
         ttk.Label(form,text=_('Ämne')).pack(anchor='w')
         subject_var=tk.StringVar(value=content['subject'])
@@ -1849,7 +1853,8 @@ class ReminderApp(tk.Tk):
         body_text=tk.Text(form,width=90,height=20,wrap='word',undo=True)
         body_text.insert('1.0',content['body']);body_text.pack(fill='both',expand=True,pady=(3,10))
         ttk.Label(
-            form,text=_('Ändringarna gäller bara detta utkast. Bifoga PDF:en och skicka mejlet manuellt i e-postappen.'),
+            form,
+            text=_('Ändringarna gäller bara detta utkast. PDF:en bifogas automatiskt i Thunderbird. Granska och skicka mejlet manuellt.') if thunderbird else _('Ändringarna gäller bara detta utkast. Bifoga PDF:en och skicka mejlet manuellt i e-postappen.'),
             wraplength=680,
         ).pack(anchor='w',pady=(0,12))
         def accept():
@@ -1902,12 +1907,20 @@ class ReminderApp(tk.Tk):
             recipients=reminder_email_addresses(r)
             if not recipients:return False
             content=build_reminder_email_content(r,level,recipients)
+            try:thunderbird=default_thunderbird_executable()
+            except Exception:
+                logger.exception('Thunderbird detection failed; using standard mailto')
+                thunderbird=None
+            content['attachment_handler']='thunderbird' if thunderbird else 'manual'
             preview=getattr(self,'preview_reminder_email',None)
             if preview:
                 content=preview(content,pdf_path)
                 if content is None:return False
-            url=build_reminder_mailto(r,level,recipients,content=content)
-            if not webbrowser.open(url):raise RuntimeError('mailto handler returned False')
+            if thunderbird:
+                if not open_thunderbird_draft(thunderbird,content,pdf_path):raise RuntimeError('Thunderbird compose failed')
+            else:
+                url=build_reminder_mailto(r,level,recipients,content=content)
+                if not webbrowser.open(url):raise RuntimeError('mailto handler returned False')
         except Exception as exc:
             logger.exception('Reminder email draft could not be opened')
             messagebox.showwarning(
@@ -1916,7 +1929,7 @@ class ReminderApp(tk.Tk):
                 parent=self,
             )
             return False
-        logger.info('Opened reminder email draft: invoice=%s level=%s recipients=%d',r['id'],level,len(recipients))
+        logger.info('Opened reminder email draft: invoice=%s level=%s recipients=%d handler=%s',r['id'],level,len(recipients),'thunderbird' if thunderbird else 'mailto')
         try:
             record_reminder_draft_opened(r,level)
             refresh_json_journal(parent=self)
@@ -1994,7 +2007,7 @@ class ReminderApp(tk.Tk):
             fee=float(setting('fee') or 0);locked=setting('fee_locked')=='1'
             template_name=r['template_vendor'] or _('Ingen matchad mall')
             logo_path,logo_name=self.invoice_logo(r)
-            confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. Bifoga PDF:en manuellt; inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
+            confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
             if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
                 break
             day=date.today().isoformat()
