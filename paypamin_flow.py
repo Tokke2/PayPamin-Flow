@@ -29,7 +29,10 @@ from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from console_free import configure_console_free_subprocesses
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
-from invoice_parser import extract_invoice_sections, normalize_amount, normalize_date, parse_invoice_text
+from invoice_parser import (
+    clean_invoice_note, extract_invoice_sections, normalize_date,
+    parse_amount_value, parse_invoice_text,
+)
 from import_watcher import ImportFolderMonitor
 from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders
 from reminder_journal import (
@@ -339,6 +342,21 @@ def save_invoice_record(values,row_id=None):
                     template_vendor=?,amount=?,currency=?,paid=?,email=?,source_hash=?,note=?,reviewed=?,logo_file=?
                     WHERE id=?''',params[:9]+params[10:]+(row_id,))
     return duplicate
+
+
+def refresh_json_journal(parent=None):
+    """Immediately mirror committed changes to the portable JSON journal."""
+    try:
+        export_reminder_journal(DB_PATH,JOURNAL_PATH)
+        return True
+    except Exception as exc:
+        logger.exception('JSON journal refresh after saved change failed')
+        messagebox.showwarning(
+            _('JSON-journalen kunde inte uppdateras'),
+            _('JSON-journalen kunde inte skrivas: {error}',error=exc),
+            parent=parent,
+        )
+        return False
 
 
 def show_duplicate_invoice(duplicate,parent=None):
@@ -1048,13 +1066,14 @@ class ReminderApp(tk.Tk):
         preferred=setting('logo_file') or Path(setting('logo_path')).name
         self.logo_var.set(preferred if preferred in files else choices[0])
 
-    def on_logo_select(self,event=None):
+    def on_logo_select(self,event=None,sync_json=True):
         selected=self.logo_var.get()
         if selected in [p.name for p in SVG_DIR.glob('*.svg')]:
             set_setting('logo_file',selected)
             set_setting('logo_path',str(SVG_DIR/selected))
         else:
             set_setting('logo_file','');set_setting('logo_path','')
+        if sync_json:refresh_json_journal(parent=self)
 
     def selected_logo_path(self):
         selected=self.logo_var.get()
@@ -1156,8 +1175,8 @@ class ReminderApp(tk.Tk):
         raw='\n'.join(x.strip() for x in text.splitlines() if x.strip()).strip()
         if not raw:return ''
         if field=='amount':
-            m=re.search(r'(\d{1,3}(?:[\s.\u00a0\u202f]\d{3})*(?:,\d{2}|\.\d{2})|\d+(?:,\d{2}|\.\d{2}))',raw)
-            return normalize_amount(m.group(1)) if m else ''
+            value=parse_amount_value(raw)
+            return value if value is not None else ''
         if field=='currency':return find_currency_code(raw)
         if field in ('due_date','invoice_date'):
             m=re.search(r'(\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})',raw)
@@ -1166,6 +1185,7 @@ class ReminderApp(tk.Tk):
             m=re.search(r'([A-Z]*\d[A-Z0-9./-]*)',raw,re.I)
             return m.group(1) if m else raw.splitlines()[0]
         if field=='customer':return raw.splitlines()[0][:100]
+        if field=='note':return clean_invoice_note(raw)
         return raw[:300]
 
     def apply_saved_zones(self,path,vendor,guess,page_indexes=None,update_logo=True):
@@ -1348,7 +1368,8 @@ class ReminderApp(tk.Tk):
                         else:db.execute('INSERT INTO vendor_logos(vendor,logo_file) VALUES(?,?)',(vendor_key,logo_file))
                 if save_logo:
                     self.logo_var.set(selected_logo if selected_logo in logo_files else _('(Ingen logotyp)'))
-                    self.on_logo_select()
+                    self.on_logo_select(sync_json=False)
+                refresh_json_journal(parent=win)
                 logger.info('Updated learned invoice template: vendor=%s fields=%s logo_set=%s',vendor_key,','.join(pending),save_logo)
             close_preview()
         def finish(save):
@@ -1531,6 +1552,7 @@ class ReminderApp(tk.Tk):
                 logger.info('Duplicate invoice save blocked: existing_id=%s',duplicate['id'])
                 show_duplicate_invoice(duplicate,parent=w)
                 return
+            refresh_json_journal(parent=w)
             logger.info('Invoice saved/edited: source_type=%s fields=customer,invoice_no,due_date,amount,currency,paid,email,note',Path(vals['source']).suffix.lower() if vals['source'] else 'manual')
             w.destroy();self.refresh()
         ttk.Button(form,text=_('Spara'),command=save,style='Accent.TButton').grid(row=len(fields)+1,column=1,sticky='e',pady=(12,0))
@@ -1543,6 +1565,7 @@ class ReminderApp(tk.Tk):
         if not r:return
         with connect() as db:
             db.execute('UPDATE invoices SET paid=amount WHERE id=?',(r['id'],))
+        refresh_json_journal(parent=self)
         logger.info('Invoice marked as fully paid: id=%s',r['id'])
         self.refresh()
 
@@ -1551,12 +1574,14 @@ class ReminderApp(tk.Tk):
         if not r:return
         new=0 if r['ignored'] else 1
         with connect() as db:db.execute('UPDATE invoices SET ignored=? WHERE id=?',(new,r['id']))
+        refresh_json_journal(parent=self)
         self.refresh()
 
     def delete_invoice(self):
         r=self.selected()
         if r and messagebox.askyesno(_('Ta bort faktura'),_('Ta bort {invoice_no} permanent från den lokala databasen?',invoice_no=r['invoice_no'])):
             with connect() as db:db.execute('DELETE FROM invoices WHERE id=?',(r['id'],))
+            refresh_json_journal(parent=self)
             self.refresh()
 
     def make_reminder(self):
@@ -1875,6 +1900,7 @@ class ReminderApp(tk.Tk):
             set_setting('cache_auto','1' if automatic_cache_var.get() else '0')
             set_setting('language',new_language)
             set_language(new_language)
+            refresh_json_journal(parent=w)
             logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s automatic_import=%s cache_auto=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(automatic_cache_var.get()),new_language)
             w.destroy()
             if language_changed:self.rebuild_ui()

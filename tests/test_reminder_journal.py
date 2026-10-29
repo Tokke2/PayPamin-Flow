@@ -167,6 +167,46 @@ class ReminderJournalTests(unittest.TestCase):
         with self.app.connect() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
 
+    def test_corrected_invoice_settings_and_learned_zones_are_exported_immediately(self):
+        row = self.save_invoice("JSON-CORRECTED")
+        self.app.set_setting("p1_days", "9")
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET amount=6563.0,note='Korrigerad fakturatext' WHERE id=?",
+                (row["id"],),
+            )
+            db.execute("INSERT INTO vendor_logos(vendor,logo_file) VALUES('supplier ab','supplier.svg')")
+            db.execute("INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES('supplier ab','amount',0,0.1,0.2,0.3,0.4,1)")
+            db.execute("INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES('supplier ab','note',0,0.5,0.6,0.7,0.8,1)")
+            db.execute("INSERT INTO pdf_zone_samples(vendor,field,page_index,x0,y0,x1,y1,created) VALUES('supplier ab','amount',0,0.1,0.2,0.3,0.4,'2026-10-29')")
+
+        self.assertTrue(self.app.refresh_json_journal())
+        payload = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
+        invoice = next(item for item in payload["invoices"] if item["invoice_no"] == "JSON-CORRECTED")
+        self.assertEqual(invoice["amount"], 6563.0)
+        self.assertEqual(invoice["note"], "Korrigerad fakturatext")
+        self.assertEqual(payload["settings"]["p1_days"], "9")
+        self.assertEqual({zone["field"] for zone in payload["pdf_zones"]}, {"amount", "note"})
+        self.assertEqual(len(payload["pdf_zone_samples"]), 1)
+        self.assertEqual(payload["vendor_logos"][0]["logo_file"], "supplier.svg")
+
+    def test_marking_invoice_paid_refreshes_json_immediately(self):
+        row = self.save_invoice("JSON-PAID")
+        owner = SimpleNamespace(selected=lambda: row, refresh=lambda: None)
+        self.app.ReminderApp.mark_invoice_paid(owner)
+        payload = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
+        invoice = next(item for item in payload["invoices"] if item["invoice_no"] == "JSON-PAID")
+        self.assertEqual(invoice["paid"], invoice["amount"])
+
+    def test_json_refresh_failure_is_reported(self):
+        with patch.object(self.app, "export_reminder_journal", side_effect=JournalError("synthetic write failure")), patch.object(
+            self.app.messagebox, "showwarning", create=True
+        ) as warning:
+            self.assertFalse(self.app.refresh_json_journal(parent="parent"))
+        warning.assert_called_once()
+        self.assertEqual(warning.call_args.kwargs["parent"], "parent")
+        self.assertIn("synthetic write failure", warning.call_args.args[1])
+
     def test_import_after_reinstall_restores_data_and_repeated_import_is_deduplicated(self):
         row = self.save_invoice()
         self.app.set_setting("fee", "175")

@@ -3,7 +3,10 @@ import types
 import unittest
 from unittest.mock import patch
 
-from invoice_parser import extract_invoice_sections, normalize_amount, parse_invoice_text, split_invoice_pages
+from invoice_parser import (
+    clean_invoice_note, extract_invoice_sections, normalize_amount,
+    parse_amount_value, parse_invoice_text, split_invoice_pages,
+)
 
 
 class InvoiceParserTests(unittest.TestCase):
@@ -106,6 +109,53 @@ class InvoiceParserTests(unittest.TestCase):
     def test_defaults_to_sek_when_no_currency_is_detectable(self):
         text = "Fakturanummer 7003\nATT BETALA 6 563,00"
         self.assertEqual(parse_invoice_text(text)["currency"], "SEK")
+
+    def test_amount_zone_accepts_a_single_whole_amount(self):
+        self.assertEqual(parse_amount_value("6 563 SEK"), 6563.0)
+        self.assertEqual(parse_amount_value("Att betala\n1 250 SEK"), 1250.0)
+
+    def test_amount_zone_uses_payable_total_instead_of_net_or_vat(self):
+        text = "Netto 5 250,00\nMoms 1 312,50\nTotalt att betala 6 563,00"
+        self.assertEqual(parse_amount_value(text), 6563.0)
+        self.assertEqual(parse_amount_value("Summa inkl. moms 7 500,25"), 7500.25)
+
+    def test_amount_zone_rejects_ambiguous_numbers(self):
+        self.assertIsNone(parse_amount_value("5 250,00\n1 312,50\n6 563,00"))
+        self.assertIsNone(parse_amount_value("Netto 5 250,00\nMoms 1 312,50"))
+        self.assertEqual(parse_amount_value("Att betala 0,00 SEK"), 0.0)
+
+    def test_explicit_avser_wins_over_earlier_table_and_keeps_following_lines(self):
+        text = """Fakturanummer: 9001
+Artikel Benämning Antal Summa
+Felaktig tabelltext 100,00
+Avser: Konsulttjänster för oktober
+Andra raden med mer information
+Netto 5 250,00
+Moms 1 312,50
+Att betala 6 563,00"""
+        parsed = parse_invoice_text(text)
+        self.assertEqual(parsed["note"], "Konsulttjänster för oktober Andra raden med mer information")
+        self.assertEqual(parsed["amount"], 6563.0)
+
+    def test_table_note_ignores_numeric_columns_and_supports_more_lines(self):
+        text = """Beskrivning
+Artikel Antal Enhet Pris
+A123 1 st Konsulttjänst 5 250,00
+Andra textraden
+Tredje textraden
+Fjärde textraden
+Femte textraden
+Netto 5 250,00
+Att betala 6 563,00"""
+        parsed = parse_invoice_text(text)
+        self.assertEqual(
+            parsed["note"],
+            "Konsulttjänst Andra textraden Tredje textraden Fjärde textraden Femte textraden",
+        )
+
+    def test_note_cleanup_preserves_a_bare_year(self):
+        self.assertEqual(clean_invoice_note("Medlemsavgift 2026"), "Medlemsavgift 2026")
+        self.assertEqual(clean_invoice_note("Konsulttjänst 5250 SEK"), "Konsulttjänst")
 
 
 class MultiInvoicePdfTests(unittest.TestCase):
