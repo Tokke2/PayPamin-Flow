@@ -20,6 +20,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app_info import APP_NAME, APP_VERSION
+from customer_contacts import (
+    EmailAddressError, ensure_customer_contact_schema, normalize_customer_key,
+    normalize_email_addresses,
+)
 from i18n import _
 
 JOURNAL_FORMAT = 1
@@ -120,7 +124,7 @@ def _read_json(path: Path) -> dict:
         raise JournalError(_("JSON-journalen saknar fakturor eller inställningar."))
     if not isinstance(payload.get("reminders"), list):
         raise JournalError(_("JSON-journalen saknar påminnelsehistorik."))
-    for key in ("invoices", "reminders", "vendor_logos", "pdf_zones", "pdf_zone_samples"):
+    for key in ("invoices", "reminders", "customer_contacts", "vendor_logos", "pdf_zones", "pdf_zone_samples"):
         value = payload.get(key, [])
         if not isinstance(value, list) or len(value) > MAX_JOURNAL_RECORDS:
             raise JournalError(_("JSON-journalen innehåller ogiltiga eller för många poster."))
@@ -262,6 +266,7 @@ def export_journal(database_path, journal_path, *, now: datetime | None = None) 
                 "updated_utc": _timestamp(now),
                 "invoices": invoices,
                 "settings": settings,
+                "customer_contacts": _rows(db, "customer_contacts"),
                 "vendor_logos": _rows(db, "vendor_logos"),
                 "pdf_zones": _rows(db, "pdf_zones"),
                 "pdf_zone_samples": _rows(db, "pdf_zone_samples"),
@@ -482,6 +487,25 @@ def _invoice_values(invoice, now):
     return values
 
 
+def _import_customer_contacts(db, payload):
+    if not _table_exists(db, "customer_contacts"):
+        return
+    for row in payload.get("customer_contacts", []):
+        if not isinstance(row, dict) or not str(row.get("customer_name") or "").strip():
+            raise JournalError(_("JSON-journalen innehåller en ogiltig kundkontakt."))
+        name = " ".join(str(row["customer_name"]).split())
+        key = normalize_customer_key(name)
+        try:
+            emails = normalize_email_addresses(row.get("emails") or "")
+        except EmailAddressError as exc:
+            raise JournalError(_("JSON-journalen innehåller en ogiltig kundkontakt.")) from exc
+        db.execute(
+            """INSERT OR IGNORE INTO customer_contacts
+            (customer_key,customer_name,emails,updated) VALUES(?,?,?,?)""",
+            (key, name, emails, str(row.get("updated") or "")),
+        )
+
+
 def _import_templates(db, payload):
     if _table_exists(db, "vendor_logos"):
         for row in payload.get("vendor_logos", []):
@@ -528,6 +552,7 @@ def import_journal(database_path, journal_path, source_path, *, now: datetime | 
         with closing(sqlite3.connect(database_path)) as db:
             db.row_factory = sqlite3.Row
             ensure_journal_schema(db)
+            ensure_customer_contact_schema(db)
             db.execute("BEGIN IMMEDIATE")
             local_rows = db.execute("SELECT * FROM invoices").fetchall()
             by_number = {}
@@ -574,6 +599,7 @@ def import_journal(database_path, journal_path, source_path, *, now: datetime | 
                         by_hash[values["source_hash"]] = local_id
             for key, value in payload["settings"].items():
                 db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (str(key), str(value)))
+            _import_customer_contacts(db, payload)
             _import_templates(db, payload)
             for imported in payload["reminders"]:
                 if not isinstance(imported, dict) or not imported.get("event_id"):

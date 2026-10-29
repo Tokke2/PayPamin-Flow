@@ -11,6 +11,7 @@ import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib
 from logging.handlers import RotatingFileHandler
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote, urlencode
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -28,6 +29,10 @@ from cache_cleaner import clean_cache
 from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from console_free import configure_console_free_subprocesses
+from customer_contacts import (
+    EmailAddressError, ensure_customer_contact_schema, get_customer_contact,
+    normalize_email_addresses, parse_email_addresses, save_customer_contact,
+)
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
 from invoice_parser import (
     clean_invoice_note, extract_invoice_sections, normalize_date,
@@ -156,6 +161,7 @@ def init_db():
         if 'source_hash' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''")
         if 'p1_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p1_snapshot TEXT DEFAULT ''")
         ensure_journal_schema(db)
+        ensure_customer_contact_schema(db)
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         db.execute("""CREATE TABLE IF NOT EXISTS pdf_zones (
             vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
@@ -182,6 +188,22 @@ def setting(key):
 def set_setting(key,value):
     with connect() as db:
         db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(key,str(value)))
+
+
+def apply_saved_customer_contact(values):
+    """Apply the latest saved customer recipients to an invoice dialog."""
+    customer=str(values.get('customer') or '').strip()
+    if not customer:return values
+    with connect() as db:contact=get_customer_contact(db,customer)
+    if contact is not None:values['email']=contact['emails']
+    return values
+
+
+def reminder_email_addresses(row):
+    """Prefer the customer contact, falling back to legacy invoice email data."""
+    with connect() as db:contact=get_customer_contact(db,row['customer'])
+    email_text=contact['emails'] if contact is not None else row['email']
+    return parse_email_addresses(email_text)
 
 
 def normalize_invoice_number(value):
@@ -321,7 +343,9 @@ def find_duplicate_invoice(invoice_no='',source_hash='',exclude_id=None,db=None)
 
 
 def save_invoice_record(values,row_id=None):
-    """Save inside a write transaction so another app instance cannot race the check."""
+    """Save an invoice and its reusable customer contact in one transaction."""
+    values=dict(values)
+    values['email']=normalize_email_addresses(values.get('email',''))
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         duplicate=find_duplicate_invoice(values['invoice_no'],values.get('source_hash',''),row_id,db)
@@ -341,6 +365,7 @@ def save_invoice_record(values,row_id=None):
                 db.execute('''UPDATE invoices SET customer=?,invoice_no=?,invoice_date=?,due_date=?,
                     template_vendor=?,amount=?,currency=?,paid=?,email=?,source_hash=?,note=?,reviewed=?,logo_file=?
                     WHERE id=?''',params[:9]+params[10:]+(row_id,))
+            save_customer_contact(db,values['customer'],values['email'])
     return duplicate
 
 
@@ -438,6 +463,19 @@ def money(x,currency='SEK'):
     return format_money(x,currency)
 
 
+def build_reminder_mailto(row,level,recipients):
+    """Build a draft for the OS-selected email app; never send automatically."""
+    addresses=parse_email_addresses(','.join(recipients))
+    if not addresses:raise ValueError('At least one recipient is required')
+    subject=_('Betalningspåminnelse {level} – faktura {invoice_no}',level=level,invoice_no=row['invoice_no'])
+    body=_(
+        'Hej!\n\nHär kommer {level} för faktura {invoice_no}.\n\nBelopp: {amount}\nFörfallodatum: {due_date}\n\nVänliga hälsningar',
+        level=level,invoice_no=row['invoice_no'],amount=money(float(row['amount'] or 0),row['currency']),due_date=row['due_date'],
+    )
+    query=urlencode({'subject':subject,'body':body},quote_via=quote)
+    return 'mailto:'+quote(','.join(addresses),safe='@,+._-')+'?'+query
+
+
 def dparse(s):
     try: return date.fromisoformat(s)
     except Exception: return None
@@ -449,6 +487,22 @@ def is_fully_paid(row):
     return float(row['amount'] or 0)-float(row['paid'] or 0)<=0.005
 
 
+def p2_due_date(row):
+    """Respect both the configured P2 interval and the printed P1 deadline."""
+    p1_date=dparse(row['p1_date'])
+    if not p1_date:return None
+    interval_days=int(setting('p2_days') or 5)
+    deadline_days=int(setting('payment_deadline_days') or 5)
+    snapshot=read_p1_snapshot(row['p1_snapshot'] if 'p1_snapshot' in row.keys() else '')
+    if snapshot:
+        try:
+            saved_deadline=snapshot['terms'].get('payment_deadline_days')
+            if saved_deadline not in (None,''):deadline_days=int(saved_deadline)
+        except (TypeError,ValueError):
+            pass
+    return p1_date+timedelta(days=max(interval_days,deadline_days))
+
+
 def next_stage(row):
     if row['ignored']:return 'Ignorerad'
     if is_fully_paid(row): return 'Avslutad'
@@ -458,7 +512,8 @@ def next_stage(row):
     if not row['p1_date']:
         return 'P1 att skapa' if (today-due).days >= int(setting('p1_days') or 5) else 'Väntar P1'
     if not row['p2_date']:
-        return 'P2 att skapa' if (today-dparse(row['p1_date'])).days >= int(setting('p2_days') or 5) else 'Väntar P2'
+        p2_due=p2_due_date(row)
+        return 'P2 att skapa' if p2_due and today>=p2_due else 'Väntar P2'
     if (today-dparse(row['p2_date'])).days >= int(setting('p3_days') or 5): return 'Kronofogden – granska'
     return 'Väntar – efter P2'
 
@@ -982,6 +1037,7 @@ class ReminderApp(tk.Tk):
         self.tree.bind('<Button-2>',self.show_row_context_menu)
         self.row_menu=tk.Menu(self,tearoff=0)
         self.row_menu.add_command(label=_('Redigera faktura'),command=self.edit_invoice)
+        self.row_menu.add_command(label=_('Redigera kund'),command=self.edit_customer)
         self.row_menu.add_command(label=_('Redigera P1'),command=self.edit_p1)
         self.row_menu.add_command(label=_('Markera som betald'),command=self.mark_invoice_paid)
         self.row_menu.add_command(label=_('Ignorera / återaktivera'),command=self.toggle_ignore)
@@ -1008,8 +1064,8 @@ class ReminderApp(tk.Tk):
             if r['ignored'] or remain<=0.005:p2_display='—'
             elif r['p2_date']:p2_display=_('Skickad {date}',date=r['p2_date'])
             elif r['p1_date']:
-                sent=dparse(r['p1_date'])
-                p2_display=(sent+timedelta(days=int(setting('p2_days') or 5))).isoformat() if sent else '—'
+                p2_due=p2_due_date(r)
+                p2_display=p2_due.isoformat() if p2_due else '—'
             else:p2_display='—'
             stage_display=(_('IGNORERAD')+' · ' if r['ignored'] else '')+_(stage)
             self.tree.insert('', 'end',iid=str(r['id']),values=(r['invoice_no'],r['customer'],r['due_date'],money(float(r['amount'] or 0),r['currency']),money(remain,r['currency']),p1_display,p2_display,stage_display,fee))
@@ -1520,6 +1576,40 @@ class ReminderApp(tk.Tk):
         r=self.selected()
         if r:self.invoice_dialog('Redigera faktura',row=r)
 
+    def edit_customer(self):
+        """Edit the selected invoice's customer and reusable recipient list."""
+        r=self.selected()
+        if not r:return
+        values=apply_saved_customer_contact(dict(r))
+        w=self._new_toplevel(_('Redigera kund'));w.grab_set();w.resizable(False,False)
+        form=ttk.Frame(w,padding=20);form.pack()
+        ttk.Label(form,text=_('Kundnamn')).grid(row=0,column=0,sticky='w',padx=(0,12),pady=5)
+        customer_entry=ttk.Entry(form,width=52);customer_entry.grid(row=0,column=1,pady=5);customer_entry.insert(0,r['customer'])
+        ttk.Label(form,text=_('E-postadresser')).grid(row=1,column=0,sticky='w',padx=(0,12),pady=5)
+        email_entry=ttk.Entry(form,width=52);email_entry.grid(row=1,column=1,pady=5);email_entry.insert(0,values.get('email',''))
+        ttk.Label(
+            form,text=_('Flera adresser: separera med kommatecken (,). Kundens adresser återanvänds på nästa faktura till samma kund.'),
+            wraplength=470,
+        ).grid(row=2,column=0,columnspan=2,sticky='w',pady=(5,12))
+        def save():
+            customer=customer_entry.get().strip()
+            if not customer:
+                messagebox.showerror(_('Kontrollera uppgifter'),_('Ange ett kundnamn.'),parent=w);return
+            try:emails=normalize_email_addresses(email_entry.get())
+            except EmailAddressError as exc:
+                messagebox.showerror(_('Ogiltig e-postadress'),_('Kontrollera adressen: {email}',email=exc.address),parent=w);return
+            record=dict(r);record['customer']=customer;record['email']=emails
+            duplicate=save_invoice_record(record,r['id'])
+            if duplicate:
+                show_duplicate_invoice(duplicate,parent=w);return
+            refresh_json_journal(parent=w)
+            logger.info('Customer contact updated: invoice=%s recipients=%d',r['id'],len(parse_email_addresses(emails)))
+            w.destroy();self.refresh()
+        buttons=ttk.Frame(form);buttons.grid(row=3,column=0,columnspan=2,sticky='e')
+        ttk.Button(buttons,text=_('Spara'),command=save,style='Accent.TButton').pack(side='left',padx=(0,7))
+        ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='left')
+        w.wait_window()
+
     def invoice_dialog(self,title,row=None,source='',guess=None,source_hash=''):
         w=self._new_toplevel(_(title));w.grab_set();w.resizable(False,False);w.configure(bg='#f3f5f8')
         fields=[('Kundnamn','customer'),('Fakturanummer','invoice_no'),('Fakturadatum (ÅÅÅÅ-MM-DD)','invoice_date'),('Förfallodatum (ÅÅÅÅ-MM-DD)','due_date'),('Fakturabelopp','amount'),('Valuta (ISO-kod, t.ex. SEK/EUR)','currency'),('Redan betalt','paid'),('E-post','email'),('Fakturatext / Avser','note')]
@@ -1529,6 +1619,7 @@ class ReminderApp(tk.Tk):
         vals['source_hash']=row['source_hash'] if row else source_hash
         vals['template_vendor']=row['template_vendor'] if row else (guess or {}).get('template_vendor','')
         vals['logo_file']=row['logo_file'] if row else (guess or {}).get('logo_file')
+        apply_saved_customer_contact(vals)
         reviewed_var=tk.BooleanVar(value=bool(row['reviewed']) if row else not bool(source))
         entries={};form=ttk.Frame(w,padding=18);form.pack()
         for i,(lab,k) in enumerate(fields):
@@ -1538,6 +1629,9 @@ class ReminderApp(tk.Tk):
             v={k:e.get().strip() for k,e in entries.items()}
             if not v['customer'] or not v['invoice_no'] or not dparse(v['due_date']):messagebox.showerror(_('Kontrollera uppgifter'),_('Kund, fakturanummer och giltigt förfallodatum krävs.'),parent=w);return
             if not is_valid_currency(v['currency']):messagebox.showerror(_('Ogiltig valuta'),_('Ange en valuta med tre bokstäver, till exempel SEK, EUR eller USD.'),parent=w);return
+            try:v['email']=normalize_email_addresses(v['email'])
+            except EmailAddressError as exc:
+                messagebox.showerror(_('Ogiltig e-postadress'),_('Kontrollera adressen: {email}',email=exc.address),parent=w);return
             currency=normalize_currency(v['currency'])
             try:amount=float(v['amount'].replace(' ','').replace(',','.')) if v['amount'] else 0;paid=float(v['paid'].replace(' ','').replace(',','.')) if v['paid'] else 0
             except ValueError:messagebox.showerror(_('Fel belopp'),_('Ange belopp som siffror.'),parent=w);return
@@ -1584,80 +1678,121 @@ class ReminderApp(tk.Tk):
             refresh_json_journal(parent=self)
             self.refresh()
 
+    def open_reminder_email(self,r,level,pdf_path):
+        """Open, but never automatically send, a draft to all customer recipients."""
+        try:
+            recipients=reminder_email_addresses(r)
+            if not recipients:return False
+            url=build_reminder_mailto(r,level,recipients)
+            if not webbrowser.open(url):raise RuntimeError('mailto handler returned False')
+            logger.info('Opened reminder email draft: invoice=%s level=%s recipients=%d',r['id'],level,len(recipients))
+            return True
+        except Exception as exc:
+            logger.exception('Reminder email draft could not be opened')
+            messagebox.showwarning(
+                _('E-postutkastet kunde inte öppnas'),
+                _('Påminnelsen är skapad men e-postappen kunde inte öppnas.\n\nPDF: {path}\n\n{error}',path=pdf_path,error=exc),
+                parent=self,
+            )
+            return False
+
     def make_reminder(self):
         r=self.selected()
         if not r:return
+        latest=None
+        recreated=False
         stage=next_stage(r)
         if r['p1_date'] and stage not in ('Avslutad', 'Ignorerad') and p1_file_missing(r):
-            return self.recreate_p1(r)
+            result=self.recreate_p1(r)
+            if not result:return None
+            recreated=True
+            with connect() as db:r=db.execute('SELECT * FROM invoices WHERE id=?',(r['id'],)).fetchone()
+            latest=(r,'P1',result)
+            stage=next_stage(r)
         if stage not in ('P1 att skapa','P2 att skapa'):
+            if recreated:return latest[2]
             messagebox.showwarning(_('Inte redo'),_('Fakturan är inte redo för påminnelse. Status: {stage}',stage=_(stage)));return
-        level='P1' if stage.startswith('P1') else 'P2'
-        if level == 'P1':
-            try:
-                apply_zones = getattr(self, 'apply_saved_zones', None)
-                zone_applier = None
-                if r['template_vendor'] and apply_zones:
-                    def zone_applier(path, section, pdf_values):
-                        # Reuse learned fields without changing the selected logo.
-                        return apply_zones(
-                            path, r['template_vendor'], pdf_values,
-                            page_indexes=section.page_indexes, update_logo=False,
-                        )
-                source_differences = verify_invoice_source(r, zone_applier=zone_applier)
-            except Exception as exc:
-                logger.exception('Original invoice verification failed before P1: invoice=%s',r['id'])
-                messagebox.showerror(
-                    _('Originalfakturan kunde inte kontrolleras'),
-                    _('P1 skapades inte eftersom original-PDF:en kunde inte läsas.\n\n{error}',error=exc),
-                    parent=self,
-                )
-                return
-            if source_differences:
-                labels = dict(INVOICE_PDF_COMPARE_FIELDS)
-                details = []
-                for difference in source_differences:
-                    field = difference['field']
-                    label = _('Original-PDF / fakturadel') if field == 'source' else _(labels.get(field, field))
-                    saved = difference.get('saved')
-                    actual = difference.get('pdf')
-                    if field == 'source':
-                        actual = _('hittades inte')
-                    saved = '—' if saved in (None, '') else str(saved)
-                    actual = '—' if actual in (None, '') else str(actual)
-                    details.append(_('{label}: sparat {saved} · PDF {actual}',label=label,saved=saved,actual=actual))
-                logger.warning('P1 blocked because saved invoice differs from source PDF: invoice=%s fields=%s',r['id'],','.join(item['field'] for item in source_differences))
-                messagebox.showwarning(
-                    _('Fakturan stämmer inte med original-PDF:en'),
-                    _('P1 skapades inte. Kontrollera och redigera fakturan innan du försöker igen.\n\n{details}',details='\n'.join(details)),
-                    parent=self,
-                )
-                return
-        fee=float(setting('fee') or 0);locked=setting('fee_locked')=='1'
-        template_name=r['template_vendor'] or _('Ingen matchad mall')
-        logo_path,logo_name=self.invoice_logo(r)
-        confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nAppen skickar inte e-post automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
-        if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
-            return
-        day=date.today().isoformat()
-        p1_snapshot=capture_p1_snapshot(r,fee,day) if level=='P1' else ''
-        with connect() as db:
-            if level=='P1':db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1 WHERE id=?',(day,p1_snapshot,r['id']))
-            else:db.execute('UPDATE invoices SET p2_date=?,sent_count=sent_count+1 WHERE id=?',(day,r['id']))
-        result=self.write_letter(r,level,fee,logo_path)
-        if result:
-            try:
-                record_reminder_journal(
-                    DB_PATH,JOURNAL_PATH,r['id'],level,day,fee,current_reminder_terms(fee),
-                    get_language(),Path(logo_path).name if logo_path else (r['logo_file'] or ''),Path(str(result)).name,
-                )
-                logger.info('Reminder journal updated: invoice=%s level=%s date=%s',r['id'],level,day)
-            except Exception as exc:
-                # The PDF and SQLite reminder are already valid; do not undo
-                # them because the supplementary journal could not be written.
-                logger.exception('Reminder was created but JSON journal update failed')
-                messagebox.showwarning(_('JSON-journalen kunde inte uppdateras'),str(exc),parent=self)
+
+        while stage in ('P1 att skapa','P2 att skapa'):
+            level='P1' if stage.startswith('P1') else 'P2'
+            if level == 'P1':
+                try:
+                    apply_zones = getattr(self, 'apply_saved_zones', None)
+                    zone_applier = None
+                    if r['template_vendor'] and apply_zones:
+                        def zone_applier(path, section, pdf_values):
+                            # Reuse learned fields without changing the selected logo.
+                            return apply_zones(
+                                path, r['template_vendor'], pdf_values,
+                                page_indexes=section.page_indexes, update_logo=False,
+                            )
+                    source_differences = verify_invoice_source(r, zone_applier=zone_applier)
+                except Exception as exc:
+                    logger.exception('Original invoice verification failed before P1: invoice=%s',r['id'])
+                    messagebox.showerror(
+                        _('Originalfakturan kunde inte kontrolleras'),
+                        _('P1 skapades inte eftersom original-PDF:en kunde inte läsas.\n\n{error}',error=exc),
+                        parent=self,
+                    )
+                    return latest[2] if latest else None
+                if source_differences:
+                    labels = dict(INVOICE_PDF_COMPARE_FIELDS)
+                    details = []
+                    for difference in source_differences:
+                        field = difference['field']
+                        label = _('Original-PDF / fakturadel') if field == 'source' else _(labels.get(field, field))
+                        saved = difference.get('saved')
+                        actual = difference.get('pdf')
+                        if field == 'source':
+                            actual = _('hittades inte')
+                        saved = '—' if saved in (None, '') else str(saved)
+                        actual = '—' if actual in (None, '') else str(actual)
+                        details.append(_('{label}: sparat {saved} · PDF {actual}',label=label,saved=saved,actual=actual))
+                    logger.warning('P1 blocked because saved invoice differs from source PDF: invoice=%s fields=%s',r['id'],','.join(item['field'] for item in source_differences))
+                    messagebox.showwarning(
+                        _('Fakturan stämmer inte med original-PDF:en'),
+                        _('P1 skapades inte. Kontrollera och redigera fakturan innan du försöker igen.\n\n{details}',details='\n'.join(details)),
+                        parent=self,
+                    )
+                    return latest[2] if latest else None
+            fee=float(setting('fee') or 0);locked=setting('fee_locked')=='1'
+            template_name=r['template_vendor'] or _('Ingen matchad mall')
+            logo_path,logo_name=self.invoice_logo(r)
+            confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nE-postutkast öppnas i systemets valda e-postapp om kunden har adresser. Bifoga PDF:en manuellt; inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
+            if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
+                break
+            day=date.today().isoformat()
+            p1_snapshot=capture_p1_snapshot(r,fee,day) if level=='P1' else ''
+            with connect() as db:
+                if level=='P1':db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1 WHERE id=?',(day,p1_snapshot,r['id']))
+                else:db.execute('UPDATE invoices SET p2_date=?,sent_count=sent_count+1 WHERE id=?',(day,r['id']))
+            result=self.write_letter(r,level,fee,logo_path)
+            if result:
+                latest=(r,level,result)
+                try:
+                    record_reminder_journal(
+                        DB_PATH,JOURNAL_PATH,r['id'],level,day,fee,current_reminder_terms(fee),
+                        get_language(),Path(logo_path).name if logo_path else (r['logo_file'] or ''),Path(str(result)).name,
+                    )
+                    logger.info('Reminder journal updated: invoice=%s level=%s date=%s',r['id'],level,day)
+                except Exception as exc:
+                    # The PDF and SQLite reminder are already valid; do not undo
+                    # them because the supplementary journal could not be written.
+                    logger.exception('Reminder was created but JSON journal update failed')
+                    messagebox.showwarning(_('JSON-journalen kunde inte uppdateras'),str(exc),parent=self)
+            else:
+                break
+            if level=='P2':break
+            with connect() as db:r=db.execute('SELECT * FROM invoices WHERE id=?',(r['id'],)).fetchone()
+            stage=next_stage(r)
+
         self.refresh()
+        if latest:
+            latest_row,latest_level,latest_result=latest
+            opener=getattr(self,'open_reminder_email',None)
+            if opener:opener(latest_row,latest_level,latest_result)
+            return latest_result
+        return None
 
     def recreate_p1(self,row=None):
         """Recreate a missing P1 PDF without creating a new reminder event."""

@@ -13,10 +13,12 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 - **Valuta per faktura** med SEK som standard och redigerbara ISO-koder, exempelvis EUR, USD, NOK och DKK. Belopp växlas inte mellan valutor.
 - **Automatisk bevakning av importmappen** upptäcker nya Fortnox-PDF:er utan API eller integrationslicens. Filer väntas in tills de är färdigskrivna och varje ny faktura granskas innan den sparas. Dubbletter stoppas via fakturanummer, sökväg eller identiskt PDF-innehåll, även om filen döpts om.
 - **P1/P2-dialog efter importmappsskanning:** efter manuell eller automatisk behandling av PDF-filer visar en dialog fakturanummer, kund och nivå för fakturor som är redo för P1 eller P2. Betalda, ignorerade, ogranskade och väntande fakturor aviseras inte; ingen påminnelse skapas automatiskt.
+- **Återanvändbara kundkontakter:** högerklicka på en faktura och välj **Redigera kund** för kundnamn och flera e-postadresser separerade med komma. Adresslistan sparas i databasen och JSON-journalen och fylls i automatiskt på nästa faktura till samma kund.
+- **E-postutkast efter generering:** när P1/P2 har skapats öppnas systemets valda e-postapp med ett utkast till alla kundens adresser. PDF:en bifogas manuellt och inget mejl skickas automatiskt. Om kunden saknar adresser öppnas ingen e-postapp.
 - PDF-förhandsgranskning med markerbara fältområden och återanvändbara leverantörsmallar. Markerade belopp och fakturatext använder samma tolkning som automatisk import. En beloppsruta med flera oetiketterade eller tvetydiga tal skriver inte över det tidigare värdet; markera i stället en snävare ruta runt etiketten och slutbeloppet.
 - Innan **P1** skapas kontrolleras en befintlig original-PDF mot fakturans sparade fakturanummer, kund, datum, belopp, valuta och fakturatext. Sparade fältmallar används vid kontrollen; avvikelser stoppar P1 utan att ändra fakturan eller påminnelsehistoriken. Manuella fakturor utan PDF fungerar som tidigare.
 - SVG-logotyp kan kopplas till en leverantörsmall och återanvändas vid export. Ett logotypval i PDF-matchningen sparas även direkt på fakturan och följer med till P1/P2 utan att fältmallen behöver sparas; valet påverkas inte av en senare global logotypändring.
-- Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta. **Redigera P1** kan byta logotyp och skriva om den befintliga P1-PDF:en med ursprungligt datum, originaldata och oförändrade villkor/historik via en intern P1-snapshot; den gamla filen bevaras om skrivningen misslyckas. Om en registrerad P1-PDF saknas kan **Skapa påminnelse** återskapa den med ursprungligt datum och oförändrad historik. En skadad eller oläsbar SVG ger ett tydligt fel i stället för att tyst ersättas med textlogotyp.
+- Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta. **Skapa påminnelse** skapar en aktuell men saknad P1 och kan därefter fortsätta till P2 i samma klick när både P2-intervallet och P1:s sparade betalningsfrist har passerat; inget steg skapas i förtid. **Redigera P1** kan byta logotyp och skriva om den befintliga P1-PDF:en med ursprungligt datum, originaldata och oförändrade villkor/historik via en intern P1-snapshot; den gamla filen bevaras om skrivningen misslyckas. Om en registrerad P1-PDF saknas återskapas den först med ursprungligt datum och oförändrad historik, varefter en aktuell P2 kan skapas. En skadad eller oläsbar SVG ger ett tydligt fel i stället för att tyst ersättas med textlogotyp.
 - Samma PayPamin Flow-ikon i fönster, dialoger, programmenyer och systemfältet.
 - **Stäng eller minimera till systemfältet:** fönstrets stäng- och minimeringsknappar döljer appen medan schemalagda kontroller fortsätter. **Arkiv → Avsluta helt** eller systemfältets **Avsluta helt** stänger appen helt.
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
@@ -96,11 +98,25 @@ På Windows använder appen en egen app-identitet för aktivitetsfältets PayPam
 - Markera en faktura och välj **Markera som betald** i knappraden eller högerklicksmenyn. Beloppet **Redan betalt** sätts till hela fakturabeloppet och statusen blir **Avslutad**. Betalda fakturor visas under **Visa → Alla** och kan korrigeras via **Redigera faktura** vid behov.
 - Om samma faktura ligger kvar i importmappen hoppas den över vid senare import via fakturanummer eller PDF-identitet. Automatisk import hoppar över betalda fakturor tyst; manuella sammanfattningar visar dem separat från vanliga dubbletter. Cache-rensningen tar inte bort PDF:en från importmappen.
 
+## Kundens e-post och P1/P2 i samma klick
+
+1. Markera en faktura, högerklicka och välj **Redigera kund**.
+2. Ange en eller flera adresser, till exempel `fornamn@example.com, ekonomi@example.com`. Mellanslag runt kommatecken och dubbletter med olika gemener/versaler hanteras automatiskt. Ogiltiga adresser stoppas med ett felmeddelande.
+3. Spara. Adresslistan återanvänds nästa gång en faktura med samma normaliserade kundnamn granskas eller läggs till. Den kan också ändras genom det vanliga fakturaformulärets e-postfält.
+
+När en påminnelse har genererats öppnas ett `mailto:`-utkast i **systemets valda e-postapp**, med samtliga sparade kundadresser som mottagare och med fakturanummer, nivå, belopp och förfallodatum i utkastet. E-postklienter hanterar PDF-bilagor inte på ett enhetligt sätt via `mailto:`; bifoga därför den genererade PDF:en manuellt innan du skickar. Appen skickar aldrig mejl i bakgrunden. Om både P1 och P2 skapas i samma klick öppnas utkastet för den senast skapade nivån.
+
+**Skapa påminnelse** beter sig så här:
+
+- Saknas P1 och fakturan är redo för P1 skapas den efter samma granskning och bekräftelse som tidigare.
+- Saknas P1-PDF:en men P1 redan finns i historiken återskapas filen med ursprungligt datum utan en ny P1-händelse.
+- Därefter skapas P2 om både inställningen **Dagar efter P1 till P2** och den betalningsfrist som sparades på P1 tillåter det. Annars stannar flödet efter P1.
+
 ## Säkerhetskopiering och återställning
 
 Välj **Arkiv → Säkerhetskopiera inställningar och påminnelser** och spara ZIP-filen på en säker plats. Säkerhetskopian innehåller:
 
-- den lokala databasen med inställningar, fakturor, leverantörsmallar och PDF-fältområden;
+- den lokala databasen med inställningar, fakturor, kundkontakter, leverantörsmallar och PDF-fältområden;
 - skapade påminnelse-PDF:er från `export/`;
 - företagslogotyper från `svg/`;
 - ett manifest med format, version, tidsstämpel och SHA-256-kontrollsummor.
@@ -111,10 +127,10 @@ Välj **Arkiv → Återställ säkerhetskopia** för att återställa. Arkivets 
 
 ## JSON-journal och automatisk veckokopia
 
-**`~/.paminnelseapp/reminder_journal.json`** uppdateras atomiskt direkt efter att en faktura eller inlärd leverantörsmall sparas, inställningar eller logotypval ändras, en faktura markeras som betald/ignorerad eller tas bort, samt efter varje **lyckad P1/P2-generering**. Korrigerade belopp och fakturatext samt inlärda PDF-fält och deras urval behöver därför inte vänta på veckokopian. Journalen innehåller aktuella fakturor, inställningar, leverantörslogotypval, PDF-fältmallar och fälturval samt en bestående historik för varje påminnelse med nivå, datum, avgift, villkor, språk, logotypval, PDF-filnamn och fakturans innehåll vid tillfället. Äldre P1/P2-datum utan tidigare journal tas med automatiskt. Ett JSON-skrivfel visas för användaren; den redan sparade databasändringen påverkas inte.
+**`~/.paminnelseapp/reminder_journal.json`** uppdateras atomiskt direkt efter att en faktura eller inlärd leverantörsmall sparas, inställningar eller logotypval ändras, en faktura markeras som betald/ignorerad eller tas bort, samt efter varje **lyckad P1/P2-generering**. Korrigerade belopp och fakturatext samt inlärda PDF-fält och deras urval behöver därför inte vänta på veckokopian. Journalen innehåller aktuella fakturor, kundkontakter och deras e-postadresser, inställningar, leverantörslogotypval, PDF-fältmallar och fälturval samt en bestående historik för varje påminnelse med nivå, datum, avgift, villkor, språk, logotypval, PDF-filnamn och fakturans innehåll vid tillfället. Äldre P1/P2-datum utan tidigare journal tas med automatiskt. Ett JSON-skrivfel visas för användaren; den redan sparade databasändringen påverkas inte.
 
 - En automatisk kopia skapas **en gång per ISO-vecka medan appen körs**. Kontrollen görs vid start och därefter en gång i timmen. JSON-kopian sparas som `reminder-journal-ÅÅÅÅ-Wvv.json` under **`~/.paminnelseapp/backups/journal/`**. Samma vecka skapas även `reminder-journal-ÅÅÅÅ-Wvv-files.zip` med hela `import/`- och `export/`-mapparna, inklusive undermappar och tomma kataloger. Om någon del av veckoparet saknas eller är skadat återskapas det utan att vänta till nästa vecka.
-- Efter ominstallation väljer du **Arkiv → Importera JSON-journal** och väljer huvudfilen eller en veckokopia. Fakturor, inställningar, mallar och påminnelsehistorik återställs. Befintliga fakturor slås samman utan dubbletter; lokala fakturaändringar skrivs inte över, medan saknad påminnelsehistorik kompletteras. JSON-importen skriver inte över `import/` eller `export/`; packa upp veckans `-files.zip` manuellt om du även vill återställa filerna.
+- Efter ominstallation väljer du **Arkiv → Importera JSON-journal** och väljer huvudfilen eller en veckokopia. Fakturor, kundkontakter, inställningar, mallar och påminnelsehistorik återställs. Befintliga fakturor slås samman utan dubbletter; lokala fakturaändringar och kundkontakter skrivs inte över, medan saknade kontakter och påminnelsehistorik kompletteras. JSON-importen skriver inte över `import/` eller `export/`; packa upp veckans `-files.zip` manuellt om du även vill återställa filerna.
 - JSON-filen innehåller PDF-filnamn men inte själva PDF- eller SVG-filerna. Veckans `-files.zip` innehåller originalfakturor och skapade påminnelse-PDF:er. Använd den manuella ZIP-säkerhetskopian för att även flytta logotypfiler. Påminnelsehistoriken finns även i databasen och följer därför med manuella ZIP-säkerhetskopior.
 
 ## Uppdateringar i appen

@@ -27,6 +27,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "cache_cleaner.py",
     "console_free.py",
     "currency.py",
+    "customer_contacts.py",
     "i18n.py",
     "import_watcher.py",
     "invoice_parser.py",
