@@ -6,8 +6,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
+from email.message import EmailMessage
+from email.policy import SMTP
 from pathlib import Path
-from urllib.parse import quote
 
 
 USERCHOICE_MAILTO_KEY = (
@@ -124,49 +127,102 @@ def default_thunderbird_executable():
     return _find_thunderbird_executable()
 
 
-def build_thunderbird_compose(content, pdf_path):
-    """Build Thunderbird's -compose value with one fixed, existing PDF attachment.
+DRAFT_PREFIX = "paypamin-flow-draft-"
+DRAFT_MAX_AGE_SECONDS = 24 * 60 * 60
 
-    Thunderbird percent-decodes unquoted option values after splitting the options.
-    Encoding every value therefore preserves commas, quotes, Unicode and newlines.
+
+def build_thunderbird_draft(content, pdf_path):
+    """Return an unsent MIME draft with the PDF embedded as a real attachment.
+
+    Thunderbird 91 and later opens an .eml file with X-Unsent: 1 directly in
+    its compose window. Embedding the attachment avoids the separate -compose
+    attachment parser, including its URI, comma and Windows-path edge cases.
     """
-    native_path = Path(pdf_path).expanduser().resolve()
-    # Native paths avoid file-URI resolution differences on Windows. Keep a
-    # file URI for comma-containing paths so Thunderbird's own URI comma
-    # workaround can preserve the attachment boundary.
-    attachment = native_path.as_uri() if "," in str(native_path) else str(native_path)
-    fields = {
-        "to": ",".join(content["recipients"]),
-        "bcc": content["bcc"],
-        "subject": content["subject"],
-        "body": content["body"],
-        "attachment": attachment,
-    }
-    return ",".join(
-        f"{name}={quote(str(value), safe='')}" for name, value in fields.items()
-    ) + ",format=text"
+    pdf_path = Path(pdf_path).expanduser().resolve()
+    pdf_data = pdf_path.read_bytes()
+    if not pdf_data:
+        raise ValueError(f"Reminder PDF is empty: {pdf_path}")
+
+    message = EmailMessage(policy=SMTP)
+    message["X-Unsent"] = "1"
+    message["To"] = ", ".join(content["recipients"])
+    message["Bcc"] = content["bcc"]
+    message["Subject"] = content["subject"]
+    message.set_content(content["body"], subtype="plain", charset="utf-8")
+    message.add_attachment(
+        pdf_data,
+        maintype="application",
+        subtype="pdf",
+        filename=pdf_path.name,
+    )
+    return message.as_bytes(policy=SMTP)
+
+
+def cleanup_stale_thunderbird_drafts(directory=None, now=None):
+    """Remove only our own day-old temporary drafts, never arbitrary files."""
+    directory = Path(directory) if directory is not None else Path(tempfile.gettempdir())
+    cutoff = (time.time() if now is None else now) - DRAFT_MAX_AGE_SECONDS
+    try:
+        candidates = directory.iterdir()
+        for path in candidates:
+            if not path.name.startswith(DRAFT_PREFIX) or path.suffix != ".eml":
+                continue
+            try:
+                if path.is_file() and path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except OSError:
+                # A draft may still be open. Leave it for a later cleanup.
+                continue
+    except OSError:
+        return
+
+
+def write_thunderbird_draft(content, pdf_path, directory=None):
+    """Write a complete unsent draft and close it before Thunderbird opens it."""
+    draft_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=DRAFT_PREFIX,
+            suffix=".eml",
+            dir=directory,
+            delete=False,
+        ) as draft:
+            draft_path = Path(draft.name)
+            draft.write(build_thunderbird_draft(content, pdf_path))
+    except Exception:
+        if draft_path is not None:
+            try:
+                draft_path.unlink()
+            except OSError:
+                pass
+        raise
+    return draft_path
 
 
 def open_thunderbird_draft(executable, content, pdf_path):
-    """Open a compose window with the PDF attached; never send or use a shell."""
-    pdf_path = Path(pdf_path).expanduser().resolve()
-    if not pdf_path.is_file():
-        raise FileNotFoundError(f"Reminder PDF does not exist: {pdf_path}")
-    with pdf_path.open("rb") as attachment:
-        if not attachment.read(1):
-            raise ValueError(f"Reminder PDF is empty: {pdf_path}")
-    command = [str(executable), "-compose", build_thunderbird_compose(content, pdf_path)]
+    """Open an unsent .eml draft in Thunderbird; never send or use a shell."""
+    cleanup_stale_thunderbird_drafts()
+    draft_path = write_thunderbird_draft(content, pdf_path)
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-    # A successful launch means the compose request was handed to Thunderbird;
-    # only the user can visually confirm the attachment in the compose window.
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=no_window,
-    )
-    return_code = process.poll()
-    if return_code not in (None, 0):
-        raise RuntimeError(f"Thunderbird exited immediately with code {return_code}")
+    try:
+        # Thunderbird detects X-Unsent: 1 and opens this file as an editable
+        # draft. Keep the file available for its asynchronous reader; stale
+        # PayPamin drafts are removed on later launches.
+        process = subprocess.Popen(
+            [str(executable), str(draft_path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=no_window,
+        )
+        return_code = process.poll()
+        if return_code not in (None, 0):
+            raise RuntimeError(f"Thunderbird exited immediately with code {return_code}")
+    except Exception:
+        try:
+            draft_path.unlink()
+        except OSError:
+            pass
+        raise
     return True
