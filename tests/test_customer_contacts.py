@@ -351,6 +351,171 @@ class CustomerContactTests(unittest.TestCase):
         self.assertFalse(opened)
         open_url.assert_not_called()
 
+    def test_existing_database_is_migrated_with_email_status_columns(self):
+        legacy_db = self.workspace / "legacy.sqlite3"
+        with closing(sqlite3.connect(legacy_db)) as db:
+            db.execute("CREATE TABLE invoices (id INTEGER PRIMARY KEY, invoice_no TEXT NOT NULL)")
+        original_db = self.app.DB_PATH
+        self.app.DB_PATH = legacy_db
+        try:
+            self.app.init_db()
+        finally:
+            self.app.DB_PATH = original_db
+        with closing(sqlite3.connect(legacy_db)) as db:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(invoices)")}
+        self.assertTrue({
+            "p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date",
+        }.issubset(columns))
+
+    def test_cancelled_email_preview_opens_nothing_and_records_nothing(self):
+        row, pdf_path = self.existing_p1(email="current@example.com")
+        owner = SimpleNamespace(
+            preview_reminder_email=Mock(return_value=None), refresh=Mock(),
+        )
+        with patch.object(self.app.webbrowser, "open") as open_url:
+            opened = self.app.ReminderApp.open_reminder_email(owner, row, "P1", pdf_path)
+        self.assertFalse(opened)
+        open_url.assert_not_called()
+        owner.preview_reminder_email.assert_called_once()
+        owner.refresh.assert_not_called()
+        with self.app.connect() as db:
+            status = db.execute(
+                "SELECT p1_draft_date,p2_draft_date,p1_sent_date,p2_sent_date,sent_count FROM invoices"
+            ).fetchone()
+            self.assertEqual(tuple(status), ("", "", "", "", 1))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
+
+    def test_failed_mailto_opening_records_no_draft_status(self):
+        row, pdf_path = self.existing_p1(email="current@example.com")
+        owner = SimpleNamespace(
+            preview_reminder_email=Mock(side_effect=lambda content, path: content), refresh=Mock(),
+        )
+        with patch.object(self.app.webbrowser, "open", return_value=False):
+            with patch.object(self.app.messagebox, "showwarning", create=True) as warning:
+                opened = self.app.ReminderApp.open_reminder_email(owner, row, "P1", pdf_path)
+        self.assertFalse(opened)
+        warning.assert_called_once()
+        owner.refresh.assert_not_called()
+        with self.app.connect() as db:
+            status = db.execute(
+                "SELECT p1_draft_date,p2_draft_date,p1_sent_date,p2_sent_date,sent_count FROM invoices"
+            ).fetchone()
+            self.assertEqual(tuple(status), ("", "", "", "", 1))
+
+    def test_accepted_email_preview_uses_temporary_edits_and_records_draft(self):
+        row, pdf_path = self.existing_p1(email="first@example.com, second@example.com")
+
+        def edit_preview(content, shown_path):
+            self.assertEqual(content["recipients"], ["first@example.com", "second@example.com"])
+            self.assertEqual(content["bcc"], "rl@tadega.com")
+            self.assertEqual(shown_path, pdf_path)
+            edited = dict(content)
+            edited["subject"] = "Tillfälligt ämne"
+            edited["body"] = "Tillfälligt meddelande"
+            return edited
+
+        owner = SimpleNamespace(
+            preview_reminder_email=Mock(side_effect=edit_preview), refresh=Mock(),
+        )
+        with patch.object(self.app.webbrowser, "open", return_value=True) as open_url:
+            opened = self.app.ReminderApp.open_reminder_email(owner, row, "P1", pdf_path)
+        self.assertTrue(opened)
+        parsed = urlsplit(open_url.call_args.args[0])
+        query = parse_qs(parsed.query)
+        self.assertEqual(unquote(parsed.path), "first@example.com,second@example.com")
+        self.assertEqual(query["bcc"], ["rl@tadega.com"])
+        self.assertEqual(query["subject"], ["Tillfälligt ämne"])
+        self.assertEqual(query["body"], ["Tillfälligt meddelande"])
+        standard = self.app.build_reminder_email_content(
+            row, "P1", ["first@example.com", "second@example.com"]
+        )
+        self.assertNotEqual(standard["subject"], "Tillfälligt ämne")
+        self.assertNotEqual(standard["body"], "Tillfälligt meddelande")
+        with self.app.connect() as db:
+            saved = db.execute(
+                "SELECT p1_draft_date,p2_draft_date,p1_sent_date,p2_sent_date,sent_count FROM invoices"
+            ).fetchone()
+            self.assertEqual(tuple(saved), (date.today().isoformat(), "", "", "", 1))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
+        journal = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(journal["invoices"][0]["p1_draft_date"], date.today().isoformat())
+        owner.refresh.assert_called_once()
+
+    def test_email_status_is_per_level_and_always_shows_latest(self):
+        row, _ = self.existing_p1(email="current@example.com")
+        self.assertEqual(self.app.latest_reminder_level(row), "P1")
+        self.assertEqual(self.app.reminder_email_status(row), "P1 · utkast ej öppnat")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p1_draft_date='2026-10-02'")
+            row = db.execute("SELECT * FROM invoices").fetchone()
+        self.assertEqual(self.app.reminder_email_status(row), "P1 · utkast öppnat 2026-10-02")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p1_sent_date='2026-10-03'")
+            row = db.execute("SELECT * FROM invoices").fetchone()
+        self.assertEqual(self.app.reminder_email_status(row), "P1 · skickad 2026-10-03")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p2_date='2026-10-10',sent_count=2")
+            row = db.execute("SELECT * FROM invoices").fetchone()
+        self.assertEqual(self.app.latest_reminder_level(row), "P2")
+        self.assertEqual(self.app.reminder_email_status(row), "P2 · utkast ej öppnat")
+        self.assertEqual(self.app.reminder_email_status(row, "P1"), "P1 · skickad 2026-10-03")
+        self.assertEqual(row["p1_sent_date"], "2026-10-03")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p2_draft_date='2026-10-11',p2_sent_date='2026-10-12'")
+            row = db.execute("SELECT * FROM invoices").fetchone()
+        self.assertEqual(self.app.reminder_email_status(row), "P2 · skickad 2026-10-12")
+        self.assertEqual(row["p1_draft_date"], "2026-10-02")
+
+    def test_opening_p2_draft_preserves_p1_status_and_reminder_history(self):
+        row, pdf_path = self.existing_p1(email="current@example.com")
+        snapshot = self.app.capture_reminder_snapshot(row, 150.0, "2026-10-10", "P2")
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET p2_date='2026-10-10',p2_snapshot=?,sent_count=2,p1_draft_date='2026-10-02',p1_sent_date='2026-10-03' WHERE id=?",
+                (snapshot, row["id"]),
+            )
+            row = db.execute("SELECT * FROM invoices").fetchone()
+        owner = SimpleNamespace(
+            preview_reminder_email=Mock(side_effect=lambda content, path: content), refresh=Mock(),
+        )
+        with patch.object(self.app.webbrowser, "open", return_value=True):
+            opened = self.app.ReminderApp.open_reminder_email(owner, row, "P2", pdf_path)
+        self.assertTrue(opened)
+        with self.app.connect() as db:
+            saved = db.execute(
+                "SELECT p1_draft_date,p1_sent_date,p2_draft_date,p2_sent_date,p1_date,p2_date,sent_count,p1_snapshot,p2_snapshot FROM invoices"
+            ).fetchone()
+            self.assertEqual(
+                tuple(saved),
+                ("2026-10-02", "2026-10-03", date.today().isoformat(), "", "2026-10-01", "2026-10-10", 2, row["p1_snapshot"], snapshot),
+            )
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
+
+    def test_sent_status_requires_explicit_confirmation_and_changes_no_history(self):
+        row, _ = self.existing_p1(email="current@example.com")
+        owner = SimpleNamespace(selected=lambda: row, refresh=Mock())
+        with patch.object(self.app.messagebox, "askyesno", return_value=False, create=True):
+            marked = self.app.ReminderApp.mark_reminder_email_sent(owner)
+        self.assertFalse(marked)
+        owner.refresh.assert_not_called()
+        with self.app.connect() as db:
+            self.assertEqual(db.execute("SELECT p1_sent_date FROM invoices").fetchone()[0], "")
+        with patch.object(self.app.messagebox, "askyesno", return_value=True, create=True) as confirm:
+            with patch.object(self.app.webbrowser, "open") as open_url:
+                marked = self.app.ReminderApp.mark_reminder_email_sent(owner)
+        self.assertTrue(marked)
+        self.assertIn("inte kontrollera e-postprogrammet", confirm.call_args.args[1])
+        open_url.assert_not_called()
+        owner.refresh.assert_called_once()
+        with self.app.connect() as db:
+            saved = db.execute(
+                "SELECT p1_sent_date,p2_sent_date,sent_count,p1_date,p2_date FROM invoices"
+            ).fetchone()
+            self.assertEqual(tuple(saved), (date.today().isoformat(), "", 1, "2026-10-01", ""))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
+        journal = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(journal["invoices"][0]["p1_sent_date"], date.today().isoformat())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,7 +36,8 @@ INVOICE_COLUMNS = (
     "customer", "invoice_no", "due_date", "invoice_date", "template_vendor",
     "reviewed", "logo_file", "amount", "currency", "paid", "email", "source",
     "source_hash", "ignored", "note", "p1_date", "p2_date", "sent_count",
-    "p1_snapshot", "p2_snapshot", "created",
+    "p1_snapshot", "p2_snapshot", "p1_draft_date", "p2_draft_date",
+    "p1_sent_date", "p2_sent_date", "created",
 )
 
 
@@ -482,6 +483,8 @@ def _invoice_values(invoice, now):
     values["reviewed"] = int(values["reviewed"] if values["reviewed"] is not None else 1)
     values["ignored"] = int(values["ignored"] or 0)
     values["sent_count"] = int(values["sent_count"] or 0)
+    for column in ("p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date"):
+        values[column] = values[column] or ""
     values["amount"] = _float(values["amount"])
     values["paid"] = _float(values["paid"])
     return values
@@ -572,7 +575,10 @@ def import_journal(database_path, journal_path, source_path, *, now: datetime | 
                     local = db.execute("SELECT * FROM invoices WHERE id=?", (local_id,)).fetchone()
                     updates = []
                     parameters = []
-                    for column in ("p1_date", "p2_date", "p1_snapshot", "p2_snapshot"):
+                    for column in (
+                        "p1_date", "p2_date", "p1_snapshot", "p2_snapshot",
+                        "p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date",
+                    ):
                         if not local[column] and values[column]:
                             updates.append(f"{column}=?")
                             parameters.append(values[column])

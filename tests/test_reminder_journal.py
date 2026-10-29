@@ -212,7 +212,7 @@ class ReminderJournalTests(unittest.TestCase):
         self.app.set_setting("fee", "175")
         self.app.set_setting("language", "en")
         with self.app.connect() as db:
-            db.execute("UPDATE invoices SET p1_date='2026-10-20',sent_count=1 WHERE id=?", (row["id"],))
+            db.execute("UPDATE invoices SET p1_date='2026-10-20',sent_count=1,p1_draft_date='2026-10-21',p2_draft_date='2026-10-25',p1_sent_date='2026-10-22',p2_sent_date='2026-10-26' WHERE id=?", (row["id"],))
             db.execute("INSERT INTO vendor_logos(vendor,logo_file) VALUES('supplier ab','supplier.svg')")
             db.execute("INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES('supplier ab','amount',0,1,2,3,4,2)")
             db.execute("INSERT INTO pdf_zone_samples(vendor,field,page_index,x0,y0,x1,y1,created) VALUES('supplier ab','amount',0,1,2,3,4,'2026-10-20')")
@@ -241,12 +241,36 @@ class ReminderJournalTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT value FROM settings WHERE key='fee'").fetchone()[0], "175")
             self.assertEqual(db.execute("SELECT value FROM settings WHERE key='language'").fetchone()[0], "en")
             self.assertEqual(db.execute("SELECT p1_date,sent_count FROM invoices").fetchone(), ("2026-10-20", 1))
+            self.assertEqual(
+                db.execute("SELECT p1_draft_date,p2_draft_date,p1_sent_date,p2_sent_date FROM invoices").fetchone(),
+                ("2026-10-21", "2026-10-25", "2026-10-22", "2026-10-26"),
+            )
             self.assertEqual(db.execute("SELECT logo_file FROM vendor_logos").fetchone()[0], "supplier.svg")
             self.assertEqual(db.execute("SELECT samples FROM pdf_zones").fetchone()[0], 2)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM pdf_zone_samples").fetchone()[0], 1)
         restored = json.loads(target_json.read_text(encoding="utf-8"))
         self.assertEqual(len(restored["reminders"]), 1)
         self.assertEqual(restored["reminders"][0]["language"], "en")
+
+    def test_pre_email_status_journal_restores_with_empty_status_dates(self):
+        self.save_invoice("JSON-OLD-EMAIL-STATUS")
+        self.app.refresh_json_journal()
+        payload = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
+        for column in ("p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date"):
+            payload["invoices"][0].pop(column)
+        old_journal = self.workspace / "old-email-status.json"
+        old_journal.write_text(json.dumps(payload), encoding="utf-8")
+        target_db = self.workspace / "old-email-status.sqlite3"
+        target_json = self.workspace / "old-email-status-restored.json"
+        self.app.DB_PATH = target_db
+        self.app.init_db()
+        result = import_journal(target_db, target_json, old_journal)
+        self.assertEqual(result.invoices_added, 1)
+        with closing(sqlite3.connect(target_db)) as db:
+            restored = db.execute(
+                "SELECT p1_draft_date,p2_draft_date,p1_sent_date,p2_sent_date FROM invoices"
+            ).fetchone()
+        self.assertEqual(restored, ("", "", "", ""))
 
     def test_p2_snapshot_is_included_and_restored_after_reinstall(self):
         row = self.save_invoice("JSON-P2-SNAPSHOT")

@@ -151,7 +151,9 @@ def init_db():
             amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'SEK', paid REAL NOT NULL DEFAULT 0,
             email TEXT DEFAULT '', source TEXT DEFAULT '', source_hash TEXT NOT NULL DEFAULT '', ignored INTEGER NOT NULL DEFAULT 0,
             note TEXT DEFAULT '', p1_date TEXT DEFAULT '', p2_date TEXT DEFAULT '', sent_count INTEGER NOT NULL DEFAULT 0,
-            p1_snapshot TEXT DEFAULT '', p2_snapshot TEXT DEFAULT '', created TEXT NOT NULL)""")
+            p1_snapshot TEXT DEFAULT '', p2_snapshot TEXT DEFAULT '',
+            p1_draft_date TEXT DEFAULT '', p2_draft_date TEXT DEFAULT '',
+            p1_sent_date TEXT DEFAULT '', p2_sent_date TEXT DEFAULT '', created TEXT NOT NULL)""")
         existing={row['name'] for row in db.execute('PRAGMA table_info(invoices)').fetchall()}
         if 'invoice_date' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN invoice_date TEXT DEFAULT ''")
         if 'template_vendor' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN template_vendor TEXT DEFAULT ''")
@@ -161,6 +163,8 @@ def init_db():
         if 'source_hash' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''")
         if 'p1_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p1_snapshot TEXT DEFAULT ''")
         if 'p2_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p2_snapshot TEXT DEFAULT ''")
+        for column in ('p1_draft_date','p2_draft_date','p1_sent_date','p2_sent_date'):
+            if column not in existing:db.execute(f"ALTER TABLE invoices ADD COLUMN {column} TEXT DEFAULT ''")
         ensure_journal_schema(db)
         ensure_customer_contact_schema(db)
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -477,8 +481,8 @@ def money(x,currency='SEK'):
 REMINDER_BCC = 'rl@tadega.com'
 
 
-def build_reminder_mailto(row,level,recipients):
-    """Build a customer-ready draft with a fixed BCC; never send automatically."""
+def build_reminder_email_content(row,level,recipients):
+    """Build editable preview content with a fixed BCC; never send automatically."""
     addresses=parse_email_addresses(','.join(recipients))
     if not addresses:raise ValueError('At least one recipient is required')
     email_row=dict(row)
@@ -522,7 +526,14 @@ def build_reminder_mailto(row,level,recipients):
             invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
             fee=values['fee'],total=values['total'],deadline=deadline,
         )
-    query=urlencode({'bcc':REMINDER_BCC,'subject':subject,'body':body},quote_via=quote)
+    return {'recipients':addresses,'bcc':REMINDER_BCC,'subject':subject,'body':body}
+
+
+def build_reminder_mailto(row,level,recipients,content=None):
+    """Encode previewed content without allowing recipients or BCC to be changed."""
+    content=content or build_reminder_email_content(row,level,recipients)
+    addresses=content['recipients']
+    query=urlencode({'bcc':REMINDER_BCC,'subject':content['subject'],'body':content['body']},quote_via=quote)
     return 'mailto:'+quote(','.join(addresses),safe='@,+._-')+'?'+query
 
 
@@ -640,6 +651,34 @@ def find_reminder_pdf(row,level):
                 recorded.extend((EXPORT_DIR/pdf_name,EXPORT_DIR/ARCHIVE_FOLDER_NAME/pdf_name))
         paths=recorded+paths
     return next((path for path in dict.fromkeys(paths) if path.is_file()),None)
+
+
+def latest_reminder_level(row):
+    """Return the latest existing level; P2 always takes precedence over P1."""
+    return 'P2' if row['p2_date'] else ('P1' if row['p1_date'] else '')
+
+
+def reminder_email_status(row,level=None):
+    """Describe one level, defaulting to the latest, apart from PDF dates."""
+    level=level or latest_reminder_level(row)
+    if not level:return '—'
+    prefix=level.lower();keys=row.keys()
+    sent=row[prefix+'_sent_date'] if prefix+'_sent_date' in keys else ''
+    draft=row[prefix+'_draft_date'] if prefix+'_draft_date' in keys else ''
+    if sent:return _('{level} · skickad {date}',level=level,date=sent)
+    if draft:return _('{level} · utkast öppnat {date}',level=level,date=draft)
+    return _('{level} · utkast ej öppnat',level=level)
+
+
+def record_reminder_draft_opened(row,level):
+    """Remember the first successful draft opening without changing reminder history."""
+    if level not in ('P1','P2'):return
+    column=level.lower()+'_draft_date';today=date.today().isoformat()
+    with connect() as db:
+        db.execute(
+            f"UPDATE invoices SET {column}=CASE WHEN {column} IS NULL OR {column}='' THEN ? ELSE {column} END WHERE id=?",
+            (today,row['id']),
+        )
 
 
 def p1_file_missing(row):
@@ -1104,10 +1143,10 @@ class ReminderApp(tk.Tk):
         ttk.Button(logo_bar,text=_('Öppna SVG-mapp'),command=self.open_svg_folder).pack(side='left')
         self.refresh_logo_choices()
         wrap=ttk.Frame(self,padding=(22,0,22,12));wrap.pack(fill='both',expand=True)
-        cols=('invoice_no','customer','due_date','amount','remaining','p1_date','p2_send_date','stage','fee')
+        cols=('invoice_no','customer','due_date','amount','remaining','p1_date','p2_send_date','email_status','stage','fee')
         self.tree=ttk.Treeview(wrap,columns=cols,show='headings',selectmode='browse')
-        labels={'invoice_no':_('Fakturanr'),'customer':_('Kund'),'due_date':_('Förfallodatum'),'amount':_('Fakturabelopp'),'remaining':_('Kvar att betala'),'p1_date':_('P1 skapades'),'p2_send_date':_('P2 ska skickas'),'stage':_('Status / nästa steg'),'fee':_('Påminnelseavgift')}
-        widths={'invoice_no':110,'customer':170,'due_date':105,'amount':115,'remaining':120,'p1_date':105,'p2_send_date':120,'stage':190,'fee':120}
+        labels={'invoice_no':_('Fakturanr'),'customer':_('Kund'),'due_date':_('Förfallodatum'),'amount':_('Fakturabelopp'),'remaining':_('Kvar att betala'),'p1_date':_('P1 skapades'),'p2_send_date':_('P2-datum'),'email_status':_('E-post (senaste)'),'stage':_('Status / nästa steg'),'fee':_('Påminnelseavgift')}
+        widths={'invoice_no':110,'customer':170,'due_date':105,'amount':115,'remaining':120,'p1_date':105,'p2_send_date':125,'email_status':190,'stage':180,'fee':120}
         for c in cols:self.tree.heading(c,text=labels[c]);self.tree.column(c,width=widths[c],anchor='w')
         self.tree.pack(side='top',fill='both',expand=True); sb=ttk.Scrollbar(wrap,orient='vertical',command=self.tree.yview);sb.pack(side='right',fill='y');xsb=ttk.Scrollbar(wrap,orient='horizontal',command=self.tree.xview);xsb.pack(side='bottom',fill='x');self.tree.configure(yscrollcommand=sb.set,xscrollcommand=xsb.set)
         self.tree.bind('<<TreeviewSelect>>',lambda e:self.show_detail())
@@ -1120,6 +1159,7 @@ class ReminderApp(tk.Tk):
         self.row_menu.add_command(label=_('Redigera P1'),command=self.edit_p1)
         self.row_menu.add_command(label=_('Redigera P2'),command=self.edit_p2)
         self.row_menu.add_command(label=_('Skapa e-postutkast'),command=self.create_reminder_email)
+        self.row_menu.add_command(label=_('Markera e-post som skickad'),command=self.mark_reminder_email_sent)
         self.row_menu.add_command(label=_('Markera som betald'),command=self.mark_invoice_paid)
         self.row_menu.add_command(label=_('Ignorera / återaktivera'),command=self.toggle_ignore)
         self.row_menu.add_separator()
@@ -1143,13 +1183,13 @@ class ReminderApp(tk.Tk):
             fee=money(float(setting('fee') or 0),r['currency']) if r['p1_date'] else '—'
             p1_display=r['p1_date'] or '—'
             if r['ignored'] or remain<=0.005:p2_display='—'
-            elif r['p2_date']:p2_display=_('Skickad {date}',date=r['p2_date'])
+            elif r['p2_date']:p2_display=_('Skapad {date}',date=r['p2_date'])
             elif r['p1_date']:
                 p2_due=p2_due_date(r)
                 p2_display=p2_due.isoformat() if p2_due else '—'
             else:p2_display='—'
             stage_display=(_('IGNORERAD')+' · ' if r['ignored'] else '')+_(stage)
-            self.tree.insert('', 'end',iid=str(r['id']),values=(r['invoice_no'],r['customer'],r['due_date'],money(float(r['amount'] or 0),r['currency']),money(remain,r['currency']),p1_display,p2_display,stage_display,fee))
+            self.tree.insert('', 'end',iid=str(r['id']),values=(r['invoice_no'],r['customer'],r['due_date'],money(float(r['amount'] or 0),r['currency']),money(remain,r['currency']),p1_display,p2_display,reminder_email_status(r),stage_display,fee))
         self.show_detail()
 
     def selected(self):
@@ -1166,7 +1206,12 @@ class ReminderApp(tk.Tk):
             _logo_path,logo_name=self.invoice_logo(r)
             review=_('Granskad') if r['reviewed'] else _('KRÄVER GRANSKNING')
             note=r['note'] or _('Ingen fakturatext')
-            self.detail.configure(text=_('{customer} · {invoice_no} · Belopp: {amount} · {stage} · {review} · Mall: {vendor} · Logotyp: {logo} · {note}',customer=r['customer'],invoice_no=r['invoice_no'],amount=money(float(r['amount'] or 0),r['currency']),stage=_(next_stage(r)),review=review,vendor=vendor,logo=logo_name,note=note))
+            detail_text=_('{customer} · {invoice_no} · Belopp: {amount} · {stage} · {review} · Mall: {vendor} · Logotyp: {logo} · {note}',customer=r['customer'],invoice_no=r['invoice_no'],amount=money(float(r['amount'] or 0),r['currency']),stage=_(next_stage(r)),review=review,vendor=vendor,logo=logo_name,note=note)
+            email_status=' · '.join(
+                reminder_email_status(r,level) for level in ('P1','P2') if r[level.lower()+'_date']
+            )
+            if email_status:detail_text+='\n'+_('E-post: {status}',status=email_status)
+            self.detail.configure(text=detail_text)
 
     def show_row_context_menu(self,event):
         item=self.tree.identify_row(event.y)
@@ -1759,11 +1804,75 @@ class ReminderApp(tk.Tk):
             refresh_json_journal(parent=self)
             self.refresh()
 
+    def mark_reminder_email_sent(self):
+        """Let the user explicitly confirm a manual send for the latest level."""
+        r=self.selected()
+        if not r:return False
+        level=latest_reminder_level(r)
+        if not level:
+            messagebox.showinfo(_('Påminnelse saknas'),_('Skapa P1 eller P2 först.'),parent=self);return False
+        column=level.lower()+'_sent_date'
+        existing=r[column] if column in r.keys() else ''
+        if existing:
+            messagebox.showinfo(
+                _('Redan markerad som skickad'),
+                _('E-posten för {level} är redan markerad som skickad {date}.',level=level,date=existing),parent=self,
+            );return False
+        today=date.today().isoformat()
+        if not messagebox.askyesno(
+            _('Bekräfta skickad e-post'),
+            _('Appen kan inte kontrollera e-postprogrammet. Bekräfta endast om du själv har skickat {level} för faktura {invoice_no}.\n\nSkickaddatum blir {date}.',level=level,invoice_no=r['invoice_no'],date=today),
+            parent=self,
+        ):return False
+        with connect() as db:db.execute(f'UPDATE invoices SET {column}=? WHERE id=?',(today,r['id']))
+        refresh_json_journal(parent=self)
+        logger.info('Email manually marked as sent: invoice=%s level=%s date=%s',r['id'],level,today)
+        self.refresh()
+        return True
+
+    def preview_reminder_email(self,content,pdf_path):
+        """Review and optionally edit one draft before handing it to the OS mail app."""
+        result=None
+        w=self._new_toplevel(_('Förhandsgranska e-post'));w.grab_set();w.resizable(True,True)
+        form=ttk.Frame(w,padding=20);form.pack(fill='both',expand=True)
+        ttk.Label(
+            form,text=_('Mottagare: {recipients}',recipients=', '.join(content['recipients'])),wraplength=680,
+        ).pack(anchor='w',pady=(0,6))
+        ttk.Label(form,text=_('Dold kopia (BCC): {email}',email=REMINDER_BCC)).pack(anchor='w',pady=(0,6))
+        ttk.Label(
+            form,text=_('PDF att bifoga manuellt: {path}',path=pdf_path),wraplength=680,
+        ).pack(anchor='w',pady=(0,12))
+        ttk.Label(form,text=_('Ämne')).pack(anchor='w')
+        subject_var=tk.StringVar(value=content['subject'])
+        ttk.Entry(form,textvariable=subject_var,width=90).pack(fill='x',pady=(3,10))
+        ttk.Label(form,text=_('Meddelande')).pack(anchor='w')
+        body_text=tk.Text(form,width=90,height=20,wrap='word',undo=True)
+        body_text.insert('1.0',content['body']);body_text.pack(fill='both',expand=True,pady=(3,10))
+        ttk.Label(
+            form,text=_('Ändringarna gäller bara detta utkast. Bifoga PDF:en och skicka mejlet manuellt i e-postappen.'),
+            wraplength=680,
+        ).pack(anchor='w',pady=(0,12))
+        def accept():
+            nonlocal result
+            subject=subject_var.get().strip();body=body_text.get('1.0','end-1c').strip()
+            if not subject or not body:
+                messagebox.showerror(_('Kontrollera e-post'),_('Ämne och meddelande krävs.'),parent=w);return
+            result=dict(content);result['subject']=subject;result['body']=body
+            w.destroy()
+        def cancel():
+            w.destroy()
+        buttons=ttk.Frame(form);buttons.pack(fill='x')
+        ttk.Button(buttons,text=_('Öppna i e-postappen'),command=accept,style='Accent.TButton').pack(side='left')
+        ttk.Button(buttons,text=_('Avbryt'),command=cancel).pack(side='right')
+        w.protocol('WM_DELETE_WINDOW',cancel)
+        w.wait_window()
+        return result
+
     def create_reminder_email(self):
         """Open a draft for the latest existing reminder using current contacts."""
         r=self.selected()
         if not r:return False
-        level='P2' if r['p2_date'] else ('P1' if r['p1_date'] else '')
+        level=latest_reminder_level(r)
         if not level:
             messagebox.showinfo(
                 _('Påminnelse saknas'),
@@ -1788,14 +1897,17 @@ class ReminderApp(tk.Tk):
         return self.open_reminder_email(r,level,pdf_path)
 
     def open_reminder_email(self,r,level,pdf_path):
-        """Open, but never automatically send, a draft to all customer recipients."""
+        """Preview, then open, but never automatically send, a customer draft."""
         try:
             recipients=reminder_email_addresses(r)
             if not recipients:return False
-            url=build_reminder_mailto(r,level,recipients)
+            content=build_reminder_email_content(r,level,recipients)
+            preview=getattr(self,'preview_reminder_email',None)
+            if preview:
+                content=preview(content,pdf_path)
+                if content is None:return False
+            url=build_reminder_mailto(r,level,recipients,content=content)
             if not webbrowser.open(url):raise RuntimeError('mailto handler returned False')
-            logger.info('Opened reminder email draft: invoice=%s level=%s recipients=%d',r['id'],level,len(recipients))
-            return True
         except Exception as exc:
             logger.exception('Reminder email draft could not be opened')
             messagebox.showwarning(
@@ -1804,6 +1916,21 @@ class ReminderApp(tk.Tk):
                 parent=self,
             )
             return False
+        logger.info('Opened reminder email draft: invoice=%s level=%s recipients=%d',r['id'],level,len(recipients))
+        try:
+            record_reminder_draft_opened(r,level)
+            refresh_json_journal(parent=self)
+        except Exception as exc:
+            logger.exception('Email draft opened but its status could not be saved')
+            messagebox.showwarning(
+                _('E-poststatusen kunde inte sparas'),
+                _('Utkastet öppnades, men e-poststatusen kunde inte sparas.\n\n{error}',error=exc),parent=self,
+            )
+        refresher=getattr(self,'refresh',None)
+        if refresher:
+            try:refresher()
+            except Exception:logger.exception('UI refresh after email draft failed')
+        return True
 
     def make_reminder(self):
         r=self.selected()
@@ -1867,7 +1994,7 @@ class ReminderApp(tk.Tk):
             fee=float(setting('fee') or 0);locked=setting('fee_locked')=='1'
             template_name=r['template_vendor'] or _('Ingen matchad mall')
             logo_path,logo_name=self.invoice_logo(r)
-            confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nE-postutkast öppnas i systemets valda e-postapp om kunden har adresser. Bifoga PDF:en manuellt; inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
+            confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. Bifoga PDF:en manuellt; inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
             if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
                 break
             day=date.today().isoformat()
