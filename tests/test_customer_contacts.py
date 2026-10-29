@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -123,11 +124,56 @@ class CustomerContactTests(unittest.TestCase):
         self.assertEqual(parsed.scheme, "mailto")
         self.assertEqual(unquote(parsed.path), "first@example.com,second@example.com")
         query = parse_qs(parsed.query)
-        self.assertIn("P1", query["subject"][0])
         self.assertIn("CONTACT-1001", query["subject"][0])
-        self.assertIn("250", query["body"][0])
-        self.assertIn("kr", query["body"][0])
+        self.assertNotIn("SV:", query["subject"][0])
+        self.assertEqual(query["bcc"], ["rl@tadega.com"])
+        self.assertNotIn("rl@tadega.com", unquote(parsed.path))
+        body = query["body"][0]
+        self.assertIn("första påminnelsen", body)
+        self.assertIn("250", body)
+        self.assertIn("kr", body)
+        self.assertIn("Tadega AB", body)
         self.assertNotIn("attachment", query)
+
+    def test_p2_has_reply_subject_custom_text_and_the_same_bcc(self):
+        row = self.record(email="first@example.com")
+        parsed = urlsplit(self.app.build_reminder_mailto(row, "P2", ["first@example.com"]))
+        query = parse_qs(parsed.query)
+        self.assertTrue(query["subject"][0].startswith("SV: Faktura CONTACT-1001"))
+        self.assertEqual(query["bcc"], ["rl@tadega.com"])
+        body = query["body"][0]
+        self.assertIn("andra påminnelsen", body)
+        self.assertIn("P1 och P2", body)
+        self.assertIn("Sista betalningsdag", body)
+
+        self.app.set_language("en")
+        parsed = urlsplit(self.app.build_reminder_mailto(row, "P2", ["first@example.com"]))
+        query = parse_qs(parsed.query)
+        self.assertTrue(query["subject"][0].startswith("Re: Invoice CONTACT-1001"))
+        self.assertIn("second reminder", query["body"][0])
+
+    def test_p1_email_uses_original_snapshot_terms_and_amounts(self):
+        row = self.record(email="first@example.com")
+        self.app.set_setting("fee", "150")
+        self.app.set_setting("payment_deadline_days", "10")
+        row["sent_count"] = 0
+        snapshot = self.app.capture_p1_snapshot(row, 150.0, "2026-10-01")
+        row["p1_date"] = "2026-10-01"
+        row["p1_snapshot"] = snapshot
+        row["sent_count"] = 1
+        row["amount"] = 9999.0
+        self.app.set_setting("fee", "999")
+        self.app.set_setting("payment_deadline_days", "30")
+
+        query = parse_qs(urlsplit(self.app.build_reminder_mailto(
+            row, "P1", ["first@example.com"]
+        )).query)
+        body = query["body"][0].replace("\xa0", " ")
+        self.assertIn("1 400,00", body)
+        self.assertNotIn("10 149", body)
+        self.assertIn(self.app.format_long_date(date(2026, 10, 11)), body)
+        self.assertTrue(query["subject"][0].startswith("SV: Faktura CONTACT-1001"))
+        self.assertEqual(query["bcc"], ["rl@tadega.com"])
 
     def test_generated_reminder_opens_default_email_app_for_all_customer_addresses(self):
         self.assertIsNone(self.app.save_invoice_record(self.record(

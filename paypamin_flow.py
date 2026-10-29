@@ -463,16 +463,56 @@ def money(x,currency='SEK'):
     return format_money(x,currency)
 
 
+REMINDER_BCC = 'rl@tadega.com'
+
+
 def build_reminder_mailto(row,level,recipients):
-    """Build a draft for the OS-selected email app; never send automatically."""
+    """Build a customer-ready draft with a fixed BCC; never send automatically."""
     addresses=parse_email_addresses(','.join(recipients))
     if not addresses:raise ValueError('At least one recipient is required')
-    subject=_('Betalningspåminnelse {level} – faktura {invoice_no}',level=level,invoice_no=row['invoice_no'])
-    body=_(
-        'Hej!\n\nHär kommer {level} för faktura {invoice_no}.\n\nBelopp: {amount}\nFörfallodatum: {due_date}\n\nVänliga hälsningar',
-        level=level,invoice_no=row['invoice_no'],amount=money(float(row['amount'] or 0),row['currency']),due_date=row['due_date'],
-    )
-    query=urlencode({'subject':subject,'body':body},quote_via=quote)
+    email_row=dict(row)
+    try:followup=level=='P2' or int(email_row.get('sent_count') or 0)>0
+    except (TypeError,ValueError):followup=level=='P2'
+    terms=current_reminder_terms(float(setting('fee') or 0))
+    if level=='P1':
+        snapshot=read_p1_snapshot(row['p1_snapshot'] if 'p1_snapshot' in row.keys() else '')
+        if snapshot:
+            email_row.update(snapshot['row'])
+            terms=snapshot['terms']
+    try:fee=float(terms.get('fee') if terms.get('fee') is not None else setting('fee') or 0)
+    except (TypeError,ValueError):fee=float(setting('fee') or 0)
+    remaining=max(0,float(email_row['amount'] or 0)-float(email_row['paid'] or 0))
+    reminder_day=dparse(email_row.get('p1_date')) if level=='P1' else None
+    reminder_day=reminder_day or date.today()
+    try:
+        saved_deadline=terms.get('payment_deadline_days')
+        deadline_days=int(saved_deadline) if saved_deadline not in (None,'') else 5
+    except (TypeError,ValueError):deadline_days=5
+    deadline=format_long_date(reminder_day+timedelta(days=deadline_days))
+    currency=email_row['currency']
+    invoice_no=email_row['invoice_no']
+    values={
+        'invoice_no':invoice_no,'due_date':email_row['due_date'],
+        'remaining':money(remaining,currency),'fee':money(fee,currency),
+        'fees':money(fee*(2 if level=='P2' else 1),currency),
+        'total':money(remaining+fee*(2 if level=='P2' else 1),currency),
+        'deadline':deadline,
+    }
+    subject=_('Faktura {invoice_no} – betalningspåminnelse',invoice_no=invoice_no)
+    if followup:subject=('Re: ' if get_language()=='en' else 'SV: ')+subject
+    if level=='P2':
+        body=_(
+            'Hej!\n\nTrots tidigare påminnelse saknar vi fortfarande betalning för faktura {invoice_no}, som förföll {due_date}. Detta är andra påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\nPåminnelseavgifter för P1 och P2: {fees}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nOm betalningen inte kommer in kan ärendet lämnas vidare. Påminnelsen skickas som PDF. Ange fakturanumret vid betalning. Om betalning redan är gjord kan du bortse från detta mejl.\n\nVänliga hälsningar\nTadega AB',
+            invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
+            fees=values['fees'],total=values['total'],deadline=deadline,
+        )
+    else:
+        body=_(
+            'Hej!\n\nVi saknar betalning för faktura {invoice_no}, som förföll {due_date}. Detta är första påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\nPåminnelseavgift: {fee}\nAtt betala: {total}\nBetalningsfrist: {deadline}\n\nPåminnelsen skickas som PDF. Ange fakturanumret vid betalning. Om betalning redan är gjord kan du bortse från detta mejl.\n\nVänliga hälsningar\nTadega AB',
+            invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
+            fee=values['fee'],total=values['total'],deadline=deadline,
+        )
+    query=urlencode({'bcc':REMINDER_BCC,'subject':subject,'body':body},quote_via=quote)
     return 'mailto:'+quote(','.join(addresses),safe='@,+._-')+'?'+query
 
 
