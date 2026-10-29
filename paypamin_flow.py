@@ -485,16 +485,15 @@ def build_reminder_mailto(row,level,recipients):
     try:followup=level=='P2' or int(email_row.get('sent_count') or 0)>0
     except (TypeError,ValueError):followup=level=='P2'
     terms=current_reminder_terms(float(setting('fee') or 0))
-    if level=='P1':
-        snapshot=read_p1_snapshot(row['p1_snapshot'] if 'p1_snapshot' in row.keys() else '')
-        if snapshot:
-            email_row.update(snapshot['row'])
-            terms=snapshot['terms']
+    snapshot_column=level.lower()+'_snapshot'
+    snapshot=read_reminder_snapshot(row[snapshot_column] if snapshot_column in row.keys() else '')
+    if snapshot:
+        email_row.update(snapshot['row'])
+        terms=snapshot['terms']
     try:fee=float(terms.get('fee') if terms.get('fee') is not None else setting('fee') or 0)
     except (TypeError,ValueError):fee=float(setting('fee') or 0)
     remaining=max(0,float(email_row['amount'] or 0)-float(email_row['paid'] or 0))
-    reminder_day=dparse(email_row.get('p1_date')) if level=='P1' else None
-    reminder_day=reminder_day or date.today()
+    reminder_day=dparse(email_row.get(level.lower()+'_date')) or date.today()
     try:
         saved_deadline=terms.get('payment_deadline_days')
         deadline_days=int(saved_deadline) if saved_deadline not in (None,'') else 5
@@ -619,6 +618,28 @@ def p1_file_candidates(row):
 
 def p2_file_candidates(row):
     return reminder_file_candidates(row,'P2')
+
+
+def find_reminder_pdf(row,level):
+    """Locate an existing P1/P2 PDF, including archived and legacy event paths."""
+    if level not in ('P1','P2'):return None
+    paths=list(reminder_file_candidates(row,level))
+    if 'id' in row.keys():
+        with connect() as db:
+            events=db.execute(
+                'SELECT payload FROM reminder_events WHERE invoice_id=? AND level=? AND reminder_date=? ORDER BY created_utc DESC',
+                (row['id'],level,row[level.lower()+'_date']),
+            ).fetchall()
+        recorded=[]
+        for event in events:
+            try:payload=json.loads(event['payload'])
+            except (TypeError,ValueError):continue
+            if not isinstance(payload,dict):continue
+            pdf_name=Path(str(payload.get('pdf_name') or '')).name
+            if pdf_name:
+                recorded.extend((EXPORT_DIR/pdf_name,EXPORT_DIR/ARCHIVE_FOLDER_NAME/pdf_name))
+        paths=recorded+paths
+    return next((path for path in dict.fromkeys(paths) if path.is_file()),None)
 
 
 def p1_file_missing(row):
@@ -1098,6 +1119,7 @@ class ReminderApp(tk.Tk):
         self.row_menu.add_command(label=_('Redigera kund'),command=self.edit_customer)
         self.row_menu.add_command(label=_('Redigera P1'),command=self.edit_p1)
         self.row_menu.add_command(label=_('Redigera P2'),command=self.edit_p2)
+        self.row_menu.add_command(label=_('Skapa e-postutkast'),command=self.create_reminder_email)
         self.row_menu.add_command(label=_('Markera som betald'),command=self.mark_invoice_paid)
         self.row_menu.add_command(label=_('Ignorera / återaktivera'),command=self.toggle_ignore)
         self.row_menu.add_separator()
@@ -1736,6 +1758,34 @@ class ReminderApp(tk.Tk):
             with connect() as db:db.execute('DELETE FROM invoices WHERE id=?',(r['id'],))
             refresh_json_journal(parent=self)
             self.refresh()
+
+    def create_reminder_email(self):
+        """Open a draft for the latest existing reminder using current contacts."""
+        r=self.selected()
+        if not r:return False
+        level='P2' if r['p2_date'] else ('P1' if r['p1_date'] else '')
+        if not level:
+            messagebox.showinfo(
+                _('Påminnelse saknas'),
+                _('Skapa P1 eller P2 innan ett e-postutkast kan öppnas.'),parent=self,
+            );return False
+        try:recipients=reminder_email_addresses(r)
+        except EmailAddressError as exc:
+            messagebox.showwarning(
+                _('Ogiltig e-postadress'),_('Kontrollera adressen: {email}',email=exc.address),parent=self,
+            );return False
+        if not recipients:
+            messagebox.showinfo(
+                _('E-postadresser saknas'),
+                _('Lägg till kundens e-postadresser via Redigera kund innan utkastet skapas.'),parent=self,
+            );return False
+        pdf_path=find_reminder_pdf(r,level)
+        if pdf_path is None:
+            messagebox.showwarning(
+                _('Påminnelse-PDF saknas'),
+                _('PDF:en för {level} hittades inte. Återskapa den via Redigera {level} innan e-postutkastet skapas.',level=level),parent=self,
+            );return False
+        return self.open_reminder_email(r,level,pdf_path)
 
     def open_reminder_email(self,r,level,pdf_path):
         """Open, but never automatically send, a draft to all customer recipients."""

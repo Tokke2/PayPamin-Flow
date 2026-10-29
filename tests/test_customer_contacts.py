@@ -5,8 +5,8 @@ import unittest
 from contextlib import closing
 from datetime import date
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
+from types import MethodType, SimpleNamespace
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from customer_contacts import EmailAddressError, normalize_email_addresses, parse_email_addresses
@@ -21,6 +21,8 @@ class CustomerContactTests(unittest.TestCase):
         self.app = load_headless_app(self.workspace)
         self.app.DB_PATH = self.workspace / "contacts.sqlite3"
         self.app.JOURNAL_PATH = self.workspace / "reminder_journal.json"
+        self.app.EXPORT_DIR = self.workspace / "export"
+        self.app.EXPORT_DIR.mkdir(exist_ok=True)
         self.app.init_db()
         self.app.set_language("sv")
 
@@ -50,6 +52,21 @@ class CustomerContactTests(unittest.TestCase):
             "reviewed": 1,
             "logo_file": "",
         }
+
+    def existing_p1(self, email=""):
+        self.assertIsNone(self.app.save_invoice_record(self.record(email=email)))
+        with self.app.connect() as db:
+            row = db.execute("SELECT * FROM invoices").fetchone()
+        snapshot = self.app.capture_p1_snapshot(row, 150.0, "2026-10-01")
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET p1_date='2026-10-01',p1_snapshot=?,sent_count=1",
+                (snapshot,),
+            )
+            row = db.execute("SELECT * FROM invoices").fetchone()
+        pdf_path = self.app.reminder_file_path(row, "P1", date(2026, 10, 1), "paminnelse")
+        pdf_path.write_bytes(b"existing P1")
+        return row, pdf_path
 
     def test_comma_separated_addresses_are_trimmed_and_deduplicated(self):
         value = " first@example.com, second@example.com , FIRST@example.com,,"
@@ -174,6 +191,139 @@ class CustomerContactTests(unittest.TestCase):
         self.assertIn(self.app.format_long_date(date(2026, 10, 11)), body)
         self.assertTrue(query["subject"][0].startswith("SV: Faktura CONTACT-1001"))
         self.assertEqual(query["bcc"], ["rl@tadega.com"])
+
+    def test_p2_email_uses_original_snapshot_terms_amounts_and_deadline(self):
+        row = self.record(email="first@example.com")
+        row["p1_date"] = "2026-10-01"
+        self.app.set_setting("payment_deadline_days", "10")
+        snapshot = self.app.capture_reminder_snapshot(row, 150.0, "2026-10-10", "P2")
+        row["p2_date"] = "2026-10-10"
+        row["p2_snapshot"] = snapshot
+        row["sent_count"] = 2
+        row["amount"] = 9999.0
+        self.app.set_setting("fee", "999")
+        self.app.set_setting("payment_deadline_days", "30")
+
+        query = parse_qs(urlsplit(self.app.build_reminder_mailto(
+            row, "P2", ["first@example.com"]
+        )).query)
+
+        body = query["body"][0].replace("\xa0", " ")
+        self.assertIn("1 550,00", body)
+        self.assertNotIn("10 299", body)
+        self.assertIn(self.app.format_long_date(date(2026, 10, 20)), body)
+        self.assertNotIn(self.app.format_long_date(date(2026, 11, 9)), body)
+        self.assertTrue(query["subject"][0].startswith("SV: Faktura CONTACT-1001"))
+        self.assertEqual(query["bcc"], ["rl@tadega.com"])
+
+    def test_context_email_uses_addresses_added_after_p1_without_new_history(self):
+        row, pdf_path = self.existing_p1()
+        edited = self.record(email="late@example.com, second@example.com")
+        self.assertIsNone(self.app.save_invoice_record(edited, row["id"]))
+        with self.app.connect() as db:
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+            before = db.execute(
+                "SELECT p1_date,p2_date,sent_count,p1_snapshot FROM invoices WHERE id=?",
+                (row["id"],),
+            ).fetchone()
+        owner = SimpleNamespace(selected=lambda: row)
+        owner.open_reminder_email = MethodType(self.app.ReminderApp.open_reminder_email, owner)
+
+        with patch.object(self.app.webbrowser, "open", return_value=True) as open_url:
+            opened = self.app.ReminderApp.create_reminder_email(owner)
+
+        self.assertTrue(opened)
+        parsed = urlsplit(open_url.call_args.args[0])
+        query = parse_qs(parsed.query)
+        self.assertEqual(unquote(parsed.path), "late@example.com,second@example.com")
+        self.assertEqual(query["bcc"], ["rl@tadega.com"])
+        self.assertIn("första påminnelsen", query["body"][0])
+        self.assertEqual(pdf_path.read_bytes(), b"existing P1")
+        with self.app.connect() as db:
+            after = db.execute(
+                "SELECT p1_date,p2_date,sent_count,p1_snapshot FROM invoices WHERE id=?",
+                (row["id"],),
+            ).fetchone()
+            event_count = db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0]
+        self.assertEqual(tuple(after), tuple(before))
+        self.assertEqual(event_count, 0)
+
+    def test_context_email_prefers_p2_and_finds_archived_pdf(self):
+        row, _ = self.existing_p1(email="current@example.com")
+        snapshot = self.app.capture_reminder_snapshot(row, 150.0, "2026-10-10", "P2")
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET p2_date='2026-10-10',p2_snapshot=?,sent_count=2 WHERE id=?",
+                (snapshot, row["id"]),
+            )
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        pdf_path = self.app.reminder_file_path(row, "P2", date(2026, 10, 10), "paminnelse")
+        pdf_path = pdf_path.parent / self.app.ARCHIVE_FOLDER_NAME / pdf_path.name
+        pdf_path.parent.mkdir(exist_ok=True)
+        pdf_path.write_bytes(b"archived P2")
+        owner = SimpleNamespace(selected=lambda: row, open_reminder_email=Mock(return_value=True))
+
+        opened = self.app.ReminderApp.create_reminder_email(owner)
+
+        self.assertTrue(opened)
+        self.assertEqual(
+            owner.open_reminder_email.call_args.args[1:],
+            ("P2", pdf_path),
+        )
+        with self.app.connect() as db:
+            saved = db.execute(
+                "SELECT p1_date,p2_date,sent_count,p2_snapshot FROM invoices WHERE id=?",
+                (row["id"],),
+            ).fetchone()
+        self.assertEqual(tuple(saved), ("2026-10-01", "2026-10-10", 2, snapshot))
+
+    def test_context_email_uses_legacy_event_path_and_current_customer_contact(self):
+        row, _ = self.existing_p1(email="old@example.com")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p2_date='2026-10-10',sent_count=2")
+            row = db.execute("SELECT * FROM invoices").fetchone()
+        pdf_path = self.app.reminder_file_path(row, "P2", date(2026, 10, 10), "paminnelse")
+        pdf_path.write_bytes(b"legacy P2")
+        self.app.record_reminder_journal(
+            self.app.DB_PATH, self.app.JOURNAL_PATH, row["id"], "P2", "2026-10-10",
+            150.0, self.app.current_reminder_terms(150.0), "sv", "", pdf_path.name,
+        )
+        edited = self.record(email="new@example.com")
+        edited["customer"] = "Renamed customer AB"
+        self.assertIsNone(self.app.save_invoice_record(edited, row["id"]))
+        with self.app.connect() as db:
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertEqual(row["p2_snapshot"], "")
+        owner = SimpleNamespace(selected=lambda: row, open_reminder_email=Mock(return_value=True))
+
+        opened = self.app.ReminderApp.create_reminder_email(owner)
+
+        self.assertTrue(opened)
+        self.assertEqual(owner.open_reminder_email.call_args.args[1:], ("P2", pdf_path))
+        with self.app.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 1)
+
+    def test_context_email_without_addresses_explains_edit_customer(self):
+        row, _ = self.existing_p1()
+        owner = SimpleNamespace(selected=lambda: row, open_reminder_email=Mock())
+        with patch.object(self.app.messagebox, "showinfo", create=True) as info:
+            opened = self.app.ReminderApp.create_reminder_email(owner)
+        self.assertFalse(opened)
+        owner.open_reminder_email.assert_not_called()
+        self.assertIn("Redigera kund", info.call_args.args[1])
+
+    def test_context_email_requires_existing_pdf_without_creating_history(self):
+        row, pdf_path = self.existing_p1(email="current@example.com")
+        pdf_path.unlink()
+        owner = SimpleNamespace(selected=lambda: row, open_reminder_email=Mock())
+        with patch.object(self.app.messagebox, "showwarning", create=True) as warning:
+            opened = self.app.ReminderApp.create_reminder_email(owner)
+        self.assertFalse(opened)
+        owner.open_reminder_email.assert_not_called()
+        self.assertIn("Redigera P1", warning.call_args.args[1])
+        with self.app.connect() as db:
+            self.assertEqual(db.execute("SELECT sent_count FROM invoices").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0], 0)
 
     def test_generated_reminder_opens_default_email_app_for_all_customer_addresses(self):
         self.assertIsNone(self.app.save_invoice_record(self.record(
