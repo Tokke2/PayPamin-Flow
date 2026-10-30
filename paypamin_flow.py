@@ -2334,7 +2334,7 @@ def main():
         window.mainloop()
     except Exception as e:
         if not isinstance(e,getattr(tk,'TclError',())):
-            # The .pyw launcher turns this into a visible error and startup.log.
+            # The shared GUI launcher turns this into a visible error and startup.log.
             # Keep direct python paypamin_flow.py useful for terminal diagnostics too.
             logger.exception('Application could not start')
             raise

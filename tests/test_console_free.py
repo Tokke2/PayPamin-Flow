@@ -86,7 +86,7 @@ class ApplicationStartupTests(unittest.TestCase):
                     app, "configure_windows_app_identity", side_effect=lambda: events.append("windows-identity")
                 ), patch.object(app, "init_db", side_effect=lambda: events.append("database")), patch.object(
                     app, "ReminderApp", return_value=fake_window
-                ), patch.object(app.sys, "argv", ["paypamin_flow.pyw", app.MINIMIZED_START_ARG]):
+                ), patch.object(app.sys, "argv", ["paypamin_flow_launcher.py", app.MINIMIZED_START_ARG]):
                     app.main()
             finally:
                 for handler in app.logger.handlers[:]:

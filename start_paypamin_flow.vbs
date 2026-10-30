@@ -5,9 +5,9 @@ Dim fso, sh, appDir, scriptPath, env, paths, p, pythonwPath, cmd
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("WScript.Shell")
 appDir = fso.GetParentFolderName(WScript.ScriptFullName)
-scriptPath = fso.BuildPath(appDir, "paypamin_flow.pyw")
+scriptPath = fso.BuildPath(appDir, "paypamin_flow_launcher.py")
 If Not fso.FileExists(scriptPath) Then
-  MsgBox "Hittar inte paypamin_flow.pyw i appmappen.", vbCritical, "PayPamin Flow"
+  MsgBox "Hittar inte paypamin_flow_launcher.py i appmappen.", vbCritical, "PayPamin Flow"
   WScript.Quit 1
 End If
 sh.CurrentDirectory = appDir

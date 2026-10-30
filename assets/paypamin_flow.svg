@@ -1,29 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
   <title id="title">PayPamin Flow</title>
-  <desc id="description">Ett vitt fakturadokument med blått P och grön betalningsmarkering på mörkblå bakgrund.</desc>
+  <desc id="description">Ett vitt fakturadokument med blå textrader och en grön påminnelseklocka på mörkblå bakgrund.</desc>
   <metadata>Copyright © 2026 Rickard Länkvist. Skapare: Rickard Länkvist.</metadata>
   <defs>
     <linearGradient id="background" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#142A49"/>
-      <stop offset="1" stop-color="#275F91"/>
+      <stop offset="0" stop-color="#102A43"/>
+      <stop offset="1" stop-color="#176B87"/>
     </linearGradient>
-    <linearGradient id="success" x1="302" y1="294" x2="410" y2="424" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#42CFB2"/>
-      <stop offset="1" stop-color="#1B9E83"/>
+    <linearGradient id="reminder" x1="310" y1="300" x2="410" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38D6C0"/>
+      <stop offset="1" stop-color="#159A94"/>
     </linearGradient>
     <filter id="shadow" x="100" y="60" width="340" height="400" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#07182C" flood-opacity="0.28"/>
     </filter>
   </defs>
   <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#background)"/>
-  <path d="M60 375C142 443 234 459 327 433C387 416 430 382 458 338" fill="none" stroke="#8FB8D5" stroke-opacity="0.14" stroke-width="22" stroke-linecap="round"/>
+  <path d="M60 375C142 443 234 459 327 433C387 416 430 382 458 338" fill="none" stroke="#9ED4DF" stroke-opacity="0.16" stroke-width="22" stroke-linecap="round"/>
   <g filter="url(#shadow)">
     <path d="M150 84H324L394 154V388C394 406 380 420 362 420H150C132 420 118 406 118 388V116C118 98 132 84 150 84Z" fill="#FFFFFF"/>
     <path d="M324 84V136C324 146 332 154 342 154H394L324 84Z" fill="#D9E7F1"/>
   </g>
-  <path fill="#214F7D" fill-rule="evenodd" d="M184 166H260C316 166 350 194 350 241C350 289 316 317 260 317H230V378H184V166ZM230 205V278H256C286 278 303 265 303 241C303 217 286 205 256 205H230Z"/>
+  <path d="M176 176H300" fill="none" stroke="#24557A" stroke-width="20" stroke-linecap="round"/>
+  <path d="M176 230H318M176 280H272" fill="none" stroke="#9AB7CC" stroke-width="16" stroke-linecap="round"/>
+  <path d="M176 340H246M226 320L248 340L226 360" fill="none" stroke="#159A94" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="360" cy="360" r="82" fill="#FFFFFF"/>
-  <circle cx="360" cy="360" r="70" fill="url(#success)"/>
-  <path d="M326 360L351 385L397 333" fill="none" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="360" cy="360" r="70" fill="url(#reminder)"/>
+  <path d="M360 306V314M414 360H406M360 414V406M306 360H314" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+  <path d="M360 322V360L389 377" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="360" cy="360" r="8" fill="#FFFFFF"/>
 </svg>

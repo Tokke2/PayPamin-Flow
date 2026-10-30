@@ -43,8 +43,20 @@ class BrandingTests(unittest.TestCase):
     def test_svg_icon_has_accessible_product_title(self):
         root = ET.parse(ASSETS / "paypamin_flow.svg").getroot()
         title = root.find("{http://www.w3.org/2000/svg}title")
+        description = root.find("{http://www.w3.org/2000/svg}desc")
         self.assertIsNotNone(title)
         self.assertEqual(title.text, APP_NAME)
+        self.assertIn("påminnelseklocka", description.text)
+        self.assertNotIn("python", ET.tostring(root, encoding="unicode").lower())
+
+    def test_png_icons_retain_creator_and_copyright_metadata(self):
+        from PIL import Image
+
+        for filename in ("paypamin_flow.png", "paypamin_flow_16.png", "paypamin_flow_512.png"):
+            with self.subTest(icon=filename), Image.open(ASSETS / filename) as icon:
+                self.assertEqual(icon.info.get("Title"), APP_NAME)
+                self.assertEqual(icon.info.get("Author"), APP_AUTHOR)
+                self.assertEqual(icon.info.get("Copyright"), APP_COPYRIGHT)
 
     def test_every_secondary_window_uses_the_shared_icon_factory(self):
         tree = ast.parse((ROOT / "paypamin_flow.py").read_text(encoding="utf-8"))
@@ -102,6 +114,28 @@ class WindowIconTests(unittest.TestCase):
             self.app.ReminderApp._set_window_icon(fake, window)
         window.iconphoto.assert_called_once()
         window.iconbitmap.assert_called_once_with(str(ASSETS / "paypamin_flow.ico"))
+
+
+class MacOSBrandingTests(unittest.TestCase):
+    def test_dock_uses_the_product_png(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            try:
+                image = Mock()
+                image_class = Mock()
+                image_class.alloc.return_value.initWithContentsOfFile_.return_value = image
+                application = Mock()
+                application_class = Mock()
+                application_class.sharedApplication.return_value = application
+                app_kit = SimpleNamespace(NSApplication=application_class, NSImage=image_class)
+                with patch.object(app.sys, "platform", "darwin"), patch.dict(sys.modules, {"AppKit": app_kit}), patch.object(app, "ICON_DIR", ASSETS):
+                    app.ReminderApp._configure_macos_dock_icon(SimpleNamespace())
+                image_class.alloc.return_value.initWithContentsOfFile_.assert_called_once_with(str(ASSETS / "paypamin_flow_256.png"))
+                application.setApplicationIconImage_.assert_called_once_with(image)
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
 
 
 class WindowsBrandingTests(unittest.TestCase):

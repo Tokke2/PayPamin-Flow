@@ -47,6 +47,8 @@ class ReleasePackagingTests(unittest.TestCase):
                 names = set(archive.namelist())
                 self.assertTrue(set(PYTHON_PACKAGE_REQUIRED_FILES).issubset(names))
                 self.assertIn("paypamin_flow.py", names)
+                self.assertIn("paypamin_flow_launcher.py", names)
+                self.assertIn("paypamin_flow.pyw", names)
                 self.assertIn("app_backup.py", names)
                 self.assertIn("build_info.py", names)
                 self.assertIn("tray.py", names)

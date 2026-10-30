@@ -20,7 +20,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 - Innan **P1** skapas kontrolleras en befintlig original-PDF mot fakturans sparade fakturanummer, kund, datum, belopp, valuta och fakturatext. Sparade fältmallar används vid kontrollen; avvikelser stoppar P1 utan att ändra fakturan eller påminnelsehistoriken. Manuella fakturor utan PDF fungerar som tidigare.
 - SVG-logotyp kan kopplas till en leverantörsmall och återanvändas vid export. Ett logotypval i PDF-matchningen sparas även direkt på fakturan och följer med till P1/P2 utan att fältmallen behöver sparas; valet påverkas inte av en senare global logotypändring.
 - Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta. **Skapa påminnelse** skapar en aktuell men saknad P1 och kan därefter fortsätta till P2 i samma klick när både P2-intervallet och P1:s sparade betalningsfrist har passerat; inget steg skapas i förtid. **Redigera P1** och **Redigera P2** kan byta logotyp och skriva om den befintliga nivåns PDF med ursprungligt datum, originaldata och oförändrade villkor/historik via interna P1/P2-snapshots; den gamla filen bevaras om skrivningen misslyckas. Om en registrerad P1-PDF saknas återskapas den först med ursprungligt datum och oförändrad historik, varefter en aktuell P2 kan skapas. En skadad eller oläsbar SVG ger ett tydligt fel i stället för att tyst ersättas med textlogotyp.
-- Samma PayPamin Flow-ikon i fönster, dialoger, programmenyer och systemfältet.
+- Samma nya PayPamin Flow-ikon med faktura och påminnelseklocka i fönster, dialoger, programmenyer, Windows-autostartgenväg och systemfältet – inte Pythons ikon.
 - **Stäng eller minimera till systemfältet:** fönstrets stäng- och minimeringsknappar döljer appen medan schemalagda kontroller fortsätter. **Arkiv → Avsluta helt** eller systemfältets **Avsluta helt** stänger appen helt.
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
 - **Autostart vid inloggning** på Windows, macOS och Linux. Appen startar då minimerad i systemfältet medan manuell start visar fönstret som vanligt. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
@@ -50,7 +50,7 @@ Använd `py -m pip` i Windows om det är det kommando som pekar på din Python-i
 
 1. Installera Python från python.org och välj **Add Python to PATH**. Den officiella installationen innehåller Tkinter och `pythonw.exe`.
 2. Installera tilläggen enligt ovan.
-3. Dubbelklicka på **`start_paypamin_flow.vbs`**. Startaren använder `pythonw.exe` och öppnar inget konsolfönster. Appen lägger dessutom `CREATE_NO_WINDOW` på hjälpprogram som startas för exempelvis PDF/OCR, så att inga extra konsolfönster öppnas i bakgrunden.
+3. Dubbelklicka på **`start_paypamin_flow.vbs`**. Startaren använder `pythonw.exe` med den gemensamma `paypamin_flow_launcher.py` och öppnar inget konsolfönster. Appen lägger dessutom `CREATE_NO_WINDOW` på hjälpprogram som startas för exempelvis PDF/OCR, så att inga extra konsolfönster öppnas i bakgrunden. Den äldre `paypamin_flow.pyw` finns kvar för kompatibilitet men används inte av Windows startkommando eller autostart.
 
 För felsökning från en redan öppen PowerShell kan `py paypamin_flow.py` användas.
 
@@ -72,7 +72,7 @@ python3 -m pip install -r requirements.txt
 ./packaging/install_linux.sh
 ```
 
-Starta därefter **PayPamin Flow** från programmenyn. Skrivbordsposten har `Terminal=false`. Installationen är per användare och kopierar Python-filerna till `~/.local/share/paypamin-flow` som standard. Du kan också köra `./start_paypamin_flow.sh` eller `python3 paypamin_flow.pyw` direkt från appmappen.
+Starta därefter **PayPamin Flow** från programmenyn. Skrivbordsposten har `Terminal=false`. Installationen är per användare och kopierar Python-filerna till `~/.local/share/paypamin-flow` som standard. Du kan också köra `./start_paypamin_flow.sh` eller `python3 paypamin_flow_launcher.py` direkt från appmappen.
 
 På system med externally managed Python kan en virtuell miljö användas. Skapa miljön, installera `requirements.txt` i den och ange dess Python med miljövariabeln `PYTHON` när installationsprogrammet körs.
 
@@ -176,15 +176,15 @@ Autostart gäller endast den inloggade användaren och kräver inga administrat�
 
 | System | Mekanism |
 | --- | --- |
-| Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PayPaminFlow` med `pythonw.exe` |
+| Windows | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\PayPamin Flow.lnk`, med PayPamin Flow-ikon och `pythonw.exe paypamin_flow_launcher.py --minimized` |
 | macOS | `~/Library/LaunchAgents/se.paypamin.flow.plist` |
 | Linux | `$XDG_CONFIG_HOME/autostart/paypamin-flow.desktop`, normalt `~/.config/autostart/` |
 
-Stäng av eller aktivera via **Inställningar → Starta PayPamin Flow automatiskt när jag loggar in**. Om appmappen flyttas, starta appen en gång från den nya platsen så uppdateras sökvägen. Autostart sker efter inloggning och öppnar inget konsolfönster.
+Stäng av eller aktivera via **Inställningar → Starta PayPamin Flow automatiskt när jag loggar in**. Windows-genvägen skapas atomiskt med Windows eget genvägsgränssnitt via dold PowerShell och får explicit appens `.ico`-fil. Den tidigare registerposten under `CurrentVersion\Run` tas bort vid synkronisering så att ingen dubbelstart sker. Autostartkommandot använder **inte `.pyw`**. Om appmappen flyttas, starta appen en gång från den nya platsen så uppdateras sökvägen. Autostart sker efter inloggning och öppnar inget konsolfönster.
 
 ## Applikationsikon
 
-Ikonen föreställer ett fakturadokument med **P** och en grön betalningsmarkering. Original och skrivbordsformat ligger i `assets/`:
+Ikonen föreställer ett fakturadokument med textrader, flödespil och en grön **påminnelseklocka**. Den är ritad för att vara tydlig även i små storlekar och används i stället för Pythons ikon. Original och skrivbordsformat ligger i `assets/`:
 
 - `paypamin_flow.svg` – vektororiginal.
 - `paypamin_flow.png` och storleksvarianter – Tkinter, systemfält och Linux.

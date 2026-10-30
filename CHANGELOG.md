@@ -6,6 +6,8 @@
 - Added validated in-app installation of Python updates with atomic replacement, rollback and console-free restart; no separate updater needs to be run by the user.
 - Kept the old app alive until the updated process confirms UI readiness with a one-off PID/token handshake; startup timeout or early exit stops the failed child and rolls back safely.
 - Added official GitHub release-ID comparison so a refreshed release build can be installed without changing the application version; update checks still use Releases rather than the main branch.
+- Refreshed the complete application icon set with a new invoice-and-reminder-clock design, regenerated PNG/ICO/ICNS sizes and retained the editable SVG with Rickard Länkvist's copyright metadata.
+- Replaced Windows registry autostart with an atomic per-user Startup shortcut carrying the PayPamin Flow icon. The shortcut uses `pythonw.exe` with the shared `paypamin_flow_launcher.py`, never `.pyw`; legacy Run entries are removed after successful migration to prevent duplicate launches. Manual launchers and update restarts use the same diagnostic launcher, while the old `.pyw` remains only as a compatibility entry point.
 - Prevented Windows console windows from PDF/OCR and other child processes while preserving existing subprocess flags; GUI launch and autostart continue to use `pythonw.exe`.
 - Fixed tray startup through pystray's detached GUI integration and backend-ready visibility callback; added a distinct Windows taskbar app identity and mandatory validation of every application icon in Python updates.
 - Added close-to-system-tray behavior, an explicit full-exit path and the PayPamin Flow icon in the tray.

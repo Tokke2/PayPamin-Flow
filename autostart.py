@@ -35,7 +35,7 @@ def launch_command() -> list[str]:
     if not sys.executable:
         raise AutostartError(_("Det går inte att hitta Python-installationen."))
     executable = Path(sys.executable).resolve()
-    script = SOURCE_DIR / "paypamin_flow.pyw"
+    script = SOURCE_DIR / "paypamin_flow_launcher.py"
     if sys.platform.startswith("win"):
         # Never fall back to python.exe: that would open a console at login.
         pythonw = executable.with_name("pythonw.exe")
@@ -50,7 +50,7 @@ def launch_command() -> list[str]:
 def autostart_location() -> str:
     """Return a human-readable location for the current platform's entry."""
     if sys.platform.startswith("win"):
-        return f"HKCU\\{WINDOWS_RUN_KEY}\\{WINDOWS_VALUE_NAME}"
+        return str(_windows_shortcut_path())
     if sys.platform == "darwin":
         return str(_macos_agent_path())
     if sys.platform.startswith("linux"):
@@ -60,14 +60,7 @@ def autostart_location() -> str:
 
 def is_autostart_enabled() -> bool:
     if sys.platform.startswith("win"):
-        import winreg
-
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY) as key:
-                winreg.QueryValueEx(key, WINDOWS_VALUE_NAME)
-            return True
-        except FileNotFoundError:
-            return False
+        return _windows_shortcut_path().is_file() or _legacy_windows_autostart_exists()
     if sys.platform == "darwin":
         return _macos_agent_path().is_file()
     if sys.platform.startswith("linux"):
@@ -92,20 +85,120 @@ def set_autostart(enabled: bool) -> None:
         raise AutostartError(str(exc)) from exc
 
 
-def _set_windows_autostart(enabled: bool) -> None:
+def _windows_shortcut_path() -> Path:
+    roaming = os.environ.get("APPDATA")
+    base = Path(roaming) if roaming else Path.home() / "AppData" / "Roaming"
+    return (
+        base
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs"
+        / "Startup"
+        / f"{APP_NAME}.lnk"
+    )
+
+
+def _legacy_windows_autostart_exists() -> bool:
     import winreg
 
-    if not enabled:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY) as key:
+            winreg.QueryValueEx(key, WINDOWS_VALUE_NAME)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _remove_legacy_windows_run_value() -> None:
+    """Migrate the old pythonw Run value without leaving a duplicate start."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, WINDOWS_VALUE_NAME)
+    except FileNotFoundError:
+        pass
+
+
+def _windows_powershell() -> Path:
+    root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    executable = root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if not executable.is_file():
+        raise AutostartError(_("Windows PowerShell krävs för den ikonmärkta autostartgenvägen."))
+    return executable
+
+
+def _create_windows_shortcut(shortcut_path: Path, command: list[str]) -> None:
+    """Create an icon-branded Startup shortcut through Windows' own COM shell."""
+    icon = RESOURCE_DIR / "assets" / "paypamin_flow.ico"
+    if not icon.is_file():
+        raise AutostartError(_("Programikonen saknas: {path}", path=icon))
+    powershell = _windows_powershell()
+    shortcut_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = shortcut_path.with_name(f"{shortcut_path.stem}.tmp.lnk")
+    environment = os.environ.copy()
+    environment.update({
+        "PAYPAMIN_FLOW_SHORTCUT": str(temporary_path),
+        "PAYPAMIN_FLOW_TARGET": command[0],
+        "PAYPAMIN_FLOW_ARGUMENTS": subprocess.list2cmdline(command[1:]),
+        "PAYPAMIN_FLOW_WORKDIR": str(SOURCE_DIR),
+        "PAYPAMIN_FLOW_ICON": f"{icon},0",
+        "PAYPAMIN_FLOW_DESCRIPTION": APP_NAME,
+    })
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "$shell=New-Object -ComObject WScript.Shell;"
+        "$link=$shell.CreateShortcut($env:PAYPAMIN_FLOW_SHORTCUT);"
+        "$link.TargetPath=$env:PAYPAMIN_FLOW_TARGET;"
+        "$link.Arguments=$env:PAYPAMIN_FLOW_ARGUMENTS;"
+        "$link.WorkingDirectory=$env:PAYPAMIN_FLOW_WORKDIR;"
+        "$link.IconLocation=$env:PAYPAMIN_FLOW_ICON;"
+        "$link.Description=$env:PAYPAMIN_FLOW_DESCRIPTION;"
+        "$link.WindowStyle=1;"
+        "$link.Save()"
+    )
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        completed = subprocess.run(
+            [
+                str(powershell),
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                script,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=flags,
+            env=environment,
+            timeout=30,
+            check=False,
+        )
+        if completed.returncode != 0 or not temporary_path.is_file():
+            raise AutostartError(_("Windows-genvägen för autostart kunde inte skapas."))
+        os.replace(temporary_path, shortcut_path)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AutostartError(str(exc)) from exc
+    finally:
         try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-                winreg.DeleteValue(key, WINDOWS_VALUE_NAME)
-        except FileNotFoundError:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
             pass
+
+
+def _set_windows_autostart(enabled: bool) -> None:
+    shortcut_path = _windows_shortcut_path()
+    if not enabled:
+        shortcut_path.unlink(missing_ok=True)
+        _remove_legacy_windows_run_value()
         return
 
-    command = subprocess.list2cmdline(launch_command())
-    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-        winreg.SetValueEx(key, WINDOWS_VALUE_NAME, 0, winreg.REG_SZ, command)
+    _create_windows_shortcut(shortcut_path, launch_command())
+    _remove_legacy_windows_run_value()
 
 
 def _macos_agent_path() -> Path:

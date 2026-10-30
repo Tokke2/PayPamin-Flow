@@ -16,7 +16,7 @@ done
 cp -R "$ROOT/assets/." "$APP_HOME/assets/"
 install -m 644 "$ROOT/packaging/paypamin-flow.desktop" "$APP_HOME/packaging/paypamin-flow.desktop"
 LAUNCHER="$PREFIX/bin/paypamin-flow"
-printf '%s\n' '#!/bin/sh' "exec \"$PYTHON\" \"$APP_HOME/paypamin_flow.pyw\" \"\$@\"" > "$LAUNCHER"
+printf '%s\n' '#!/bin/sh' "exec \"$PYTHON\" \"$APP_HOME/paypamin_flow_launcher.py\" \"\$@\"" > "$LAUNCHER"
 chmod 755 "$LAUNCHER"
 install -D -m 644 "$ROOT/assets/paypamin_flow.png" "$PREFIX/share/icons/hicolor/256x256/apps/paypamin-flow.png"
 install -D -m 644 "$ROOT/packaging/paypamin-flow.desktop" "$PREFIX/share/applications/paypamin-flow.desktop"

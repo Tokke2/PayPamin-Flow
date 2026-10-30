@@ -33,6 +33,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "invoice_parser.py",
     "mail_compose.py",
     "paypamin_flow.py",
+    "paypamin_flow_launcher.py",
     "paypamin_flow.pyw",
     "reminder_archive.py",
     "reminder_journal.py",

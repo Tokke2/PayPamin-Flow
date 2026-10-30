@@ -203,7 +203,7 @@ class UpdateInstallerTests(unittest.TestCase):
             process = restart_updated_app(installed)
         self.assertEqual(process.pid, 4321)
         args, kwargs = calls[0]
-        self.assertEqual(args, [str(pythonw.resolve()), str((self.target / "paypamin_flow.pyw").resolve())])
+        self.assertEqual(args, [str(pythonw.resolve()), str((self.target / "paypamin_flow_launcher.py").resolve())])
         self.assertEqual(kwargs["creationflags"], 0x08000008)
         self.assertFalse(kwargs["start_new_session"])
         self.assertEqual(kwargs["stdout"], update_installer.subprocess.DEVNULL)
@@ -228,7 +228,7 @@ class UpdateInstallerTests(unittest.TestCase):
             process = restart_updated_app(installed)
         self.assertEqual(process.pid, 4322)
         args, kwargs = calls[0]
-        self.assertEqual(args, [str(python.resolve()), str((self.target / "paypamin_flow.pyw").resolve())])
+        self.assertEqual(args, [str(python.resolve()), str((self.target / "paypamin_flow_launcher.py").resolve())])
         self.assertTrue(kwargs["start_new_session"])
         self.assertEqual(kwargs["creationflags"], 0)
         self.assertEqual(kwargs["env"][update_installer.UPDATE_READY_FILE_ENV], str(installed.ready_file))
