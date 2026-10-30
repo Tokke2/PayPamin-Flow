@@ -700,7 +700,7 @@ class ReminderApp(tk.Tk):
         set_language(setting('language') or 'sv')
         super().__init__(); self.title(APP_NAME); self.geometry('1180x700'); self.minsize(940,560)
         self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
-        self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._update_helper_process=None;self.update_button=None
+        self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._available_update=None;self._update_helper_process=None;self.update_button=None
         self.tray=None;self._quitting=False
         self._import_monitor=ImportFolderMonitor(IMPORT_DIR);self._import_scan_running=False;self._python_addons_ready=False
         self.build(); self.refresh()
@@ -897,10 +897,21 @@ class ReminderApp(tk.Tk):
         if setting('update_auto')=='1':self.check_for_updates(manual=False)
         self.after(UPDATE_CHECK_INTERVAL_MS,self._run_scheduled_update_check)
 
+    def _update_button_idle_text(self):
+        return _('Uppdatering tillgänglig') if getattr(self,'_available_update',None) is not None else _('Uppdatera appen')
+
+    def _set_update_available(self,release):
+        self._available_update=release
+        if getattr(self,'_update_check_running',False) or getattr(self,'_update_install_running',False):return
+        button=getattr(self,'update_button',None)
+        if not button:return
+        try:button.configure(text=self._update_button_idle_text(),state='normal')
+        except tk.TclError:pass
+
     def _set_update_check_busy(self,busy):
         button=getattr(self,'update_button',None)
         if not button:return
-        try:button.configure(text=_('Söker…') if busy else _('Sök efter uppdateringar'),state='disabled' if busy else 'normal')
+        try:button.configure(text=_('Söker…') if busy else self._update_button_idle_text(),state='disabled' if busy else 'normal')
         except tk.TclError:pass
 
     def _set_update_install_busy(self,busy,stage=None):
@@ -909,15 +920,19 @@ class ReminderApp(tk.Tk):
         button=getattr(self,'update_button',None)
         if not button:return
         labels={'download':_('Hämtar och verifierar…'),'install':_('Installerar filer…'),'restart':_('Startar om…')}
-        text=labels.get(getattr(self,'_update_install_stage',None),_('Uppdaterar…')) if busy else _('Sök efter uppdateringar')
+        text=labels.get(getattr(self,'_update_install_stage',None),_('Uppdaterar…')) if busy else self._update_button_idle_text()
         try:button.configure(text=text,state='disabled' if busy else 'normal')
         except tk.TclError:pass
 
-    def check_for_updates(self,manual=False):
-        """Check GitHub in a worker thread and report back through Tk's event loop."""
+    def check_for_updates(self,manual=False,force=False):
+        """Open a known update or check GitHub in a background worker."""
         if self._update_check_running or self._update_install_running:
             if manual:messagebox.showinfo(_('Uppdateringskontroll'),_('En uppdateringskontroll eller installation pågår redan.'),parent=self)
             return
+        available=getattr(self,'_available_update',None)
+        if manual and available is not None and not force:
+            self.show_update_available(available);return
+        if force:self._set_update_available(None)
         self._update_check_running=True;self._set_update_check_busy(True)
         result_queue=queue.Queue()
         def check():
@@ -939,6 +954,7 @@ class ReminderApp(tk.Tk):
             return
         release=payload
         if is_update_available(release,APP_VERSION):
+            self._set_update_available(release)
             missing=missing_release_assets(release)
             logger.info('New PayPamin Flow release available: current=%s latest=%s release_id=%s commit=%s files=%s missing_assets=%s',APP_VERSION,release.version,release.release_id,release.release_commit,release.package_fingerprint[:12],missing)
             if missing:
@@ -948,6 +964,7 @@ class ReminderApp(tk.Tk):
             if manual:self.show_update_available(release)
             elif setting('update_auto')=='1':self.start_update_installation(release,manual=False)
             return
+        self._set_update_available(None)
         logger.info('No newer PayPamin Flow release: current=%s latest=%s',APP_VERSION,release.version)
         if manual:
             commit=release.release_commit[:12] or APP_RELEASE_COMMIT[:12] or _('okänd')
@@ -1049,10 +1066,13 @@ class ReminderApp(tk.Tk):
             w.destroy()
         def install_now():
             w.destroy();self.start_update_installation(release,manual=True)
+        def check_again():
+            w.destroy();self.check_for_updates(manual=True,force=True)
         buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(8,0))
         install_button=ttk.Button(buttons,text=_('Installera och starta om'),command=install_now,style='Accent.TButton')
         install_button.pack(side='left')
         if missing:install_button.state(['disabled'])
+        ttk.Button(buttons,text=_('Sök igen'),command=check_again).pack(side='left',padx=(8,0))
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='right')
         ttk.Button(buttons,text=_('Öppna nedladdningssida'),command=open_download).pack(side='right',padx=(0,8))
 
@@ -1149,7 +1169,7 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Avsluta helt'),command=self.quit_app)
         menu.add_cascade(label=_('Arkiv'),menu=file_menu)
         help_menu=tk.Menu(menu,tearoff=0)
-        help_menu.add_command(label=_('Sök efter uppdateringar'),command=lambda:self.check_for_updates(manual=True))
+        help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
         menu.add_cascade(label=_('Hjälp'),menu=help_menu)
         self.configure(menu=menu)
@@ -1162,7 +1182,7 @@ class ReminderApp(tk.Tk):
         ttk.Label(header,text=_('Lokal app · dina filer stannar på datorn'),style='Sub.TLabel').pack(side='left',padx=16,pady=(8,0))
         ttk.Button(header,text=_('Inställningar'),command=self.settings).pack(side='right')
         ttk.Button(header,text=_('Om {app_name}',app_name=APP_NAME),command=self.show_about).pack(side='right',padx=(0,7))
-        self.update_button=ttk.Button(header,text=_('Sök efter uppdateringar'),command=lambda:self.check_for_updates(manual=True))
+        self.update_button=ttk.Button(header,text=self._update_button_idle_text(),command=lambda:self.check_for_updates(manual=True),style='Accent.TButton')
         self.update_button.pack(side='right',padx=(0,7))
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)

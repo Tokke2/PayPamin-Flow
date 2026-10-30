@@ -93,6 +93,8 @@ _ENGLISH = {
 
     # GitHub release update checks
     "Sök efter uppdateringar": "Check for updates",
+    "Uppdatera appen": "Update app",
+    "Sök igen": "Check again",
     "Söker…": "Checking…",
     "Uppdateringskontroll": "Update check",
     "En uppdateringskontroll eller installation pågår redan.": "An update check or installation is already running.",

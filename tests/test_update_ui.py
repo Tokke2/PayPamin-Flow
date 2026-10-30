@@ -40,10 +40,15 @@ class UpdateUiTests(unittest.TestCase):
         self.addCleanup(cleanup)
 
     def fake_app(self):
-        return SimpleNamespace(
+        fake = SimpleNamespace(
             _update_check_running=True,
+            _update_install_running=False,
+            _available_update=None,
+            update_button=None,
             _set_update_check_busy=lambda busy: None,
         )
+        fake._set_update_available = MethodType(self.app.ReminderApp._set_update_available, fake)
+        return fake
 
     def test_automatic_new_release_starts_silent_installation(self):
         fake = self.fake_app()
@@ -77,6 +82,53 @@ class UpdateUiTests(unittest.TestCase):
         results.put(("ok", True, RELEASE))
         self.app.ReminderApp._poll_update_check(fake, results)
         self.assertEqual(calls, ["0.7.0"])
+
+    def test_update_button_opens_cached_release_without_rechecking(self):
+        calls = []
+        fake = SimpleNamespace(
+            _update_check_running=False,
+            _update_install_running=False,
+            _available_update=RELEASE,
+            show_update_available=calls.append,
+        )
+        with patch.object(self.app.threading, "Thread", side_effect=AssertionError("No network worker expected")):
+            self.app.ReminderApp.check_for_updates(fake, manual=True)
+        self.assertEqual(calls, [RELEASE])
+
+    def test_available_release_changes_idle_button_text(self):
+        self.app.set_language("sv")
+        button = Mock()
+        fake = SimpleNamespace(
+            _available_update=None,
+            _update_check_running=False,
+            _update_install_running=False,
+            update_button=button,
+        )
+        fake._update_button_idle_text = MethodType(self.app.ReminderApp._update_button_idle_text, fake)
+        self.app.ReminderApp._set_update_available(fake, RELEASE)
+        button.configure.assert_called_once_with(text="Uppdatering tillgänglig", state="normal")
+        self.app.ReminderApp._set_update_available(fake, None)
+        self.assertEqual(button.configure.call_args.kwargs["text"], "Uppdatera appen")
+
+    def test_force_check_bypasses_cached_release(self):
+        scheduled = []
+        fake = SimpleNamespace(
+            _update_check_running=False,
+            _update_install_running=False,
+            _available_update=RELEASE,
+            update_button=None,
+            _set_update_check_busy=lambda busy: None,
+            after=lambda delay, callback: scheduled.append(callback),
+        )
+        fake._set_update_available = MethodType(self.app.ReminderApp._set_update_available, fake)
+        fake._poll_update_check = MethodType(self.app.ReminderApp._poll_update_check, fake)
+        with patch.object(self.app, "fetch_latest_release", return_value=RELEASE), patch.object(
+            self.app.threading, "Thread", ImmediateThread
+        ):
+            self.app.ReminderApp.check_for_updates(fake, manual=True, force=True)
+        self.assertIsNone(fake._available_update)
+        self.assertTrue(fake._update_check_running)
+        self.assertEqual(len(scheduled), 1)
 
     def test_manual_dialog_disables_install_until_files_are_ready(self):
         self.app.set_language("sv")
