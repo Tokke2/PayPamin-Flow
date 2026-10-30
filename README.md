@@ -26,7 +26,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 - **Autostart vid inloggning** på Windows, macOS och Linux. Appen startar då minimerad i systemfältet medan manuell start visar fönstret som vanligt. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
 - **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med commit- och filjämförelse, SHA-256-verifiering och tyst omstart. Både nyare versioner och verkligt ändrade release-byggen med samma versionsnummer upptäcks. Manuell sökning och installation finns via den tydliga **Uppdatera appen**-knappen eller **Hjälp → Uppdatera appen**.
-- PDF sparas lokalt och öppnas i datorns standardprogram. **Öppna exportmapp** i knappraden eller under **Arkiv** öppnar mappen med skapade påminnelser i datorns filhanterare. Fellogg öppnas via **Visa fellogg**.
+- PDF sparas lokalt och öppnas i datorns standardprogram. **Öppna exportmapp** i knappraden eller under **Arkiv** öppnar mappen med skapade påminnelser i datorns filhanterare. Den samlade felloggen öppnas via **Visa samlad fellogg** eller **Hjälp → Visa samlad fellogg**.
 - **Automatiskt påminnelsearkiv:** vid appstart och därefter regelbundet flyttas igenkända P1/P2-PDF:er vars ursprungliga påminnelsedatum är mer än 7 dagar gammalt från `export/` till `export/arkiv/`. Fakturor och påminnelsehistorik ändras inte, arkiverad P1 kan fortfarande redigeras och befintliga arkivfiler skrivs aldrig över.
 
 ## Python-only – ingen EXE eller native-app
@@ -79,7 +79,16 @@ På system med externally managed Python kan en virtuell miljö användas. Skapa
 
 ## Om appen inte startar
 
-Kontrollera först att **Python 3.10 eller senare med Tkinter** är installerat och kör `python -m pip install -r requirements.txt` i appmappen. Den konsolfria startaren skriver import- och startfel till **`~/.paminnelseapp/startup.log`** och försöker visa felet i ett systemmeddelande. För terminalfelsökning kan `python3 paypamin_flow.py` användas på Linux/macOS eller `py paypamin_flow.py` på Windows.
+Kontrollera först att **Python 3.10 eller senare med Tkinter** är installerat och kör `python -m pip install -r requirements.txt` i appmappen. Den konsolfria startaren skriver import- och startfel till **`~/.paminnelseapp/startup.log`**, uppdaterar även den samlade felloggen och försöker visa felet i ett systemmeddelande. För terminalfelsökning kan `python3 paypamin_flow.py` användas på Linux/macOS eller `py paypamin_flow.py` på Windows.
+
+## Samlad fellogg för snabb felsökning
+
+Välj **Visa samlad fellogg** i knappraden eller **Hjälp → Visa samlad fellogg**. Appen uppdaterar då och öppnar **`~/.paminnelseapp/errors.log`** direkt i systemets textprogram.
+
+- Samlingsfilen hämtar kompletta `ERROR`- och `CRITICAL`-block med stackspår från `app.log` och dess rotationer, startfel från `startup.log` samt fel och rollback-information från `update.log` och andra app-loggar i samma katalog.
+- Posterna sorteras med nyaste fel först och exakta dubbletter från roterade eller kopierade loggar slås samman. Källfilen och tiden anges för varje fel.
+- Vyn byggs om atomiskt vid appstart, en gång i minuten medan appen körs och varje gång den öppnas. Originalloggarna ändras eller tas inte bort, och ett misslyckat skrivförsök lämnar den tidigare samlingsfilen orörd.
+- Om inga fel finns står det uttryckligen i filen. All diagnostik stannar lokalt; granska filvägar och tekniska uppgifter innan loggen delas.
 
 ## Systemfält och fullständig avslutning
 

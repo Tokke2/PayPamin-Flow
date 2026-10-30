@@ -31,7 +31,7 @@ def _write_startup_log(details: str) -> Path | None:
 def _startup_message(details: str, log_path: Path | None) -> str:
     lines = details.strip().splitlines()
     summary = lines[-1][:700] if lines else "Unknown startup error"
-    log_text = str(log_path) if log_path else "Log file could not be written"
+    log_text = f"{log_path}\n{log_path.parent / 'errors.log'}" if log_path else "Log file could not be written"
     return (
         "PayPamin Flow kunde inte starta. / PayPamin Flow could not start.\n\n"
         "Kontrollera att Python 3.10 eller senare är installerat med Tkinter.\n"
@@ -98,6 +98,14 @@ def _show_startup_error(message: str) -> bool:
 
 def _report_startup_failure(details: str) -> None:
     log_path = _write_startup_log(details)
+    if log_path is not None:
+        try:
+            from error_log import refresh_error_log
+
+            refresh_error_log(log_path.parent)
+        except Exception:
+            # The original startup.log remains available even if aggregation fails.
+            pass
     message = _startup_message(details, log_path)
     if not _show_startup_error(message):
         print(message, file=sys.stderr)

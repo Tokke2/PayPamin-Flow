@@ -30,6 +30,7 @@ from cache_cleaner import clean_cache
 from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from console_free import configure_console_free_subprocesses
+from error_log import ERROR_LOG_NAME, refresh_error_log
 from customer_contacts import (
     EmailAddressError, ensure_customer_contact_schema, get_customer_contact,
     normalize_email_addresses, parse_email_addresses, save_customer_contact,
@@ -71,6 +72,7 @@ from update_installer import (
 )
 
 IMPORT_WATCH_INTERVAL_MS = 5000
+ERROR_LOG_REFRESH_INTERVAL_MS = 60 * 1000
 CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 JOURNAL_BACKUP_INTERVAL_MS = 60 * 60 * 1000
 REMINDER_ARCHIVE_INTERVAL_MS = 60 * 60 * 1000
@@ -92,6 +94,7 @@ IMPORT_DIR = DATA_FOLDER / "import"
 IMPORT_DIR.mkdir(parents=True,exist_ok=True)
 ICON_DIR = RESOURCE_DIR / "assets"
 LOG_PATH = APP_DIR / "app.log"
+ERROR_LOG_PATH = APP_DIR / ERROR_LOG_NAME
 logger = logging.getLogger(APP_SLUG)
 logger.setLevel(logging.INFO)
 if not logger.handlers:
@@ -711,6 +714,7 @@ class ReminderApp(tk.Tk):
         self.after(250,self.check_python_addons)
         self.after(2000,self._run_scheduled_update_check)
         self.after(1500,self._run_scheduled_import_scan)
+        self.after(2500,self._run_scheduled_error_log_refresh)
         self.after(3000,self._run_scheduled_cache_cleanup)
         self.after(4000,self._run_scheduled_journal_backup)
         self.after(4500,self._run_scheduled_reminder_archive)
@@ -1169,6 +1173,7 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Avsluta helt'),command=self.quit_app)
         menu.add_cascade(label=_('Arkiv'),menu=file_menu)
         help_menu=tk.Menu(menu,tearoff=0)
+        help_menu.add_command(label=_('Visa samlad fellogg'),command=self.open_log)
         help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
         menu.add_cascade(label=_('Hjälp'),menu=help_menu)
@@ -1187,7 +1192,7 @@ class ReminderApp(tk.Tk):
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)
         bar=ttk.Frame(self,padding=(22,5,22,12)); bar.pack(fill='x')
-        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa fellogg',self.open_log,'TButton')]:
+        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa samlad fellogg',self.open_log,'TButton')]:
             ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
         controls=ttk.Frame(self,padding=(22,0,22,10));controls.pack(fill='x')
         ttk.Label(controls,text=_('Visa:')).pack(side='left')
@@ -1354,9 +1359,21 @@ class ReminderApp(tk.Tk):
         except Exception:logger.exception('Could not open SVG folder')
 
     def open_log(self):
-        logger.info('User opened diagnostic log')
-        try:open_path(LOG_PATH)
-        except Exception:logger.exception('Could not open diagnostic log')
+        logger.info('User opened consolidated error log')
+        try:
+            report=refresh_error_log(APP_DIR)
+            open_path(report.path)
+        except Exception:
+            logger.exception('Could not open consolidated error log')
+            try:open_path(LOG_PATH)
+            except Exception:logger.exception('Could not open diagnostic log')
+
+    def _run_scheduled_error_log_refresh(self):
+        """Keep the consolidated local view current without touching source logs."""
+        if self._quitting:return
+        try:refresh_error_log(APP_DIR)
+        except Exception:logger.exception('Consolidated error log refresh failed')
+        if not self._quitting:self.after(ERROR_LOG_REFRESH_INTERVAL_MS,self._run_scheduled_error_log_refresh)
 
     def clear_cache_now(self):
         """Run the same conservative age/type filter as the daily cleanup."""
@@ -2385,6 +2402,10 @@ def main():
         configure_windows_app_identity()
         init_db()
         logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
+        try:
+            report=refresh_error_log(APP_DIR)
+            logger.info('Consolidated error log refreshed: errors=%d sources=%d',report.error_count,report.source_count)
+        except Exception:logger.exception('Consolidated error log refresh failed')
         window=ReminderApp()
         after_idle=getattr(window,'after_idle',None)
         if after_idle is not None:after_idle(mark_update_ready)

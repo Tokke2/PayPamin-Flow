@@ -51,6 +51,7 @@ _ENGLISH = {
     "Ignorera / återaktivera": "Ignore / reactivate",
     "Redigera vald": "Edit selected",
     "Visa fellogg": "Show error log",
+    "Visa samlad fellogg": "Show consolidated error log",
     "Ta bort vald": "Delete selected",
     "Visa:": "Show:",
     "Välj en rad för att förhandsgranska / hantera.": "Select a row to preview / manage.",

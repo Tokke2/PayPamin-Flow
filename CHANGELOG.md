@@ -2,6 +2,7 @@
 
 ## Unreleased — application version remains 0.6.0
 
+- Added a local consolidated `errors.log` for faster troubleshooting. It collects complete error/traceback blocks from current and rotated app logs, startup failures and update failures, newest first with duplicate suppression and atomic refreshes, while preserving every original log. The toolbar and Help menu open the consolidated view directly.
 - Replaced native application packaging with one cross-platform `PayPamin-Flow-Python.zip` and SHA-256 sidecar; removed PyInstaller and native build metadata.
 - Added validated in-app installation of Python updates with atomic replacement, rollback and console-free restart; no separate updater needs to be run by the user.
 - Kept the old app alive until the updated process confirms UI readiness with a one-off PID/token handshake; startup timeout or early exit stops the failed child and rolls back safely.

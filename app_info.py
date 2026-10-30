@@ -31,6 +31,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "console_free.py",
     "currency.py",
     "customer_contacts.py",
+    "error_log.py",
     "i18n.py",
     "import_watcher.py",
     "invoice_parser.py",
