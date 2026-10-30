@@ -926,7 +926,7 @@ class ReminderApp(tk.Tk):
             return
         release=payload
         if is_update_available(release,APP_VERSION):
-            logger.info('New PayPamin Flow release available: current=%s latest=%s release_id=%s',APP_VERSION,release.version,release.release_id)
+            logger.info('New PayPamin Flow release available: current=%s latest=%s release_id=%s commit=%s files=%s',APP_VERSION,release.version,release.release_id,release.release_commit,release.package_fingerprint[:12])
             if manual:self.show_update_available(release)
             elif setting('update_auto')=='1':self.start_update_installation(release,manual=False)
             return

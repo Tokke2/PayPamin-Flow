@@ -1,8 +1,16 @@
+import hashlib
 import json
 import unittest
 from urllib.error import HTTPError, URLError
 
-from app_info import APP_LATEST_RELEASE_API, APP_RELEASES_URL
+from app_info import (
+    APP_LATEST_RELEASE_API,
+    APP_NAME,
+    APP_RELEASES_URL,
+    PYTHON_PACKAGE_REQUIRED_FILES,
+    PYTHON_RELEASE_MANIFEST,
+    fingerprint_package_files,
+)
 from i18n import set_language
 from update_checker import (
     UPDATE_CHECK_INTERVAL_MS,
@@ -36,6 +44,23 @@ def payload(tag="v0.6.0", url="https://github.com/Tokke2/PayPamin-Flow/releases/
     return result
 
 
+def build_manifest(commit="a" * 40):
+    files = {
+        name: hashlib.sha256(name.encode("utf-8")).hexdigest()
+        for name in PYTHON_PACKAGE_REQUIRED_FILES
+        if name != "build_info.py"
+    }
+    return {
+        "format": 1,
+        "application": APP_NAME,
+        "version": "0.6.0",
+        "release_id": "100",
+        "commit": commit,
+        "package_fingerprint": fingerprint_package_files(files),
+        "files": files,
+    }
+
+
 class UpdateCheckerTests(unittest.TestCase):
     def tearDown(self):
         set_language("sv")
@@ -54,6 +79,32 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertFalse(is_update_available(release, "0.6.0", ""))
         self.assertTrue(is_update_available(release, "0.5.9", "100"))
         self.assertFalse(is_update_available(release, "0.6.1", "100"))
+
+    def test_same_version_compares_commit_and_files_before_release_id(self):
+        release = ReleaseInfo(
+            "0.6.0",
+            "v0.6.0",
+            "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0",
+            release_id="200",
+            release_commit="b" * 40,
+            package_fingerprint="b" * 64,
+        )
+        current = {
+            "current_release_id": "100",
+            "current_release_commit": "a" * 40,
+            "current_package_fingerprint": "a" * 64,
+        }
+        self.assertTrue(is_update_available(release, "0.6.0", **current))
+        self.assertTrue(is_update_available(release, "0.6.0", **{**current, "current_release_commit": "b" * 40}))
+        self.assertFalse(is_update_available(release, "0.6.0", **{
+            **current,
+            "current_release_commit": "b" * 40,
+            "current_package_fingerprint": "b" * 64,
+        }))
+        without_manifest = ReleaseInfo(
+            "0.6.0", "v0.6.0", release.url, release_id="200"
+        )
+        self.assertFalse(is_update_available(without_manifest, "0.6.0", **current))
 
     def test_release_identity_is_optional_for_newer_versions(self):
         new_version = ReleaseInfo("0.6.1", "v0.6.1", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.1")
@@ -79,6 +130,43 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertEqual(release.url, payload()["html_url"])
         self.assertEqual(calls[0][0].full_url, APP_LATEST_RELEASE_API)
         self.assertEqual(calls[0][1], 3)
+
+    def test_fetches_commit_and_per_file_manifest(self):
+        commit = "a" * 40
+        manifest = build_manifest(commit)
+        manifest_url = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/{PYTHON_RELEASE_MANIFEST}"
+        responses = {
+            APP_LATEST_RELEASE_API: payload(
+                target_commitish=commit,
+                assets=[{"name": PYTHON_RELEASE_MANIFEST, "browser_download_url": manifest_url}],
+            ),
+            manifest_url: manifest,
+        }
+        calls = []
+
+        def opener(request, timeout):
+            calls.append(request.full_url)
+            return FakeResponse(responses[request.full_url])
+
+        release = fetch_latest_release(opener=opener)
+        self.assertEqual(release.release_commit, commit)
+        self.assertEqual(release.package_fingerprint, manifest["package_fingerprint"])
+        self.assertEqual(calls, [APP_LATEST_RELEASE_API, manifest_url])
+
+    def test_rejects_manifest_whose_file_fingerprint_is_wrong(self):
+        commit = "a" * 40
+        manifest = build_manifest(commit)
+        manifest["package_fingerprint"] = "0" * 64
+        manifest_url = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/{PYTHON_RELEASE_MANIFEST}"
+        responses = {
+            APP_LATEST_RELEASE_API: payload(
+                target_commitish=commit,
+                assets=[{"name": PYTHON_RELEASE_MANIFEST, "browser_download_url": manifest_url}],
+            ),
+            manifest_url: manifest,
+        }
+        with self.assertRaisesRegex(UpdateCheckError, "byggmanifest"):
+            fetch_latest_release(opener=lambda request, timeout: FakeResponse(responses[request.full_url]))
 
     def test_uses_releases_page_when_release_url_is_empty(self):
         release = fetch_latest_release(opener=lambda request, timeout: FakeResponse(payload(url="")))

@@ -1,4 +1,6 @@
 """Central product information for PayPamin Flow."""
+import hashlib
+from collections.abc import Mapping
 from pathlib import PurePosixPath
 
 APP_NAME = "PayPamin Flow"
@@ -15,6 +17,7 @@ APP_RELEASES_URL = f"https://github.com/{APP_REPOSITORY}/releases"
 APP_LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
 MINIMIZED_START_ARG = "--minimized"
 PYTHON_RELEASE_ASSET = "PayPamin-Flow-Python.zip"
+PYTHON_RELEASE_MANIFEST = "PayPamin-Flow-Python.manifest.json"
 # Every desktop platform uses the same Python-only release package.
 RELEASE_ASSET_NAMES = {
     platform: PYTHON_RELEASE_ASSET for platform in ("windows", "macos", "linux", "python")
@@ -51,6 +54,20 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "assets/paypamin_flow_512.png",
 )
 SUPPORTED_PLATFORMS = "Windows · macOS · Linux"
+
+
+def fingerprint_package_files(file_hashes: Mapping[str, str]) -> str:
+    """Fingerprint every shipped filename and content hash deterministically.
+
+    ``build_info.py`` is excluded by the caller because it contains this
+    fingerprint and the release identity itself.
+    """
+    digest = hashlib.sha256()
+    for name in sorted(file_hashes):
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(file_hashes[name]))
+    return digest.hexdigest()
 
 
 def is_python_package_file(filename: str) -> bool:

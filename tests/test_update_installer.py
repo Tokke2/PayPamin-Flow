@@ -8,10 +8,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import update_installer
-from app_info import PYTHON_PACKAGE_REQUIRED_FILES, PYTHON_RELEASE_ASSET
+from app_info import PYTHON_PACKAGE_REQUIRED_FILES, PYTHON_RELEASE_ASSET, fingerprint_package_files
 from update_checker import ReleaseAsset, ReleaseInfo
 from update_installer import (
     UpdateInstallError,
+    _validate_package_build,
     cleanup_update,
     install_update,
     mark_update_ready,
@@ -115,6 +116,39 @@ class UpdateInstallerTests(unittest.TestCase):
         self.assertTrue(plan.work_dir.is_dir())
         cleanup_update(plan)
         self.assertFalse(plan.work_dir.exists())
+
+    def test_manifest_commit_and_files_must_match_package(self):
+        source = self.root / "manifest-source"
+        source.mkdir()
+        (source / "app_info.py").write_text('APP_VERSION = "0.7.0"\n', encoding="utf-8")
+        (source / "assets").mkdir()
+        (source / "assets" / "paypamin_flow.png").write_bytes(b"icon")
+        files = {
+            path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in source.rglob("*") if path.is_file()
+        }
+        fingerprint = fingerprint_package_files(files)
+        commit = "c" * 40
+        (source / "build_info.py").write_text(
+            'APP_RELEASE_ID = "200"\n'
+            f'APP_RELEASE_COMMIT = "{commit}"\n'
+            f'APP_PACKAGE_FINGERPRINT = "{fingerprint}"\n',
+            encoding="utf-8",
+        )
+        release = ReleaseInfo(
+            "0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0",
+            release_id="200", release_commit=commit, package_fingerprint=fingerprint,
+        )
+        _validate_package_build(source, release)
+
+        original = (source / "app_info.py").read_bytes()
+        (source / "app_info.py").write_bytes(original + b"# changed\n")
+        with self.assertRaisesRegex(UpdateInstallError, "release-manifestet"):
+            _validate_package_build(source, release)
+        (source / "app_info.py").write_bytes(original)
+        (source / "build_info.py").write_text('APP_RELEASE_ID = "200"\n', encoding="utf-8")
+        with self.assertRaisesRegex(UpdateInstallError, "byggidentitet"):
+            _validate_package_build(source, release)
 
     def test_checksum_mismatch_is_rejected(self):
         release, responses = release_with_package(python_package())

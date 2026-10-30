@@ -30,6 +30,7 @@ from app_info import (
     APP_VERSION,
     PYTHON_PACKAGE_REQUIRED_FILES,
     PYTHON_RELEASE_ASSET,
+    fingerprint_package_files,
     is_python_package_file,
 )
 from i18n import _
@@ -155,6 +156,37 @@ def _package_version(source_path: Path) -> str:
     raise UpdateInstallError(_("Uppdateringspaketets versionsinformation är ogiltig."))
 
 
+def _validate_package_build(source_path: Path, release: ReleaseInfo) -> None:
+    """Match new-manifest packages to their commit and exact shipped files."""
+    if not release.package_fingerprint:
+        return
+    file_hashes = {
+        path.relative_to(source_path).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in source_path.rglob("*")
+        if path.is_file() and path.name != "build_info.py"
+    }
+    actual_fingerprint = fingerprint_package_files(file_hashes)
+    if not hmac.compare_digest(actual_fingerprint, release.package_fingerprint.lower()):
+        raise UpdateInstallError(_("Uppdateringspaketet stämmer inte med release-manifestet."))
+    try:
+        tree = ast.parse((source_path / "build_info.py").read_bytes())
+        values = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        values[target.id] = node.value.value
+    except (OSError, SyntaxError) as exc:
+        raise UpdateInstallError(_("Uppdateringspaketets byggidentitet stämmer inte med releasen.")) from exc
+    expected = {
+        "APP_RELEASE_ID": release.release_id,
+        "APP_RELEASE_COMMIT": release.release_commit.lower(),
+        "APP_PACKAGE_FINGERPRINT": release.package_fingerprint.lower(),
+    }
+    if any(values.get(name) != value for name, value in expected.items()):
+        raise UpdateInstallError(_("Uppdateringspaketets byggidentitet stämmer inte med releasen."))
+
+
 def _extract_python_package(archive_path: Path, source_path: Path, expected_version: str) -> None:
     try:
         with zipfile.ZipFile(archive_path) as archive:
@@ -251,6 +283,7 @@ def stage_update(
         if not hmac.compare_digest(actual_hash, expected_hash):
             raise UpdateInstallError(_("SHA-256-kontrollsumman stämmer inte. Uppdateringen avbröts."))
         _extract_python_package(archive_path, source_path, release.version)
+        _validate_package_build(source_path, release)
         plan = UpdatePlan(
             release=release,
             platform=selected_platform,

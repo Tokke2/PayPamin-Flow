@@ -25,7 +25,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
 - **Autostart vid inloggning** på Windows, macOS och Linux. Appen startar då minimerad i systemfältet medan manuell start visar fönstret som vanligt. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
-- **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med SHA-256-verifiering och tyst omstart. Både nyare versioner och nya officiella release-byggen med samma versionsnummer kan upptäckas. Manuell sökning och installation finns i appen via **Hjälp → Sök efter uppdateringar**.
+- **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med commit- och filjämförelse, SHA-256-verifiering och tyst omstart. Både nyare versioner och verkligt ändrade release-byggen med samma versionsnummer upptäcks. Manuell sökning och installation finns i appen via **Hjälp → Sök efter uppdateringar**.
 - PDF sparas lokalt och öppnas i datorns standardprogram. **Öppna exportmapp** i knappraden eller under **Arkiv** öppnar mappen med skapade påminnelser i datorns filhanterare. Fellogg öppnas via **Visa fellogg**.
 - **Automatiskt påminnelsearkiv:** vid appstart och därefter regelbundet flyttas igenkända P1/P2-PDF:er vars ursprungliga påminnelsedatum är mer än 7 dagar gammalt från `export/` till `export/arkiv/`. Fakturor och påminnelsehistorik ändras inte, arkiverad P1 kan fortfarande redigeras och befintliga arkivfiler skrivs aldrig över.
 
@@ -35,6 +35,7 @@ PayPamin Flow distribueras som **Python-källkod**, inte som EXE, macOS-app elle
 
 - `PayPamin-Flow-Python.zip`
 - `PayPamin-Flow-Python.zip.sha256`
+- `PayPamin-Flow-Python.manifest.json` – release-commit och SHA-256 för varje distribuerad fil.
 
 Python **3.10 eller senare** och Tkinter krävs. Packa upp ZIP-filen i en mapp där din användare har skrivrättigheter och installera tilläggen:
 
@@ -146,9 +147,9 @@ Välj **Arkiv → Återställ säkerhetskopia** för att återställa. Arkivets 
 
 Appen kontrollerar den senaste stabila GitHub-releasen en kort stund efter start och därefter **var 12:e timme medan appen körs**, även när fönstret ligger i systemfältet. Automatiska uppdateringar är aktiverade som standard och kan stängas av under **Inställningar**.
 
-Vid en nyare version eller ett nytt officiellt bygge av samma version hämtas samma Python-ZIP för Windows, macOS och Linux. Releasepaketet får GitHubs numeriska release-ID vid bygget. Appen jämför det ID:t när versionsnumren är lika och installerar därför inte samma bygge om och om igen. En äldre release eller en release utan giltigt ID erbjuds inte som nedgradering. Kontrollen går mot GitHubs **latest release**, inte mot `main`.
+Vid en nyare version eller ett ändrat officiellt bygge av samma version hämtas samma Python-ZIP för Windows, macOS och Linux. Ett litet release-manifest innehåller full commit, SHA-256 för varje distribuerad fil och ett samlat fil-fingeravtryck. Vid samma versionsnummer jämför appen installerad commit och fil-fingeravtryck med releasen: **om något av dem skiljer sig finns en uppdatering**. Ett nytt numeriskt release-ID med oförändrad commit och identiska filer installerar därför inte om samma innehåll. Äldre installationer som bara har release-ID använder det som kompatibilitetsväg tills de har tagit emot det nya uppdateringsformatet. En lägre version erbjuds inte som nedgradering. Kontrollen går mot GitHubs **latest release**, inte mot `main`.
 
-Kontrollsumman verifieras, arkivets sökvägar och filer valideras och Python-filerna syntaxkontrolleras innan något ersätts. Appen ersätter endast egna program-, start-, dokumentations- och ikonfiler. Databas, `import/`, `export/`, `svg/` och andra användardata ingår inte och lämnas orörda. Installationer med den äldre uppdateraren, som endast jämför versionsnummer, måste installera det första paketet med release-ID-stöd manuellt en gång.
+Kontrollsumman verifieras, arkivets sökvägar och filer valideras och Python-filerna syntaxkontrolleras innan något ersätts. För nya release-manifest måste även det uppackade paketets commit, release-ID och fil-fingeravtryck matcha manifestet. Appen ersätter endast egna program-, start-, dokumentations- och ikonfiler. Databas, `import/`, `export/`, `svg/` och andra användardata ingår inte och lämnas orörda. Installationer med den äldre uppdateraren, som endast jämför versionsnummer, måste installera det första paketet med release-ID-stöd manuellt en gång.
 
 Installationen sker **inuti appen**; du ska inte starta någon separat uppdateringsfil. Därefter startas den uppdaterade Python-appen om utan konsolfönster. Gamla programfiler används som reserv under ersättningen och återställs om installationen eller omstarten misslyckas. Den gamla appen stängs först när den nya processen har bekräftat att gränssnittets händelseloop startat via en engångsbekräftelse med PID och token. Vid timeout eller tidigt avslut stoppas den misslyckade nya processen, filerna rullas tillbaka och den gamla appen lämnas användbar.
 
@@ -205,7 +206,7 @@ Det finns inget PyInstaller- eller native-byggsteg. Skapa det plattformsoberoend
 python packaging/package_release.py --output release-assets
 ```
 
-GitHub Actions-workflöen i `.github/workflows/build.yml` kör testerna på Windows, macOS och Linux. Ubuntu-jobbet skapar Python-ZIP och SHA-256-fil. Vid en framtida, uttryckligen beställd release kan samma två filer bifogas releasen för appens uppdateringsfunktion.
+GitHub Actions-workflöen i `.github/workflows/build.yml` kör testerna på Windows, macOS och Linux. Ubuntu-jobbet skapar Python-ZIP, SHA-256-fil och byggmanifest med commit och enskilda filhashar. Vid en release bifogas alla tre filerna för appens uppdateringsfunktion.
 
 ## Kostnadsfri Fortnox-import utan API
 

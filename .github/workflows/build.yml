@@ -56,11 +56,16 @@ jobs:
           exit "$status"
       - name: Verify desktop imports
         run: python -c "import tkinter; import fitz; import reportlab; import PIL; import tray; import paypamin_flow"
-      - name: Package Python application and SHA-256
+      - name: Package Python application, SHA-256 and build manifest
         if: runner.os == 'Linux'
         env:
           RELEASE_ID: ${{ github.event.release.id }}
-        run: python packaging/package_release.py --output release-assets --release-id "$RELEASE_ID"
+        run: |
+          args=()
+          if [ -n "$RELEASE_ID" ]; then
+            args=(--release-id "$RELEASE_ID" --release-commit "$(git rev-parse HEAD)")
+          fi
+          python packaging/package_release.py --output release-assets "${args[@]}"
       - name: Upload Python release package
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
