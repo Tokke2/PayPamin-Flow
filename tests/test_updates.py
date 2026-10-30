@@ -8,18 +8,22 @@ from app_info import (
     APP_NAME,
     APP_RELEASES_URL,
     PYTHON_PACKAGE_REQUIRED_FILES,
+    PYTHON_RELEASE_ASSET,
     PYTHON_RELEASE_MANIFEST,
     fingerprint_package_files,
 )
 from i18n import set_language
 from update_checker import (
     UPDATE_CHECK_INTERVAL_MS,
+    ReleaseAsset,
     ReleaseInfo,
     UpdateCheckError,
     canonical_version,
     fetch_latest_release,
     is_newer_version,
     is_update_available,
+    missing_release_assets,
+    update_change_kind,
     version_key,
 )
 
@@ -105,6 +109,27 @@ class UpdateCheckerTests(unittest.TestCase):
             "0.6.0", "v0.6.0", release.url, release_id="200"
         )
         self.assertFalse(is_update_available(without_manifest, "0.6.0", **current))
+
+    def test_release_assets_must_be_complete_before_install(self):
+        url = "https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/"
+        package = ReleaseAsset(PYTHON_RELEASE_ASSET, url + PYTHON_RELEASE_ASSET)
+        checksum = ReleaseAsset(PYTHON_RELEASE_ASSET + ".sha256", url + PYTHON_RELEASE_ASSET + ".sha256")
+        release = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0", assets=(package,))
+        self.assertEqual(missing_release_assets(release), (PYTHON_RELEASE_ASSET + ".sha256",))
+        release = ReleaseInfo("0.6.0", "v0.6.0", release.url, assets=(package, checksum))
+        self.assertEqual(missing_release_assets(release), ())
+
+    def test_update_change_kind_distinguishes_version_commit_and_files(self):
+        release = ReleaseInfo(
+            "0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0",
+            release_commit="b" * 40, package_fingerprint="b" * 64,
+        )
+        self.assertEqual(update_change_kind(release, "0.6.0", "a" * 40, "a" * 64), "commit_and_files")
+        self.assertEqual(update_change_kind(release, "0.6.0", "a" * 40, "b" * 64), "commit")
+        self.assertEqual(update_change_kind(release, "0.6.0", "b" * 40, "a" * 64), "files")
+        self.assertEqual(update_change_kind(release, "0.6.0", "", ""), "release")
+        newer = ReleaseInfo("0.7.0", "v0.7.0", release.url)
+        self.assertEqual(update_change_kind(newer), "version")
 
     def test_release_identity_is_optional_for_newer_versions(self):
         new_version = ReleaseInfo("0.6.1", "v0.6.1", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.1")

@@ -18,6 +18,7 @@ from app_info import (
     APP_RELEASES_URL,
     APP_VERSION,
     PYTHON_PACKAGE_REQUIRED_FILES,
+    PYTHON_RELEASE_ASSET,
     PYTHON_RELEASE_MANIFEST,
     fingerprint_package_files,
     is_python_package_file,
@@ -102,6 +103,41 @@ def is_update_available(
         and current_release_id
         and release.release_id != current_release_id
     )
+
+
+def missing_release_assets(release: ReleaseInfo) -> tuple[str, ...]:
+    """Return package files that must exist before installation can start."""
+    available = {asset.name for asset in release.assets}
+    return tuple(
+        name for name in (PYTHON_RELEASE_ASSET, PYTHON_RELEASE_ASSET + ".sha256")
+        if name not in available
+    )
+
+
+def update_change_kind(
+    release: ReleaseInfo,
+    current_version: str = APP_VERSION,
+    current_release_commit: str = APP_RELEASE_COMMIT,
+    current_package_fingerprint: str = APP_PACKAGE_FINGERPRINT,
+) -> str:
+    """Describe the verified reason for an available update."""
+    if is_newer_version(release.version, current_version):
+        return "version"
+    commit_changed = bool(
+        release.release_commit and current_release_commit
+        and release.release_commit.lower() != current_release_commit.lower()
+    )
+    files_changed = bool(
+        release.package_fingerprint and current_package_fingerprint
+        and release.package_fingerprint.lower() != current_package_fingerprint.lower()
+    )
+    if commit_changed and files_changed:
+        return "commit_and_files"
+    if commit_changed:
+        return "commit"
+    if files_changed:
+        return "files"
+    return "release"
 
 
 def _validated_release_url(value: str) -> str:

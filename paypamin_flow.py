@@ -17,6 +17,7 @@ import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_ID, APP_NAME, APP_SLUG, APP_VERSION, MINIMIZED_START_ARG, SUPPORTED_PLATFORMS
+from build_info import APP_RELEASE_COMMIT
 from app_backup import (
     BackupError,
     BackupPaths,
@@ -50,7 +51,14 @@ from reminder_journal import (
     import_journal as import_reminder_journal_file,
     record_reminder as record_reminder_journal,
 )
-from update_checker import UPDATE_CHECK_INTERVAL_MS, UpdateCheckError, fetch_latest_release, is_update_available
+from update_checker import (
+    UPDATE_CHECK_INTERVAL_MS,
+    UpdateCheckError,
+    fetch_latest_release,
+    is_update_available,
+    missing_release_assets,
+    update_change_kind,
+)
 from update_installer import (
     UpdateInstallError,
     cleanup_update,
@@ -692,7 +700,7 @@ class ReminderApp(tk.Tk):
         set_language(setting('language') or 'sv')
         super().__init__(); self.title(APP_NAME); self.geometry('1180x700'); self.minsize(940,560)
         self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
-        self._update_check_running=False;self._update_install_running=False;self._update_helper_process=None;self.update_button=None
+        self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._update_helper_process=None;self.update_button=None
         self.tray=None;self._quitting=False
         self._import_monitor=ImportFolderMonitor(IMPORT_DIR);self._import_scan_running=False;self._python_addons_ready=False
         self.build(); self.refresh()
@@ -878,6 +886,7 @@ class ReminderApp(tk.Tk):
         if self._header_icon:ttk.Label(form,image=self._header_icon).pack(pady=(0,10))
         ttk.Label(form,text=APP_NAME,style='Title.TLabel').pack()
         ttk.Label(form,text=_('Version {version}',version=APP_VERSION),style='Sub.TLabel').pack(pady=(3,12))
+        if APP_RELEASE_COMMIT:ttk.Label(form,text=_('Byggcommit: {commit}',commit=APP_RELEASE_COMMIT[:12]),style='Sub.TLabel').pack(pady=(0,8))
         ttk.Label(form,text=_('Lokal app för fakturor och betalningspåminnelser')).pack()
         ttk.Label(form,text=SUPPORTED_PLATFORMS,style='Sub.TLabel').pack(pady=(5,16))
         ttk.Label(form,text=APP_COPYRIGHT).pack()
@@ -894,10 +903,14 @@ class ReminderApp(tk.Tk):
         try:button.configure(text=_('Söker…') if busy else _('Sök efter uppdateringar'),state='disabled' if busy else 'normal')
         except tk.TclError:pass
 
-    def _set_update_install_busy(self,busy):
+    def _set_update_install_busy(self,busy,stage=None):
+        if busy and stage:self._update_install_stage=stage
+        elif not busy:self._update_install_stage=None
         button=getattr(self,'update_button',None)
         if not button:return
-        try:button.configure(text=_('Uppdaterar…') if busy else _('Sök efter uppdateringar'),state='disabled' if busy else 'normal')
+        labels={'download':_('Hämtar och verifierar…'),'install':_('Installerar filer…'),'restart':_('Startar om…')}
+        text=labels.get(getattr(self,'_update_install_stage',None),_('Uppdaterar…')) if busy else _('Sök efter uppdateringar')
+        try:button.configure(text=text,state='disabled' if busy else 'normal')
         except tk.TclError:pass
 
     def check_for_updates(self,manual=False):
@@ -926,21 +939,36 @@ class ReminderApp(tk.Tk):
             return
         release=payload
         if is_update_available(release,APP_VERSION):
-            logger.info('New PayPamin Flow release available: current=%s latest=%s release_id=%s commit=%s files=%s',APP_VERSION,release.version,release.release_id,release.release_commit,release.package_fingerprint[:12])
+            missing=missing_release_assets(release)
+            logger.info('New PayPamin Flow release available: current=%s latest=%s release_id=%s commit=%s files=%s missing_assets=%s',APP_VERSION,release.version,release.release_id,release.release_commit,release.package_fingerprint[:12],missing)
+            if missing:
+                logger.warning('Release package is not ready; automatic installation waits')
+                if manual:self.show_update_available(release)
+                return
             if manual:self.show_update_available(release)
             elif setting('update_auto')=='1':self.start_update_installation(release,manual=False)
             return
         logger.info('No newer PayPamin Flow release: current=%s latest=%s',APP_VERSION,release.version)
-        if manual:messagebox.showinfo(_('Ingen uppdatering tillgänglig'),_('Ingen nyare version finns.\n\nInstallerad version: {current}\nSenaste release: {latest}',current=APP_VERSION,latest=release.version),parent=self)
+        if manual:
+            commit=release.release_commit[:12] or APP_RELEASE_COMMIT[:12] or _('okänd')
+            messagebox.showinfo(_('Ingen uppdatering tillgänglig'),_('Ingen ny version eller ändrade releasefiler finns.\n\nInstallerad version: {current}\nSenaste release: {latest}\nRelease-commit: {commit}',current=APP_VERSION,latest=release.version,commit=commit),parent=self)
 
     def start_update_installation(self,release,manual=False):
         if self._update_install_running:return
+        missing=missing_release_assets(release)
+        if missing:
+            logger.warning('Update installation blocked until release files are ready: %s',missing)
+            if manual:messagebox.showwarning(_('Uppdateringsfiler saknas'),_('Releasefilerna är inte klara ännu. Försök igen senare.\n\nSaknas: {files}',files=', '.join(missing)),parent=self)
+            return
         self._update_install_running=True;self._set_update_install_busy(True)
         result_queue=queue.Queue()
         def install():
             try:
+                result_queue.put(('progress',manual,release,'download'))
                 plan=stage_update(release,log_path=APP_DIR/'update.log')
+                result_queue.put(('progress',manual,release,'install'))
                 installed=install_update(plan)
+                result_queue.put(('progress',manual,release,'restart'))
                 result_queue.put(('restart',manual,release,installed))
             except Exception as exc:result_queue.put(('error',manual,release,exc))
         threading.Thread(target=install,daemon=True).start()
@@ -958,6 +986,9 @@ class ReminderApp(tk.Tk):
     def _poll_update_installation(self,result_queue):
         try:status,manual,release,payload=result_queue.get_nowait()
         except queue.Empty:
+            self.after(200,lambda:self._poll_update_installation(result_queue));return
+        if status=='progress':
+            self._set_update_install_busy(True,payload)
             self.after(200,lambda:self._poll_update_installation(result_queue));return
         if status=='restart':
             installed=payload
@@ -1000,7 +1031,15 @@ class ReminderApp(tk.Tk):
         form=ttk.Frame(w,padding=24);form.pack()
         heading=_('Uppdaterat bygge av version {version} är tillgänglig',version=release.version) if release.version==APP_VERSION else _('Version {version} är tillgänglig',version=release.version)
         ttk.Label(form,text=heading,style='Title.TLabel').pack(anchor='w')
-        ttk.Label(form,text=_('Installerad version: {current}\nSenaste release: {latest}\n\nLokala fakturor, inställningar och mallar påverkas inte.',current=APP_VERSION,latest=release.version),justify='left').pack(anchor='w',pady=(8,12))
+        change_labels={'version':_('Ny programversion'),'commit':_('Ny commit'),'files':_('Ändrade appfiler'),'commit_and_files':_('Ny commit och ändrade appfiler'),'release':_('Nytt release-bygge')}
+        change=change_labels[update_change_kind(release)]
+        current_commit=APP_RELEASE_COMMIT[:12] or _('okänd');release_commit=release.release_commit[:12] or _('okänd')
+        ttk.Label(form,text=_('Installerad version: {current}\nSenaste release: {latest}',current=APP_VERSION,latest=release.version),justify='left').pack(anchor='w',pady=(8,4))
+        ttk.Label(form,text=_('Typ av uppdatering: {change}',change=change),justify='left').pack(anchor='w',pady=(0,4))
+        ttk.Label(form,text=_('Installerad commit: {current}\nRelease-commit: {latest}',current=current_commit,latest=release_commit),style='Sub.TLabel',justify='left').pack(anchor='w',pady=(0,8))
+        ttk.Label(form,text=_('Lokala fakturor, inställningar och mallar påverkas inte.'),justify='left').pack(anchor='w',pady=(0,8))
+        missing=missing_release_assets(release)
+        if missing:ttk.Label(form,text=_('Releasefilerna är inte klara ännu. Försök igen senare.\nSaknas: {files}',files=', '.join(missing)),style='Sub.TLabel',wraplength=520,justify='left').pack(anchor='w',pady=(0,8))
         def open_download():
             try:
                 if not webbrowser.open(release.url,new=2):raise RuntimeError('No web browser available')
@@ -1011,7 +1050,9 @@ class ReminderApp(tk.Tk):
         def install_now():
             w.destroy();self.start_update_installation(release,manual=True)
         buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(8,0))
-        ttk.Button(buttons,text=_('Installera och starta om'),command=install_now,style='Accent.TButton').pack(side='left')
+        install_button=ttk.Button(buttons,text=_('Installera och starta om'),command=install_now,style='Accent.TButton')
+        install_button.pack(side='left')
+        if missing:install_button.state(['disabled'])
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='right')
         ttk.Button(buttons,text=_('Öppna nedladdningssida'),command=open_download).pack(side='right',padx=(0,8))
 

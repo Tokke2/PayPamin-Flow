@@ -153,7 +153,9 @@ Kontrollsumman verifieras, arkivets sökvägar och filer valideras och Python-fi
 
 Installationen sker **inuti appen**; du ska inte starta någon separat uppdateringsfil. Därefter startas den uppdaterade Python-appen om utan konsolfönster. Gamla programfiler används som reserv under ersättningen och återställs om installationen eller omstarten misslyckas. Den gamla appen stängs först när den nya processen har bekräftat att gränssnittets händelseloop startat via en engångsbekräftelse med PID och token. Vid timeout eller tidigt avslut stoppas den misslyckade nya processen, filerna rullas tillbaka och den gamla appen lämnas användbar.
 
-Manuell kontroll görs med knappen **Sök efter uppdateringar** eller **Hjälp → Sök efter uppdateringar**. Vid en nyare version väljer du **Installera och starta om** eller **Öppna nedladdningssida**.
+Automatisk installation startar först när både Python-ZIP och SHA-256-fil finns i releasen. Om en release fortfarande publiceras väntar appen tyst till nästa kontroll i stället för att göra ett misslyckat installationsförsök. Under installationen visar uppdateringsknappen stegen **Hämtar och verifierar**, **Installerar filer** och **Startar om**.
+
+Manuell kontroll görs med knappen **Sök efter uppdateringar** eller **Hjälp → Sök efter uppdateringar**. Dialogen visar om ändringen gäller version, commit, filer eller båda, samt installerad och tillgänglig commit. Välj **Installera och starta om** eller **Öppna nedladdningssida**. Om ZIP eller kontrollsumma saknas visas detta och installationsknappen är avaktiverad tills filerna är klara. Officiella byggen visar även sin commit under **Om PayPamin Flow**.
 
 Kontrollen använder GitHubs publika API och skickar inga faktura-, kund- eller inställningsuppgifter. Automatiska nätverks- och installationsfel loggas utan popup och provas igen vid nästa schemalagda kontroll. Appmappen måste vara skrivbar för den aktuella användaren. Tekniska installationsfel loggas i `update.log` under `~/.paminnelseapp`.
 

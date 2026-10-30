@@ -3,13 +3,19 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import MethodType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from app_info import PYTHON_RELEASE_ASSET
 from test_database import load_headless_app
-from update_checker import UPDATE_CHECK_INTERVAL_MS, ReleaseInfo
+from update_checker import UPDATE_CHECK_INTERVAL_MS, ReleaseAsset, ReleaseInfo
 
 
-RELEASE = ReleaseInfo("0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0")
+PACKAGE_URL = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.7.0/{PYTHON_RELEASE_ASSET}"
+RELEASE_ASSETS = (
+    ReleaseAsset(PYTHON_RELEASE_ASSET, PACKAGE_URL),
+    ReleaseAsset(PYTHON_RELEASE_ASSET + ".sha256", PACKAGE_URL + ".sha256"),
+)
+RELEASE = ReleaseInfo("0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0", assets=RELEASE_ASSETS)
 
 
 class ImmediateThread:
@@ -50,6 +56,18 @@ class UpdateUiTests(unittest.TestCase):
             self.app.ReminderApp._poll_update_check(fake, results)
         self.assertEqual(calls, [("0.7.0", False)])
 
+    def test_automatic_incomplete_release_waits_without_installing(self):
+        fake = self.fake_app()
+        calls = []
+        release = ReleaseInfo("0.7.0", "v0.7.0", RELEASE.url)
+        fake.start_update_installation = lambda release, manual: calls.append((release.version, manual))
+        fake.show_update_available = lambda release: self.fail("Automatic check must not open a dialog")
+        results = queue.Queue()
+        results.put(("ok", False, release))
+        with patch.object(self.app, "setting", return_value="1"):
+            self.app.ReminderApp._poll_update_check(fake, results)
+        self.assertEqual(calls, [])
+
     def test_manual_new_release_shows_choices_instead_of_auto_installing(self):
         fake = self.fake_app()
         calls = []
@@ -59,6 +77,29 @@ class UpdateUiTests(unittest.TestCase):
         results.put(("ok", True, RELEASE))
         self.app.ReminderApp._poll_update_check(fake, results)
         self.assertEqual(calls, ["0.7.0"])
+
+    def test_manual_dialog_disables_install_until_files_are_ready(self):
+        self.app.set_language("sv")
+        window = Mock()
+        fake = SimpleNamespace(_new_toplevel=lambda title: window)
+        widgets = []
+
+        def make_widget(*args, **kwargs):
+            widget = Mock()
+            widget.options = kwargs
+            widgets.append(widget)
+            return widget
+
+        release = ReleaseInfo("0.7.0", "v0.7.0", RELEASE.url)
+        with patch.object(self.app.ttk, "Frame", side_effect=make_widget, create=True), patch.object(
+            self.app.ttk, "Label", side_effect=make_widget, create=True
+        ), patch.object(self.app.ttk, "Button", side_effect=make_widget, create=True):
+            self.app.ReminderApp.show_update_available(fake, release)
+        install = next(widget for widget in widgets if widget.options.get("text") == "Installera och starta om")
+        install.state.assert_called_once_with(["disabled"])
+        labels = [widget.options.get("text", "") for widget in widgets]
+        self.assertTrue(any("Releasefilerna är inte klara" in text for text in labels))
+        self.assertTrue(any("Typ av uppdatering:" in text for text in labels))
 
     def test_same_version_release_build_uses_release_comparison(self):
         fake = self.fake_app()
@@ -71,6 +112,29 @@ class UpdateUiTests(unittest.TestCase):
             self.app.ReminderApp._poll_update_check(fake, results)
         compare.assert_called_once_with(release, "0.6.0")
         self.assertEqual(calls, ["200"])
+
+    def test_install_cannot_start_until_release_files_are_ready(self):
+        fake = SimpleNamespace(_update_install_running=False)
+        release = ReleaseInfo("0.7.0", "v0.7.0", RELEASE.url)
+        with patch.object(self.app.threading, "Thread", side_effect=AssertionError("No worker may start")):
+            self.app.ReminderApp.start_update_installation(fake, release, manual=False)
+        self.assertFalse(fake._update_install_running)
+
+    def test_progress_updates_button_and_keeps_polling(self):
+        events = []
+        scheduled = []
+        fake = SimpleNamespace(
+            _update_install_running=True,
+            _set_update_install_busy=lambda busy, stage=None: events.append((busy, stage)),
+            after=lambda delay, callback: scheduled.append(callback),
+        )
+        fake._poll_update_installation = MethodType(self.app.ReminderApp._poll_update_installation, fake)
+        results = queue.Queue()
+        results.put(("progress", True, RELEASE, "download"))
+        self.app.ReminderApp._poll_update_installation(fake, results)
+        self.assertEqual(events, [(True, "download")])
+        self.assertEqual(len(scheduled), 1)
+        self.assertTrue(fake._update_install_running)
 
     def test_scheduler_respects_twice_daily_interval_and_setting(self):
         fake = SimpleNamespace()
