@@ -62,13 +62,18 @@ class ReleasePackagingTests(unittest.TestCase):
                 relative = path.relative_to(ROOT)
                 (source / relative).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, source / relative)
+            (source / "test-results.txt").write_text("transient CI test output", encoding="utf-8")
             commit = "c" * 40
             asset, _, manifest_path = packaging.build_python_package(
                 source, output, release_id="424038701", release_commit=commit
             )
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             with zipfile.ZipFile(asset) as archive:
+                names = set(archive.namelist())
                 build_info = archive.read("build_info.py").decode("utf-8")
+            self.assertNotIn("test-results.txt", names)
+            self.assertNotIn("test-results.txt", manifest["files"])
+            self.assertFalse(is_python_package_file("test-results.txt"))
             self.assertIn('APP_RELEASE_ID = "424038701"', build_info)
             self.assertIn(f'APP_RELEASE_COMMIT = "{commit}"', build_info)
             self.assertIn(f'APP_PACKAGE_FINGERPRINT = "{manifest["package_fingerprint"]}"', build_info)

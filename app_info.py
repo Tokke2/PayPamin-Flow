@@ -72,6 +72,9 @@ def fingerprint_package_files(file_hashes: Mapping[str, str]) -> str:
 
 def is_python_package_file(filename: str) -> bool:
     """Return whether a path is an application-owned file allowed in updates."""
+    # CI writes this transient report before packaging; it is not app content.
+    if filename == "test-results.txt":
+        return False
     path = PurePosixPath(filename)
     if (
         not filename
