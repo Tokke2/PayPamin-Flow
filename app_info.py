@@ -35,6 +35,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "i18n.py",
     "import_watcher.py",
     "invoice_parser.py",
+    "ledger_import.py",
     "mail_compose.py",
     "paypamin_flow.py",
     "paypamin_flow_launcher.py",

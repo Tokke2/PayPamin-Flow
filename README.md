@@ -1,6 +1,6 @@
 # PayPamin Flow
 
-Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda Fortnox-fakturor från PDF, skapar betalningspåminnelser som PDF och håller reda på nästa steg. Fakturor och kunduppgifter behandlas lokalt; appen ansluter inte till Fortnox och skickar inte e-post eller Kronofogden-ärenden automatiskt.
+Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser Fortnox-fakturor och kundreskontralistor från PDF, skapar betalningspåminnelser som PDF och håller reda på nästa steg. Fakturor och kunduppgifter behandlas lokalt; appen ansluter inte till Fortnox och skickar inte e-post eller Kronofogden-ärenden automatiskt.
 
 - **Skapare och upphovsman:** Rickard Länkvist
 - **Copyright:** © 2026 Rickard Länkvist
@@ -12,6 +12,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser enskilda
 - Läser svenska och engelska faktura-PDF:er och föreslår kund, fakturanummer, datum, slutbelopp och fakturatext. Beloppsläsningen klarar hela belopp och decimaltal i svenska, europeiska och engelska format samt etiketter som **ATT BETALA**, **Total due**, **Amount due** och **Balance due**, utan att använda moms eller subtotal som slutbelopp. Explicit **Fakturatext/Avser** prioriteras och kan omfatta flera rader; tabellrubriker, numeriska kolumner och summeringsrader rensas konservativt.
 - **Valuta per faktura** med SEK som standard och redigerbara ISO-koder, exempelvis EUR, USD, NOK och DKK. Belopp växlas inte mellan valutor.
 - **Automatisk bevakning av importmappen** upptäcker nya Fortnox-PDF:er utan API eller integrationslicens. Filer väntas in tills de är färdigskrivna och varje ny faktura granskas innan den sparas. Dubbletter stoppas via fakturanummer, sökväg eller identiskt PDF-innehåll, även om filen döpts om.
+- **Kundreskontralista från PDF:** importera en komplett Fortnox-lista via Arkiv-menyn med kontroll av sidor, fakturaantal och totalsumma. En fredagspåminnelse underlättar veckovis import, och fakturor som fanns i en tidigare lista men saknas i en senare kan markeras som betalda efter uttrycklig bekräftelse.
 - **P1/P2-dialog efter importmappsskanning:** efter manuell eller automatisk behandling av PDF-filer visar en dialog fakturanummer, kund och nivå för fakturor som är redo för P1 eller P2. Betalda, ignorerade, ogranskade och väntande fakturor aviseras inte; ingen påminnelse skapas automatiskt.
 - **Återanvändbara kundkontakter:** högerklicka på en faktura och välj **Redigera kund** för kundnamn och flera e-postadresser separerade med komma. Adresslistan sparas i databasen och JSON-journalen och fylls i automatiskt på nästa faktura till samma kund.
 - **E-postutkast efter generering:** när P1/P2 har skapats kan ett kundfärdigt, språkanpassat utkast till alla kundens adresser och med dold kopia till `rl@tadega.com` öppnas i systemets valda e-postapp efter förhandsgranskning. Texten skiljer P1 från P2 och innehåller belopp, avgifter, totalsumma och betalningsfrist. När Thunderbird är standardapp i Windows bifogas senaste påminnelse-PDF automatiskt; andra e-postprogram använder `mailto:` och manuell bifogning. Inget mejl skickas automatiskt. Om kunden saknar adresser öppnas ingen e-postapp.
@@ -233,6 +234,23 @@ Bevakningen fungerar även när huvudfönstret ligger i systemfältet; fönstret
 
 Detta är ingen direkt API-koppling: exporten från Fortnox görs fortfarande manuellt. Appen loggar inte in i Fortnox och skickar inga uppgifter dit.
 
+## Kundreskontralista och betalavstämning
+
+Exportera en **komplett, textbaserad kundreskontralista som PDF** från Fortnox och välj **Arkiv → Importera reskontralista**. Välj PDF-filen med alla tryckta sidor kvar. Bilder och skannade listor används inte i detta flöde, eftersom OCR kan misstolka fakturanummer och belopp.
+
+Innan något sparas kontrollerar appen sidnumren, det totala fakturaantalet och att radernas saldo stämmer mot totalsumman för en SEK-lista. En rad som inte kan läsas säkert stoppar importen. Därefter visas en bekräftelse med listdatum, antal nya och befintliga fakturor samt vilka tidigare sedda fakturor som skulle markeras betalda. Först efter **Ja** sker en atomisk databasändring och JSON-journalen uppdateras.
+
+Betalregeln är avsiktligt konservativ:
+
+- Den **första** importerade listan bygger bara historik. Ingen befintlig app-faktura betalmarkeras då.
+- I en senare komplett lista kan endast en obetald faktura som har tidigare lista-historik men saknas i den nya listan markeras som betald.
+- App-fakturor som aldrig funnits i en importerad lista påverkas inte. Ofullständiga, felaktiga eller äldre listor ändrar ingen betalstatus.
+- Befintliga fakturors kunduppgifter, belopp, originalkällor, logotyper och P1/P2-/e-posthistorik skrivs inte över. Nya rader får belopp och delbetalning från listans Belopp och Saldo.
+- För listor med annan valuta än SEK kontrolleras sidor och fakturaantal, men betalstatus ändras inte automatiskt eftersom totalsumman anges i SEK.
+- Reskontra-historiken ingår i JSON- och ZIP-säkerhetskopior.
+
+En gång per fredag när appfönstret är synligt visas **Veckans reskontralista**, med möjlighet att välja veckans PDF direkt. Påminnelsen kan stängas av under **Inställningar → Påminn om att importera kundreskontralista varje fredag**. Ingen Fortnox-export eller betaländring sker i bakgrunden utan användarens val och bekräftelse.
+
 ## Fakturor, logotyper och OCR
 
 - Lägg faktura-PDF:er i `import/` för automatisk bevakning, klicka **Skanna importmapp** för en direkt genomsökning, eller använd **Lägg till faktura-PDF**.
@@ -264,8 +282,8 @@ Parser-, importbevaknings-, autostart-, ikon-, språk-, valuta-, databas-, säke
 
 ## Begränsningar
 
-- PDF-layout och OCR kan misstolka fält. Kontrollera fakturan före godkännande.
-- Betalstatus hämtas inte via Fortnox. Kontrollera betalningar manuellt före utskick och använd **Markera som betald** när betalningen är verifierad.
+- PDF-layout och OCR kan misstolka fält. Kontrollera fakturan före godkännande. Reskontraimporten kräver textbaserad PDF och stoppar vid oläsbara rader eller avvikande kontrollsummor.
+- Betalstatus hämtas inte direkt via Fortnox. Den kan avstämmas med bekräftade, kompletta reskontralistor; kontrollera alltid importsammanfattningen och verifiera betalningar före utskick.
 - Dagregler, avgifter, ränta och avtalsvillkor måste verifieras för verksamheten.
 - Automatisk e-post eller automatisk ansökan till Kronofogden ingår inte.
 

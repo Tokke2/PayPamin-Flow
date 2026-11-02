@@ -72,7 +72,11 @@ class DatabaseTests(unittest.TestCase):
                     self.assertIn("logo_file", columns)
                     self.assertIn("p1_snapshot", columns)
                     self.assertIn("p2_snapshot", columns)
+                    self.assertIn("ledger_first_seen", columns)
+                    self.assertIn("ledger_last_seen", columns)
                     self.assertEqual(tuple(existing), (6563.0, 1000.0, "SEK", None, "", ""))
+                    self.assertEqual(app.setting("ledger_friday_reminder"), "1")
+                    self.assertEqual(app.setting("ledger_last_list_date"), "")
 
                     db.execute(
                         "INSERT INTO invoices(customer,invoice_no,due_date,created) VALUES(?,?,?,?)",

@@ -2,6 +2,7 @@
 
 ## Unreleased — application version remains 0.6.0
 
+- Added text-based Fortnox customer-ledger PDF import with page/count/total validation, a once-per-Friday import reminder and confirmed paid reconciliation. The first list establishes history; only previously seen invoices missing from a later complete list can be marked paid, while existing invoice edits and P1/P2 history are preserved and ledger metadata survives JSON backup/restore.
 - Added a local consolidated `errors.log` for faster troubleshooting. It collects complete error/traceback blocks from current and rotated app logs, startup failures and update failures, newest first with duplicate suppression and atomic refreshes, while preserving every original log. The toolbar and Help menu open the consolidated view directly.
 - Replaced native application packaging with one cross-platform `PayPamin-Flow-Python.zip` and SHA-256 sidecar; removed PyInstaller and native build metadata.
 - Added validated in-app installation of Python updates with atomic replacement, rollback and console-free restart; no separate updater needs to be run by the user.

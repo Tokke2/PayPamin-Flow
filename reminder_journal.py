@@ -37,7 +37,7 @@ INVOICE_COLUMNS = (
     "reviewed", "logo_file", "amount", "currency", "paid", "email", "source",
     "source_hash", "ignored", "note", "p1_date", "p2_date", "sent_count",
     "p1_snapshot", "p2_snapshot", "p1_draft_date", "p2_draft_date",
-    "p1_sent_date", "p2_sent_date", "created",
+    "p1_sent_date", "p2_sent_date", "ledger_first_seen", "ledger_last_seen", "created",
 )
 
 
@@ -483,7 +483,7 @@ def _invoice_values(invoice, now):
     values["reviewed"] = int(values["reviewed"] if values["reviewed"] is not None else 1)
     values["ignored"] = int(values["ignored"] or 0)
     values["sent_count"] = int(values["sent_count"] or 0)
-    for column in ("p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date"):
+    for column in ("p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date", "ledger_first_seen", "ledger_last_seen"):
         values[column] = values[column] or ""
     values["amount"] = _float(values["amount"])
     values["paid"] = _float(values["paid"])
@@ -585,6 +585,9 @@ def import_journal(database_path, journal_path, source_path, *, now: datetime | 
                     if not local["sent_count"] and values["sent_count"]:
                         updates.append("sent_count=?")
                         parameters.append(values["sent_count"])
+                    if values["ledger_last_seen"] > (local["ledger_last_seen"] or ""):
+                        updates.extend(("ledger_first_seen=?", "ledger_last_seen=?"))
+                        parameters.extend((values["ledger_first_seen"], values["ledger_last_seen"]))
                     if local["logo_file"] is None and imported.get("logo_file") is not None:
                         updates.append("logo_file=?")
                         parameters.append(imported.get("logo_file"))

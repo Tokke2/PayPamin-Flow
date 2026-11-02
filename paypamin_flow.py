@@ -41,6 +41,10 @@ from invoice_parser import (
     parse_amount_value, parse_invoice_text,
 )
 from import_watcher import ImportFolderMonitor
+from ledger_import import (
+    LedgerImportError, apply_ledger_import, ensure_ledger_schema,
+    plan_ledger_import, read_ledger_report,
+)
 from mail_compose import default_thunderbird_executable, open_thunderbird_draft, windows_uses_thunderbird
 from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders
 from reminder_journal import (
@@ -72,6 +76,7 @@ from update_installer import (
 )
 
 IMPORT_WATCH_INTERVAL_MS = 5000
+LEDGER_REMINDER_INTERVAL_MS = 15 * 60 * 1000
 ERROR_LOG_REFRESH_INTERVAL_MS = 60 * 1000
 CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 JOURNAL_BACKUP_INTERVAL_MS = 60 * 60 * 1000
@@ -177,6 +182,7 @@ def init_db():
         if 'p2_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p2_snapshot TEXT DEFAULT ''")
         for column in ('p1_draft_date','p2_draft_date','p1_sent_date','p2_sent_date'):
             if column not in existing:db.execute(f"ALTER TABLE invoices ADD COLUMN {column} TEXT DEFAULT ''")
+        ensure_ledger_schema(db)
         ensure_journal_schema(db)
         ensure_customer_contact_schema(db)
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -191,7 +197,7 @@ def init_db():
             id INTEGER PRIMARY KEY, vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
             x0 REAL NOT NULL, y0 REAL NOT NULL, x1 REAL NOT NULL, y1 REAL NOT NULL, created TEXT NOT NULL)""")
         db.execute("CREATE TABLE IF NOT EXISTS vendor_logos (vendor TEXT PRIMARY KEY, logo_file TEXT NOT NULL DEFAULT '')")
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','auto_import':'1','cache_auto':'1','cache_last_cleanup':'','language':'sv'}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','auto_import':'1','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
 
@@ -718,6 +724,7 @@ class ReminderApp(tk.Tk):
         self.after(3000,self._run_scheduled_cache_cleanup)
         self.after(4000,self._run_scheduled_journal_backup)
         self.after(4500,self._run_scheduled_reminder_archive)
+        self.after(6000,self._run_scheduled_ledger_reminder)
 
     def start_tray(self):
         """Start the tray icon lazily so unsupported desktops can still run the app."""
@@ -743,6 +750,7 @@ class ReminderApp(tk.Tk):
         self.deiconify();self.lift()
         try:self.focus_force()
         except tk.TclError:pass
+        self.after_idle(self._maybe_show_ledger_reminder)
 
     def _on_main_window_unmap(self,event):
         """Handle a window-manager minimize after Tk has updated its state."""
@@ -1166,6 +1174,7 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Säkerhetskopiera inställningar och påminnelser'),command=self.create_backup)
         file_menu.add_command(label=_('Återställ säkerhetskopia'),command=self.restore_backup)
         file_menu.add_command(label=_('Importera JSON-journal'),command=self.import_journal)
+        file_menu.add_command(label=_('Importera reskontralista'),command=self.import_ledger_list)
         file_menu.add_command(label=_('Öppna exportmapp'),command=self.open_export_folder)
         file_menu.add_command(label=_('Rensa cache nu'),command=self.clear_cache_now)
         file_menu.add_separator()
@@ -1727,6 +1736,77 @@ class ReminderApp(tk.Tk):
         EXPORT_DIR.mkdir(exist_ok=True)
         try:open_path(EXPORT_DIR)
         except Exception:logger.exception('Could not open export folder')
+
+    def import_ledger_list(self):
+        """Import a complete customer ledger after validation and confirmation."""
+        path=filedialog.askopenfilename(
+            title=_('Välj reskontralista'),filetypes=[('PDF','*.pdf')],
+        )
+        if not path:return None
+        try:
+            report=read_ledger_report(path)
+            plan=plan_ledger_import(DB_PATH,report)
+        except LedgerImportError as exc:
+            logger.warning('Customer ledger validation failed: %s',exc)
+            messagebox.showerror(_('Reskontralistan kunde inte läsas'),_('Reskontralistan kunde inte läsas.\n\n{error}',error=exc),parent=self)
+            return None
+        except Exception as exc:
+            logger.exception('Customer ledger import planning failed')
+            messagebox.showerror(_('Reskontralistan kunde inte läsas'),_('Reskontralistan kunde inte läsas.\n\n{error}',error=exc),parent=self)
+            return None
+
+        missing_lines=[f"{row.invoice_no} – {row.customer}" for row in plan.missing[:8]]
+        if len(plan.missing)>8:missing_lines.append(_('… och {count} till',count=len(plan.missing)-8))
+        missing_text='\n'.join(missing_lines) if missing_lines else '—'
+        verification=(_('Sidor, fakturaantal och totalsumma är verifierade.') if report.total_verified else
+                      _('Sidor och fakturaantal är verifierade. Icke-SEK-listor ändrar inte betalstatus automatiskt.'))
+        if not messagebox.askyesno(
+            _('Granska reskontralista'),
+            _('Lista per {date} med {count} fakturor från {pages} sidor.\n{verification}\n\nNya fakturor: {new}\nBefintliga som bevaras: {existing}\nTidigare sedda som saknas och markeras betalda: {paid}\n\n{missing}\n\nVill du importera listan?',
+              date=report.list_date,count=report.expected_count,pages=report.page_count,verification=verification,
+              new=plan.new_count,existing=plan.existing_count,paid=len(plan.missing),missing=missing_text),
+            parent=self,
+        ):return None
+        try:
+            result=apply_ledger_import(DB_PATH,report)
+        except Exception as exc:
+            logger.exception('Customer ledger import failed')
+            messagebox.showerror(_('Reskontralistan kunde inte importeras'),_('Reskontralistan kunde inte importeras.\n\n{error}',error=exc),parent=self)
+            return None
+        refresh_json_journal(parent=self)
+        logger.info('Customer ledger imported: date=%s new=%d existing=%d marked_paid=%d',report.list_date,result.imported,result.existing,result.marked_paid)
+        self.refresh()
+        messagebox.showinfo(
+            _('Reskontralistan är importerad'),
+            _('Nya fakturor: {new}\nBefintliga som bevarades: {existing}\nMarkerade som betalda: {paid}',new=result.imported,existing=result.existing,paid=result.marked_paid),
+            parent=self,
+        )
+        return result
+
+    def _maybe_show_ledger_reminder(self):
+        """Offer the Friday ledger import once per date while the window is visible."""
+        try:
+            today=date.today()
+            if self._quitting or today.weekday()!=4:return False
+            if setting('ledger_friday_reminder')!='1' or setting('ledger_last_friday_prompt')==today.isoformat():return False
+            try:visible=bool(self.winfo_viewable())
+            except (AttributeError,tk.TclError):visible=True
+            if not visible:return False
+            set_setting('ledger_last_friday_prompt',today.isoformat())
+            if messagebox.askyesno(
+                _('Veckans reskontralista'),
+                _('Det är fredag. Hämta en aktuell kundreskontralista från Fortnox och importera den för att uppdatera fakturor och betalstatus.\n\nVill du välja listan nu?'),
+                parent=self,
+            ):self.import_ledger_list()
+            return True
+        except Exception:
+            logger.exception('Weekly customer ledger reminder failed')
+            return False
+
+    def _run_scheduled_ledger_reminder(self):
+        if self._quitting:return
+        self._maybe_show_ledger_reminder()
+        if not self._quitting:self.after(LEDGER_REMINDER_INTERVAL_MS,self._run_scheduled_ledger_reminder)
 
     def import_invoice(self):
         path=filedialog.askopenfilename(title=_('Välj faktura-PDF'),filetypes=[('PDF','*.pdf')])
@@ -2364,9 +2444,11 @@ class ReminderApp(tk.Tk):
         ttk.Label(form,text=_('Obs: påminnelseavgiften använder fakturans valuta. Kontrollera att avgift, ränta och villkor gäller för era kunder.'),style='Sub.TLabel').grid(row=len(fields)+7,column=0,columnspan=3,sticky='w',pady=(8,0))
         automatic_import_var=tk.BooleanVar(value=setting('auto_import')=='1')
         ttk.Checkbutton(form,text=_('Bevaka importmappen och importera nya PDF:er automatiskt'),variable=automatic_import_var).grid(row=len(fields)+8,column=0,columnspan=3,sticky='w',pady=(10,3))
+        ledger_reminder_var=tk.BooleanVar(value=setting('ledger_friday_reminder')=='1')
+        ttk.Checkbutton(form,text=_('Påminn om att importera kundreskontralista varje fredag'),variable=ledger_reminder_var).grid(row=len(fields)+9,column=0,columnspan=3,sticky='w',pady=(10,3))
         automatic_cache_var=tk.BooleanVar(value=setting('cache_auto')=='1')
-        ttk.Checkbutton(form,text=_('Rensa gamla cachefiler automatiskt en gång per dygn'),variable=automatic_cache_var).grid(row=len(fields)+9,column=0,columnspan=3,sticky='w',pady=(10,3))
-        ttk.Label(form,text=_('Endast appens cachefiler äldre än 24 timmar. Fakturor och importmappen rörs inte.'),style='Sub.TLabel').grid(row=len(fields)+10,column=0,columnspan=3,sticky='w')
+        ttk.Checkbutton(form,text=_('Rensa gamla cachefiler automatiskt en gång per dygn'),variable=automatic_cache_var).grid(row=len(fields)+10,column=0,columnspan=3,sticky='w',pady=(10,3))
+        ttk.Label(form,text=_('Endast appens cachefiler äldre än 24 timmar. Fakturor och importmappen rörs inte.'),style='Sub.TLabel').grid(row=len(fields)+11,column=0,columnspan=3,sticky='w')
         def save():
             try:
                 for k,e in entries.items():
@@ -2386,15 +2468,16 @@ class ReminderApp(tk.Tk):
             set_setting('autostart','1' if autostart_var.get() else '0')
             set_setting('update_auto','1' if automatic_updates_var.get() else '0')
             set_setting('auto_import','1' if automatic_import_var.get() else '0')
+            set_setting('ledger_friday_reminder','1' if ledger_reminder_var.get() else '0')
             set_setting('cache_auto','1' if automatic_cache_var.get() else '0')
             set_setting('language',new_language)
             set_language(new_language)
             refresh_json_journal(parent=w)
-            logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s automatic_import=%s cache_auto=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(automatic_cache_var.get()),new_language)
+            logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language)
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()
-        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+11,column=1,sticky='e',pady=(15,0))
+        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+12,column=1,sticky='e',pady=(15,0))
 
 def main():
     try:
