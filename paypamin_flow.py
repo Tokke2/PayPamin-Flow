@@ -29,7 +29,6 @@ from app_backup import (
 from autostart import AutostartError, autostart_location, set_autostart
 from cache_cleaner import clean_cache
 from tray import TrayController, TrayUnavailable
-from ui_icons import icon_name_for_label
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from console_free import configure_console_free_subprocesses
 from error_log import ERROR_LOG_NAME, refresh_error_log
@@ -1021,7 +1020,7 @@ class ReminderApp(tk.Tk):
             messagebox.showerror(_('JSON-journalen kunde inte importeras'),str(exc),parent=self)
 
     def _configure_icons(self):
-        """Use the new product identity for windows, OS icons and action icons."""
+        """Use the product identity for windows, OS icons and the header logo."""
         self._window_icons=[];self._header_icon=None;self._brand_logo=None;self._action_icons={}
         self._configure_macos_dock_icon()
         try:
@@ -1094,26 +1093,21 @@ class ReminderApp(tk.Tk):
         self._instrument_action_tree(window)
 
     def _apply_menu_icons(self,menu):
-        """Apply matching icons to every command/cascade in one Tk menu."""
+        """Keep menu commands and cascades text-only without changing actions."""
         try:
             last=menu.index('end')
             if last is None:return
             for index in range(last+1):
                 if menu.type(index) not in ('command','cascade'):continue
-                name=icon_name_for_label(menu.entrycget(index,'label'))
-                image=self._ui_icon(name)
-                if image:menu.entryconfigure(index,image=image,compound='left')
+                menu.entryconfigure(index,image='',compound='none')
         except (tk.TclError,AttributeError):
-            logger.debug('Menu icons could not be applied',exc_info=True)
+            logger.debug('Text-only menu entries could not be applied',exc_info=True)
 
     def _apply_action_icons(self,root):
-        """Recursively iconify known buttons without changing their commands."""
+        """Recursively keep buttons text-only without changing their commands."""
         try:
             if root.winfo_class() in ('TButton','Button'):
-                name=icon_name_for_label(root.cget('text'))
-                style=str(root.cget('style')) if root.winfo_class()=='TButton' else ''
-                image=self._ui_icon(name,inverse='Accent' in style)
-                if image:root.configure(image=image,compound='left')
+                root.configure(image='',compound='none')
             children=root.winfo_children()
         except (tk.TclError,AttributeError):
             return

@@ -2,6 +2,7 @@
 
 ## Unreleased — application version remains 0.6.0
 
+- Replaced action icons with text-only labels on toolbar buttons, File/Help menus, the invoice context menu and dialog buttons in both languages. Commands and keyboard behavior are unchanged; the PayPamin Flow application/window/tray icon and horizontal header/About logo remain.
 - Added detailed structured activity tracing to the existing technical log for Tk buttons, menus, context menus, tray actions, invoice selection/filter changes and update checks/installations. Start, completion/error, duration, result type, session/action IDs and timezone-aware timestamps are recorded without changing the original command result; registered Tk command names and Python callbacks are both supported, unexpected Tk callback exceptions are retained, and log rotation was increased to 5 MB with five history files. Existing domain-specific PDF, ledger, email, backup and background diagnostics remain.
 - Added **Update app** to the system-tray right-click menu between Open and Exit. It restores the window and starts the same manual update flow as the Help menu; the tray label follows available/checking/installing states and refreshes with the main update button.
 - Successful customer-ledger imports now return the main view to **Current**, so invoices reconciled as paid leave the active working list immediately even if **All** was selected. Their database records and P1/P2/email history remain available under **All** rather than being deleted.

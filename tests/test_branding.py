@@ -106,32 +106,23 @@ class BrandingTests(unittest.TestCase):
         from i18n import _
         return _(source, **values)
 
-    def test_every_static_menu_and_button_label_has_an_action_icon(self):
+    def test_menu_and_button_renderers_do_not_resolve_action_icons(self):
         tree = ast.parse((ROOT / "paypamin_flow.py").read_text(encoding="utf-8"))
-        labels = set()
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            method = node.func.attr
-            if method not in {"add_command", "add_cascade", "Button"}:
-                continue
-            keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
-            value = keywords.get("text") if method == "Button" else keywords.get("label")
-            if (
-                isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
-                and value.func.id == "_" and value.args
-                and isinstance(value.args[0], ast.Constant)
-            ):
-                labels.add(value.args[0].value)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and any(
-                isinstance(target, ast.Name) and target.id in {"primary_actions", "secondary_actions"}
-                for target in node.targets
-            ):
-                labels.update(item.elts[0].value for item in node.value.elts)
-        dynamic = {"Om {app_name}", "Spara och skriv om {level}"}
-        set_language("sv")
-        self.assertEqual(sorted(label for label in labels - dynamic if not icon_name_for_label(label)), [])
+        app_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ReminderApp")
+        methods = {node.name: node for node in app_class.body if isinstance(node, ast.FunctionDef)}
+        for name in ("_apply_menu_icons", "_apply_action_icons"):
+            with self.subTest(renderer=name):
+                calls = list(ast.walk(methods[name]))
+                self.assertFalse(any(
+                    isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "icon_name_for_label"
+                    for node in calls
+                ))
+                self.assertFalse(any(
+                    isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "_ui_icon"
+                    for node in calls
+                ))
 
     def test_every_secondary_window_uses_the_shared_icon_factory(self):
         tree = ast.parse((ROOT / "paypamin_flow.py").read_text(encoding="utf-8"))
@@ -227,41 +218,31 @@ class WindowIconTests(unittest.TestCase):
         self.assertEqual(Path(photo.call_args_list[0].kwargs["file"]).name, "save.png")
         self.assertEqual(Path(photo.call_args_list[1].kwargs["file"]).name, "save_light.png")
 
-    def test_action_icons_are_applied_recursively_to_accent_buttons(self):
-        fake = SimpleNamespace(_action_icons={})
-        fake._ui_icon = MethodType(self.app.ReminderApp._ui_icon, fake)
+    def test_buttons_are_recursively_text_only_without_loading_icons(self):
+        fake = SimpleNamespace()
         fake._apply_action_icons = MethodType(self.app.ReminderApp._apply_action_icons, fake)
         button = Mock()
         button.winfo_class.return_value = "TButton"
-        button.cget.side_effect = lambda key: {"text": "Spara", "style": "Accent.TButton"}[key]
         button.winfo_children.return_value = []
         root = Mock()
         root.winfo_class.return_value = "TFrame"
         root.winfo_children.return_value = [button]
-        image = Mock()
-        with patch.object(self.app, "ICON_DIR", ASSETS), patch.object(
-            self.app.tk, "PhotoImage", create=True, return_value=image
-        ) as photo:
+        with patch.object(self.app.tk, "PhotoImage", create=True) as photo:
             self.app.ReminderApp._apply_action_icons(fake, root)
-        button.configure.assert_called_once_with(image=image, compound="left")
-        self.assertEqual(Path(photo.call_args.kwargs["file"]).name, "save_light.png")
+        button.configure.assert_called_once_with(image="", compound="none")
+        photo.assert_not_called()
 
-    def test_menu_commands_and_cascades_receive_icons(self):
-        fake = SimpleNamespace(_action_icons={})
-        fake._ui_icon = MethodType(self.app.ReminderApp._ui_icon, fake)
+    def test_menu_commands_and_cascades_are_text_only(self):
+        fake = SimpleNamespace()
         menu = Mock()
         menu.index.return_value = 1
         menu.type.side_effect = ["command", "cascade"]
-        labels = {0: "Spara", 1: "Arkiv"}
-        menu.entrycget.side_effect = lambda index, key: labels[index]
-        with patch.object(self.app, "ICON_DIR", ASSETS), patch.object(
-            self.app.tk, "PhotoImage", create=True, side_effect=[Mock(), Mock()]
-        ):
+        with patch.object(self.app.tk, "PhotoImage", create=True) as photo:
             self.app.ReminderApp._apply_menu_icons(fake, menu)
         self.assertEqual(menu.entryconfigure.call_count, 2)
         for call_args in menu.entryconfigure.call_args_list:
-            self.assertEqual(call_args.kwargs["compound"], "left")
-            self.assertIsNotNone(call_args.kwargs["image"])
+            self.assertEqual(call_args.kwargs, {"image": "", "compound": "none"})
+        photo.assert_not_called()
 
 
 class MacOSBrandingTests(unittest.TestCase):
