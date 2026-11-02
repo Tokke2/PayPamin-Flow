@@ -70,11 +70,27 @@ class MissingLedgerInvoice:
 
 
 @dataclass(frozen=True)
+class LedgerPaymentUpdate:
+    invoice_id: int
+    invoice_no: str
+    customer: str
+    amount: float
+    currency: str
+    previous_paid: float
+    new_paid: float
+
+    @property
+    def fully_paid(self) -> bool:
+        return self.amount - self.new_paid <= 0.005
+
+
+@dataclass(frozen=True)
 class LedgerPlan:
     new_count: int
     existing_count: int
     missing: tuple[MissingLedgerInvoice, ...]
     previous_list_date: str
+    payment_updates: tuple[LedgerPaymentUpdate, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -82,6 +98,7 @@ class LedgerResult:
     imported: int
     existing: int
     marked_paid: int
+    payment_updates: int = 0
 
 
 def _amount(value: str) -> Decimal:
@@ -242,6 +259,32 @@ def _previous_list_date(db) -> str:
     return str(row[0] or "") if row else ""
 
 
+def _present_payment_update(row, entry: LedgerEntry):
+    """Return a safe paid-amount increase for an invoice present in the list."""
+    amount = float(row["amount"] or 0)
+    previous_paid = float(row["paid"] or 0)
+    if amount - previous_paid <= 0.005:
+        return None
+    currency = str(row["currency"] or "SEK").strip().upper()
+    if currency != entry.currency:
+        return None
+    if entry.balance <= 0.005:
+        # A zero balance is authoritative even if the app's historic amount was corrected.
+        new_paid = amount
+    else:
+        # Do not guess a partial payment across differing historic invoice amounts.
+        if abs(amount - entry.amount) > 0.005:
+            return None
+        new_paid = round(entry.paid, 2)
+    if new_paid - previous_paid <= 0.005:
+        return None
+    return LedgerPaymentUpdate(
+        invoice_id=int(row["id"]), invoice_no=str(row["invoice_no"]),
+        customer=str(row["customer"]), amount=amount, currency=currency,
+        previous_paid=previous_paid, new_paid=new_paid,
+    )
+
+
 def _plan(db, report: LedgerReport) -> LedgerPlan:
     ensure_ledger_schema(db)
     previous = _previous_list_date(db)
@@ -254,7 +297,14 @@ def _plan(db, report: LedgerReport) -> LedgerPlan:
     current = {_normalise_invoice_number(entry.invoice_no) for entry in report.entries}
     existing_count = sum(1 for entry in report.entries if _normalise_invoice_number(entry.invoice_no) in by_number)
     missing = []
+    payment_updates = []
     if report.total_verified:
+        for entry in report.entries:
+            row = by_number.get(_normalise_invoice_number(entry.invoice_no))
+            if row is not None:
+                update = _present_payment_update(row, entry)
+                if update is not None:
+                    payment_updates.append(update)
         for row in rows:
             key = _normalise_invoice_number(row["invoice_no"])
             if key in current or not row["ledger_first_seen"] or not row["ledger_last_seen"]:
@@ -268,18 +318,21 @@ def _plan(db, report: LedgerReport) -> LedgerPlan:
                 customer=str(row["customer"]), amount=float(row["amount"] or 0),
                 currency=str(row["currency"] or "SEK"),
             ))
-    return LedgerPlan(len(report.entries) - existing_count, existing_count, tuple(missing), previous)
+    return LedgerPlan(
+        len(report.entries) - existing_count, existing_count, tuple(missing), previous,
+        tuple(payment_updates),
+    )
 
 
 def plan_ledger_import(database_path, report: LedgerReport) -> LedgerPlan:
-    """Preview changes, including previously seen invoices absent from this list."""
+    """Preview present-row payment updates and previously seen missing invoices."""
     with closing(sqlite3.connect(str(database_path))) as db:
         db.row_factory = sqlite3.Row
         return _plan(db, report)
 
 
 def apply_ledger_import(database_path, report: LedgerReport) -> LedgerResult:
-    """Atomically insert new rows, record sightings and settle missing invoices."""
+    """Atomically insert rows, update listed payments and settle missing invoices."""
     with closing(sqlite3.connect(str(database_path))) as db:
         db.row_factory = sqlite3.Row
         try:
@@ -309,6 +362,8 @@ def apply_ledger_import(database_path, report: LedgerReport) -> LedgerResult:
                         report.list_date, report.list_date, created,
                     ),
                 )
+            for update in plan.payment_updates:
+                db.execute("UPDATE invoices SET paid=? WHERE id=?", (update.new_paid, update.invoice_id))
             for missing in plan.missing:
                 db.execute("UPDATE invoices SET paid=amount WHERE id=?", (missing.invoice_id,))
             db.execute(
@@ -316,7 +371,10 @@ def apply_ledger_import(database_path, report: LedgerReport) -> LedgerResult:
                 (report.list_date,),
             )
             db.commit()
-            return LedgerResult(plan.new_count, plan.existing_count, len(plan.missing))
+            marked_paid = len(plan.missing) + sum(update.fully_paid for update in plan.payment_updates)
+            return LedgerResult(
+                plan.new_count, plan.existing_count, marked_paid, len(plan.payment_updates),
+            )
         except Exception:
             db.rollback()
             raise

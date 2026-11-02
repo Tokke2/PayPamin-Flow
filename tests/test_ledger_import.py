@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from ledger_import import (
-    LedgerImportError, LedgerPlan, LedgerResult, MissingLedgerInvoice,
+    LedgerImportError, LedgerPaymentUpdate, LedgerPlan, LedgerResult, MissingLedgerInvoice,
     apply_ledger_import, parse_ledger_pages, plan_ledger_import, read_ledger_report,
 )
 from reminder_journal import export_journal, import_journal
@@ -149,7 +149,7 @@ class LedgerDatabaseTests(unittest.TestCase):
             "invoice_date": "2026-10-01", "due_date": "2026-10-31",
             "template_vendor": "Bevarad mall", "amount": amount, "currency": "SEK",
             "paid": paid, "email": "kund@example.test", "source": "manual",
-            "source_hash": "original-source", "note": "Bevarad text", "reviewed": 1,
+            "source_hash": f"original-source-{invoice_no}", "note": "Bevarad text", "reviewed": 1,
             "logo_file": "supplier.svg",
         }
         self.assertIsNone(self.app.save_invoice_record(values))
@@ -183,6 +183,76 @@ class LedgerDatabaseTests(unittest.TestCase):
             self.assertEqual(empty_note_row["note"], "")
             self.assertEqual(new_row["source"], "")
             self.assertEqual(self.app.setting("ledger_last_list_date"), "2026-11-02")
+
+    def test_same_date_reimport_updates_existing_paid_without_replacing_history(self):
+        full = self.save_existing("1001", amount=1234.0, paid=0.0)
+        partial = self.save_existing("1002", amount=2000.0, paid=0.0)
+        higher_manual = self.save_existing("1003", amount=3000.0, paid=2500.0)
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET ledger_first_seen=?,ledger_last_seen=?",
+                (self.report.list_date, self.report.list_date),
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO settings(key,value) VALUES('ledger_last_list_date',?)",
+                (self.report.list_date,),
+            )
+        entries = tuple(
+            replace(entry, balance=0.0) if entry.invoice_no == "1001" else entry
+            for entry in self.report.entries
+        )
+        report = replace(
+            self.report, entries=entries, expected_total=4000.0, actual_total=4000.0,
+        )
+
+        plan = plan_ledger_import(self.app.DB_PATH, report)
+        updates = {update.invoice_no: update for update in plan.payment_updates}
+        self.assertEqual(plan.previous_list_date, self.report.list_date)
+        self.assertEqual(set(updates), {"1001", "1002"})
+        self.assertTrue(updates["1001"].fully_paid)
+        self.assertFalse(updates["1002"].fully_paid)
+        self.assertEqual(updates["1002"].new_paid, 1500.0)
+
+        result = apply_ledger_import(self.app.DB_PATH, report)
+
+        self.assertEqual((result.imported, result.existing, result.marked_paid, result.payment_updates), (1, 3, 1, 2))
+        with self.app.connect() as db:
+            rows = {
+                invoice_no: db.execute("SELECT * FROM invoices WHERE invoice_no=?", (invoice_no,)).fetchone()
+                for invoice_no in ("1001", "1002", "1003")
+            }
+            self.assertEqual((rows["1001"]["amount"], rows["1001"]["paid"]), (1234.0, 1234.0))
+            self.assertEqual((rows["1002"]["amount"], rows["1002"]["paid"]), (2000.0, 1500.0))
+            self.assertEqual(rows["1003"]["paid"], 2500.0)
+            self.assertEqual(rows["1001"]["p1_date"], full["p1_date"])
+            self.assertEqual(rows["1001"]["sent_count"], 1)
+            self.assertEqual(rows["1001"]["note"], "Bevarad text")
+            self.assertEqual(rows["1002"]["source_hash"], partial["source_hash"])
+            self.assertEqual(rows["1003"]["source_hash"], higher_manual["source_hash"])
+
+        repeated = apply_ledger_import(self.app.DB_PATH, report)
+        self.assertEqual((repeated.marked_paid, repeated.payment_updates), (0, 0))
+
+    def test_listed_partial_payment_with_amount_mismatch_is_not_guessed(self):
+        self.save_existing("1002", amount=2500.0, paid=100.0)
+
+        result = apply_ledger_import(self.app.DB_PATH, self.report)
+
+        self.assertEqual((result.marked_paid, result.payment_updates), (0, 0))
+        with self.app.connect() as db:
+            row = db.execute("SELECT amount,paid FROM invoices WHERE invoice_no='1002'").fetchone()
+            self.assertEqual(tuple(row), (2500.0, 100.0))
+
+    def test_unverified_report_does_not_update_listed_existing_paid_amount(self):
+        self.save_existing("1002", amount=2000.0, paid=0.0)
+        report = replace(self.report, total_verified=False)
+
+        result = apply_ledger_import(self.app.DB_PATH, report)
+
+        self.assertEqual((result.marked_paid, result.payment_updates), (0, 0))
+        with self.app.connect() as db:
+            paid = db.execute("SELECT paid FROM invoices WHERE invoice_no='1002'").fetchone()[0]
+            self.assertEqual(paid, 0.0)
 
     def test_existing_invoice_note_is_not_overwritten_by_ledger_reference(self):
         existing = self.save_existing("1002")
@@ -354,8 +424,9 @@ class LedgerUiTests(unittest.TestCase):
     def test_import_logs_every_row_and_paid_candidate_before_automatic_apply(self):
         report = parse_ledger_pages(PAGES)
         candidate = MissingLedgerInvoice(77, "9999", "Saknad kund AB", 1234.0, "SEK")
-        plan = LedgerPlan(3, 1, (candidate,), "2026-10-26")
-        result = LedgerResult(3, 1, 1)
+        payment = LedgerPaymentUpdate(78, "1002", "Listkund AB", 2000.0, "SEK", 0.0, 1500.0)
+        plan = LedgerPlan(3, 1, (candidate,), "2026-10-26", (payment,))
+        result = LedgerResult(3, 1, 1, 1)
         fake = SimpleNamespace(refresh=Mock())
         with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="/tmp/kundreskontra 2026-11-02.pdf"), patch.object(
             self.app, "read_ledger_report", return_value=report
@@ -382,6 +453,7 @@ class LedgerUiTests(unittest.TestCase):
         rows = payloads("Customer ledger row: ")
         plans = payloads("Customer ledger import plan: ")
         candidates = payloads("Customer ledger paid candidate: ")
+        listed_updates = payloads("Customer ledger listed payment update: ")
         self.assertEqual(selected[0]["source"], "kundreskontra 2026-11-02.pdf")
         self.assertEqual(summaries, [{
             "actual_total": "5000.00", "expected_count": 4,
@@ -399,9 +471,16 @@ class LedgerUiTests(unittest.TestCase):
         self.assertEqual(rows[1]["paid"], "1500.00")
         self.assertEqual(plans[0]["previous_list_date"], "2026-10-26")
         self.assertEqual(plans[0]["paid_candidates"], 1)
+        self.assertEqual(plans[0]["payment_updates"], 1)
         self.assertEqual(candidates, [{
             "amount": "1234.00", "currency": "SEK", "customer": "Saknad kund AB",
             "invoice_id": 77, "invoice_no": "9999",
+            "source": "kundreskontra 2026-11-02.pdf",
+        }])
+        self.assertEqual(listed_updates, [{
+            "amount": "2000.00", "currency": "SEK", "customer": "Listkund AB",
+            "fully_paid": False, "invoice_id": 78, "invoice_no": "1002",
+            "new_paid": "1500.00", "previous_paid": "0.00",
             "source": "kundreskontra 2026-11-02.pdf",
         }])
 
@@ -427,7 +506,7 @@ class LedgerUiTests(unittest.TestCase):
         ]
         self.assertEqual(outcomes, [{
             "existing": 0, "list_date": "2026-11-02", "marked_paid": 0,
-            "new": 4, "source": "ledger.pdf",
+            "new": 4, "payment_updates": 0, "source": "ledger.pdf",
         }])
 
     def test_validation_failure_log_names_source_and_reason(self):

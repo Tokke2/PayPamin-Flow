@@ -126,7 +126,7 @@ def _ledger_log_json(payload):
 
 
 def _log_ledger_report(source,report):
-    """Record every parsed value before the user confirms any database change."""
+    """Record every parsed value before any database change."""
     source_name=Path(source).name
     logger.info('Customer ledger PDF read: %s',_ledger_log_json({
         'source':source_name,'list_date':report.list_date,'pages':report.page_count,
@@ -146,18 +146,27 @@ def _log_ledger_report(source,report):
 
 
 def _log_ledger_plan(source,plan):
-    """Record all paid candidates, including those omitted from the short dialog."""
+    """Record all listed-payment updates and missing-invoice paid candidates."""
     source_name=Path(source).name
     logger.info('Customer ledger import plan: %s',_ledger_log_json({
         'source':source_name,'previous_list_date':plan.previous_list_date,
         'new':plan.new_count,'existing':plan.existing_count,
-        'paid_candidates':len(plan.missing),
+        'paid_candidates':len(plan.missing)+sum(update.fully_paid for update in plan.payment_updates),
+        'payment_updates':len(plan.payment_updates),
     }))
     for candidate in plan.missing:
         logger.info('Customer ledger paid candidate: %s',_ledger_log_json({
             'source':source_name,'invoice_id':candidate.invoice_id,
             'invoice_no':candidate.invoice_no,'customer':candidate.customer,
             'amount':f'{candidate.amount:.2f}','currency':candidate.currency,
+        }))
+    for update in plan.payment_updates:
+        logger.info('Customer ledger listed payment update: %s',_ledger_log_json({
+            'source':source_name,'invoice_id':update.invoice_id,
+            'invoice_no':update.invoice_no,'customer':update.customer,
+            'amount':f'{update.amount:.2f}','currency':update.currency,
+            'previous_paid':f'{update.previous_paid:.2f}',
+            'new_paid':f'{update.new_paid:.2f}','fully_paid':update.fully_paid,
         }))
 
 
@@ -2054,11 +2063,12 @@ class ReminderApp(tk.Tk):
         logger.info('Customer ledger imported: %s',_ledger_log_json({
             'source':source_name,'list_date':report.list_date,'new':result.imported,
             'existing':result.existing,'marked_paid':result.marked_paid,
+            'payment_updates':result.payment_updates,
         }))
         self.refresh()
         messagebox.showinfo(
             _('Reskontralistan är importerad'),
-            _('Nya fakturor: {new}\nBefintliga som bevarades: {existing}\nMarkerade som betalda: {paid}',new=result.imported,existing=result.existing,paid=result.marked_paid),
+            _('Nya fakturor: {new}\nBefintliga som bevarades: {existing}\nMarkerade som betalda: {paid}\nBefintliga med uppdaterat betalbelopp: {updated}',new=result.imported,existing=result.existing,paid=result.marked_paid,updated=result.payment_updates),
             parent=self,
         )
         return result
