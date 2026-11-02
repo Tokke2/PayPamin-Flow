@@ -47,6 +47,16 @@ from ledger_import import (
 )
 from mail_compose import default_thunderbird_executable, open_thunderbird_draft, windows_uses_thunderbird
 from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders
+from supplier_matching import (
+    extract_bankgiro_numbers,
+    extract_org_numbers,
+    format_bankgiro_number,
+    format_org_number,
+    match_supplier,
+    normalize_bankgiro_number,
+    normalize_org_number,
+    svg_logo_aliases,
+)
 from reminder_journal import (
     JOURNAL_FILENAME,
     JournalError,
@@ -282,7 +292,13 @@ def init_db():
         db.execute("""CREATE TABLE IF NOT EXISTS pdf_zone_samples (
             id INTEGER PRIMARY KEY, vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
             x0 REAL NOT NULL, y0 REAL NOT NULL, x1 REAL NOT NULL, y1 REAL NOT NULL, created TEXT NOT NULL)""")
-        db.execute("CREATE TABLE IF NOT EXISTS vendor_logos (vendor TEXT PRIMARY KEY, logo_file TEXT NOT NULL DEFAULT '')")
+        db.execute("""CREATE TABLE IF NOT EXISTS vendor_logos (
+            vendor TEXT PRIMARY KEY,logo_file TEXT NOT NULL DEFAULT '',
+            org_number TEXT NOT NULL DEFAULT '',bankgiro_number TEXT NOT NULL DEFAULT '')""")
+        vendor_logo_columns={row['name'] for row in db.execute('PRAGMA table_info(vendor_logos)').fetchall()}
+        for column in ('org_number','bankgiro_number'):
+            if column not in vendor_logo_columns:
+                db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
         defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','auto_import':'1','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
@@ -297,6 +313,26 @@ def setting(key):
 def set_setting(key,value):
     with connect() as db:
         db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(key,str(value)))
+
+
+def saved_supplier_profiles():
+    """Load logo and legacy zone-only templates for matching and review."""
+    with connect() as db:
+        rows=db.execute('SELECT vendor,logo_file,org_number,bankgiro_number FROM vendor_logos').fetchall()
+        zone_vendors=db.execute('SELECT DISTINCT vendor FROM pdf_zones').fetchall()
+    profiles=[];known=set()
+    for row in rows:
+        profile=dict(row);key=str(profile.get('vendor') or '').strip().casefold()
+        if not key or key in known:continue
+        logo_file=Path(str(profile.get('logo_file') or '')).name
+        profile['aliases']=svg_logo_aliases(SVG_DIR/logo_file) if logo_file else []
+        profiles.append(profile);known.add(key)
+    for row in zone_vendors:
+        key=str(row['vendor'] or '').strip().casefold()
+        if not key or key in known:continue
+        profiles.append({'vendor':row['vendor'],'logo_file':'','org_number':'','bankgiro_number':'','aliases':[]})
+        known.add(key)
+    return profiles
 
 
 def apply_saved_customer_contact(values):
@@ -1558,6 +1594,13 @@ class ReminderApp(tk.Tk):
         if not self._quitting:self.after(REMINDER_ARCHIVE_INTERVAL_MS,self._run_scheduled_reminder_archive)
 
     def guess_supplier(self,text):
+        matched=match_supplier(text,saved_supplier_profiles())
+        if matched:
+            if not matched.vendor:
+                logger.warning('Supplier template match left unresolved: method=%s',matched.method)
+                return ''
+            logger.info('Supplier template matched: vendor=%s method=%s score=%d',matched.vendor,matched.method,matched.score)
+            return matched.vendor
         for line in [re.sub(r'\s+',' ',x).strip() for x in text.splitlines()[:18]]:
             if re.search(r'(?i)\b(?:AB|ASA|AS|HB)\s*$',line) and len(line)<60 and not re.search(r'faktura|datum|kundnr',line,re.I):
                 return line
@@ -1624,12 +1667,36 @@ class ReminderApp(tk.Tk):
         if not available_pages:
             doc.close()
             return guess
-        win=self._new_toplevel(_('Förhandsgranska faktura – markera fält att läsa'));win.geometry('950x760')
+        original_vendor=vendor or Path(path).stem
+        supplier_profiles=saved_supplier_profiles()
+        def supplier_profile(name):
+            key=str(name or '').strip().casefold()
+            return next((profile for profile in supplier_profiles if str(profile.get('vendor') or '').strip().casefold()==key),None)
+        initial_profile=supplier_profile(original_vendor)
+        try:initial_org=format_org_number(initial_profile.get('org_number')) if initial_profile else ''
+        except ValueError:initial_org=''
+        try:initial_bg=format_bankgiro_number(initial_profile.get('bankgiro_number')) if initial_profile else ''
+        except ValueError:initial_bg=''
+        preview_text='\n'.join(doc[index].get_text('text') or '' for index in available_pages)
+        suggested_orgs=extract_org_numbers(preview_text)
+        suggested_bgs=extract_bankgiro_numbers(preview_text)
+        if not initial_org and len(suggested_orgs)==1:initial_org=format_org_number(next(iter(suggested_orgs)))
+        if not initial_bg and len(suggested_bgs)==1:initial_bg=format_bankgiro_number(next(iter(suggested_bgs)))
+        win=self._new_toplevel(_('Förhandsgranska faktura – markera fält att läsa'));win.geometry('950x790')
         top=ttk.Frame(win,padding=(12,8));top.pack(fill='x')
         ttk.Label(top,text=_('Leverantör / mallnamn:')).pack(side='left')
-        vendor_var=tk.StringVar(value=vendor or Path(path).stem)
-        ttk.Entry(top,textvariable=vendor_var,width=34).pack(side='left',padx=7)
+        vendor_var=tk.StringVar(value=original_vendor)
+        vendor_combo=ttk.Combobox(top,textvariable=vendor_var,width=32,values=sorted((profile['vendor'] for profile in supplier_profiles),key=str.casefold))
+        vendor_combo.pack(side='left',padx=7)
         ttk.Label(top,text=_('Dra en ruta över värdet. Sparade rutor kan återanvändas för samma mall.')).pack(side='left',padx=8)
+        identifiers=ttk.Frame(win,padding=(12,0,12,4));identifiers.pack(fill='x')
+        ttk.Label(identifiers,text=_('Leverantörens org.nr:')).pack(side='left')
+        org_var=tk.StringVar(value=initial_org)
+        ttk.Entry(identifiers,textvariable=org_var,width=17).pack(side='left',padx=(5,16))
+        ttk.Label(identifiers,text=_('Bankgiro:')).pack(side='left')
+        bg_var=tk.StringVar(value=initial_bg)
+        ttk.Entry(identifiers,textvariable=bg_var,width=15).pack(side='left',padx=5)
+        ttk.Label(identifiers,text=_('Kontrollera förslagen före sparning.')).pack(side='left',padx=12)
         body=ttk.Frame(win,padding=(10,0,10,6));body.pack(fill='both',expand=True)
         left=ttk.Frame(body);left.pack(side='left',fill='both',expand=True)
         nav=ttk.Frame(left);nav.pack(fill='x')
@@ -1646,8 +1713,7 @@ class ReminderApp(tk.Tk):
         right=ttk.Frame(body,width=235,padding=(10,4));right.pack(side='right',fill='y');right.pack_propagate(False)
         ttk.Label(right,text=_('Avlästa värden'),font=(self.font_family,11,'bold')).pack(anchor='w',pady=(0,8))
         logo_files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
-        with connect() as db:logo_row=db.execute('SELECT logo_file FROM vendor_logos WHERE lower(vendor)=lower(?)',(vendor_var.get().strip(),)).fetchone()
-        mapped_logo=logo_row['logo_file'] if logo_row else ''
+        mapped_logo=initial_profile.get('logo_file') if initial_profile else ''
         active_logo=self.logo_var.get()
         logo_choices=[_('(Välj logotyp för mallen)'),_('(Ingen logotyp)')]+logo_files
         initial_logo=mapped_logo if mapped_logo in logo_files else active_logo if active_logo in logo_files else logo_choices[0]
@@ -1655,6 +1721,19 @@ class ReminderApp(tk.Tk):
         ttk.Label(right,text=_('Logotyp som matchar fakturan'),font=(self.font_family,9,'bold')).pack(anchor='w',pady=(3,0))
         logo_combo=ttk.Combobox(right,textvariable=preview_logo_var,state='readonly',values=logo_choices,width=27)
         logo_combo.pack(fill='x',pady=(2,6))
+        def load_selected_profile(event=None):
+            profile=supplier_profile(vendor_var.get())
+            if not profile:return
+            try:org_var.set(format_org_number(profile.get('org_number')))
+            except ValueError:org_var.set('')
+            try:bg_var.set(format_bankgiro_number(profile.get('bankgiro_number')))
+            except ValueError:bg_var.set('')
+            profile_logo=profile.get('logo_file') or ''
+            if profile_logo in logo_files:preview_logo_var.set(profile_logo)
+            elif profile_logo:preview_logo_var.set(_('(Välj logotyp för mallen)'))
+            else:preview_logo_var.set(_('(Ingen logotyp)'))
+            draw_saved()
+        vendor_combo.bind('<<ComboboxSelected>>',load_selected_profile)
         result_labels={}
         status=tk.StringVar(value=_('Klicka Markera vid ett fält och dra sedan en ruta runt värdet.'))
         def activate_field(label):
@@ -1733,11 +1812,25 @@ class ReminderApp(tk.Tk):
             if save_logo:
                 # Keep the choice on this invoice even without saving field zones.
                 guess['logo_file']=selected_logo if selected_logo in logo_files else ''
-            if save and (pending or save_logo):
+            raw_org=org_var.get().strip();raw_bg=bg_var.get().strip()
+            if save and (pending or save_logo or raw_org or raw_bg or initial_org or initial_bg or vendor_var.get().strip()!=original_vendor):
                 mall=vendor_var.get().strip()
                 if not mall:messagebox.showerror(_('Mallnamn saknas'),_('Ange leverantör eller mallnamn.'),parent=win);return
+                try:org_number=normalize_org_number(raw_org)
+                except ValueError:
+                    messagebox.showerror(_('Ogiltigt organisationsnummer'),_('Ange organisationsnumret med 10 siffror, till exempel 556123-4567.'),parent=win);return
+                try:bankgiro_number=normalize_bankgiro_number(raw_bg)
+                except ValueError:
+                    messagebox.showerror(_('Ogiltigt bankgironummer'),_('Ange bankgironumret med 7 eller 8 siffror, till exempel 1234-5678.'),parent=win);return
                 vendor_key=mall.casefold()
                 with connect() as db:
+                    for other in db.execute('SELECT vendor,org_number,bankgiro_number FROM vendor_logos WHERE lower(vendor)<>lower(?)',(mall,)).fetchall():
+                        try:other_org=normalize_org_number(other['org_number'])
+                        except ValueError:other_org=''
+                        try:other_bg=normalize_bankgiro_number(other['bankgiro_number'])
+                        except ValueError:other_bg=''
+                        if (org_number and other_org==org_number) or (bankgiro_number and other_bg==bankgiro_number):
+                            messagebox.showerror(_('Leverantörsuppgifterna används redan'),_('Organisationsnumret eller bankgironumret används redan av leverantörsmallen {vendor}. Samma nummer kan inte sparas på flera mallar.',vendor=other['vendor']),parent=win);return
                     for field,zone in pending.items():
                         old=db.execute('SELECT * FROM pdf_zones WHERE lower(vendor)=lower(?) AND field=?',(mall,field)).fetchone()
                         count=db.execute('SELECT COUNT(*) AS n FROM pdf_zone_samples WHERE lower(vendor)=lower(?) AND field=?',(mall,field)).fetchone()['n']
@@ -1753,16 +1846,18 @@ class ReminderApp(tk.Tk):
                         count_for_page=len(page_samples)
                         if old:db.execute('UPDATE pdf_zones SET page_index=?,x0=?,y0=?,x1=?,y1=?,samples=? WHERE vendor=? AND field=?',(best_page,*coords,count_for_page,old['vendor'],field))
                         else:db.execute('INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES(?,?,?,?,?,?,?,?)',(vendor_key,field,best_page,*coords,count_for_page))
-                    if save_logo:
-                        logo_file=selected_logo if selected_logo in logo_files else ''
-                        old_logo=db.execute('SELECT vendor FROM vendor_logos WHERE lower(vendor)=lower(?)',(mall,)).fetchone()
-                        if old_logo:db.execute('UPDATE vendor_logos SET logo_file=? WHERE vendor=?',(logo_file,old_logo['vendor']))
-                        else:db.execute('INSERT INTO vendor_logos(vendor,logo_file) VALUES(?,?)',(vendor_key,logo_file))
+                    old_profile=db.execute('SELECT vendor,logo_file FROM vendor_logos WHERE lower(vendor)=lower(?)',(mall,)).fetchone()
+                    if save_logo:logo_file=selected_logo if selected_logo in logo_files else ''
+                    else:logo_file=old_profile['logo_file'] if old_profile else ''
+                    if old_profile:
+                        db.execute('UPDATE vendor_logos SET logo_file=?,org_number=?,bankgiro_number=? WHERE vendor=?',(logo_file,org_number,bankgiro_number,old_profile['vendor']))
+                    else:
+                        db.execute('INSERT INTO vendor_logos(vendor,logo_file,org_number,bankgiro_number) VALUES(?,?,?,?)',(vendor_key,logo_file,org_number,bankgiro_number))
                 if save_logo:
                     self.logo_var.set(selected_logo if selected_logo in logo_files else _('(Ingen logotyp)'))
                     self.on_logo_select(sync_json=False)
                 refresh_json_journal(parent=win)
-                logger.info('Updated learned invoice template: vendor=%s fields=%s logo_set=%s',vendor_key,','.join(pending),save_logo)
+                logger.info('Updated learned invoice template: vendor=%s fields=%s logo_set=%s identity_set=%s',vendor_key,','.join(pending),save_logo,bool(org_number or bankgiro_number))
             close_preview()
         def finish(save):
             if state['closed']:return
@@ -1772,7 +1867,7 @@ class ReminderApp(tk.Tk):
                 messagebox.showerror(_('Mallen kunde inte sparas'),_('PDF-granskningen är fortfarande öppen. Försök igen eller fortsätt utan att spara mall.\n\n{error}',error=exc),parent=win)
         buttons=ttk.Frame(right);buttons.pack(side='bottom',fill='x',pady=8)
         ttk.Button(buttons,text=_('Fortsätt utan att spara mall'),command=lambda:finish(False)).pack(fill='x',pady=3)
-        ttk.Button(buttons,text=_('Spara markerade fält som mall och fortsätt'),command=lambda:finish(True),style='Accent.TButton').pack(fill='x',pady=3)
+        ttk.Button(buttons,text=_('Spara leverantörsmall och fortsätt'),command=lambda:finish(True),style='Accent.TButton').pack(fill='x',pady=3)
         win.protocol('WM_DELETE_WINDOW',lambda:finish(False))
         try:
             render_page()

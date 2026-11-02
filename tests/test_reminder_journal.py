@@ -175,7 +175,7 @@ class ReminderJournalTests(unittest.TestCase):
                 "UPDATE invoices SET amount=6563.0,note='Korrigerad fakturatext' WHERE id=?",
                 (row["id"],),
             )
-            db.execute("INSERT INTO vendor_logos(vendor,logo_file) VALUES('supplier ab','supplier.svg')")
+            db.execute("INSERT INTO vendor_logos(vendor,logo_file,org_number,bankgiro_number) VALUES('supplier ab','supplier.svg','5561234567','12345678')")
             db.execute("INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES('supplier ab','amount',0,0.1,0.2,0.3,0.4,1)")
             db.execute("INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES('supplier ab','note',0,0.5,0.6,0.7,0.8,1)")
             db.execute("INSERT INTO pdf_zone_samples(vendor,field,page_index,x0,y0,x1,y1,created) VALUES('supplier ab','amount',0,0.1,0.2,0.3,0.4,'2026-10-29')")
@@ -189,6 +189,8 @@ class ReminderJournalTests(unittest.TestCase):
         self.assertEqual({zone["field"] for zone in payload["pdf_zones"]}, {"amount", "note"})
         self.assertEqual(len(payload["pdf_zone_samples"]), 1)
         self.assertEqual(payload["vendor_logos"][0]["logo_file"], "supplier.svg")
+        self.assertEqual(payload["vendor_logos"][0]["org_number"], "5561234567")
+        self.assertEqual(payload["vendor_logos"][0]["bankgiro_number"], "12345678")
 
     def test_marking_invoice_paid_refreshes_json_immediately(self):
         row = self.save_invoice("JSON-PAID")
@@ -213,7 +215,7 @@ class ReminderJournalTests(unittest.TestCase):
         self.app.set_setting("language", "en")
         with self.app.connect() as db:
             db.execute("UPDATE invoices SET p1_date='2026-10-20',sent_count=1,p1_draft_date='2026-10-21',p2_draft_date='2026-10-25',p1_sent_date='2026-10-22',p2_sent_date='2026-10-26' WHERE id=?", (row["id"],))
-            db.execute("INSERT INTO vendor_logos(vendor,logo_file) VALUES('supplier ab','supplier.svg')")
+            db.execute("INSERT INTO vendor_logos(vendor,logo_file,org_number,bankgiro_number) VALUES('supplier ab','supplier.svg','5561234567','12345678')")
             db.execute("INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES('supplier ab','amount',0,1,2,3,4,2)")
             db.execute("INSERT INTO pdf_zone_samples(vendor,field,page_index,x0,y0,x1,y1,created) VALUES('supplier ab','amount',0,1,2,3,4,'2026-10-20')")
         record_reminder(
@@ -245,12 +247,38 @@ class ReminderJournalTests(unittest.TestCase):
                 db.execute("SELECT p1_draft_date,p2_draft_date,p1_sent_date,p2_sent_date FROM invoices").fetchone(),
                 ("2026-10-21", "2026-10-25", "2026-10-22", "2026-10-26"),
             )
-            self.assertEqual(db.execute("SELECT logo_file FROM vendor_logos").fetchone()[0], "supplier.svg")
+            self.assertEqual(
+                db.execute("SELECT logo_file,org_number,bankgiro_number FROM vendor_logos").fetchone(),
+                ("supplier.svg", "5561234567", "12345678"),
+            )
             self.assertEqual(db.execute("SELECT samples FROM pdf_zones").fetchone()[0], 2)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM pdf_zone_samples").fetchone()[0], 1)
         restored = json.loads(target_json.read_text(encoding="utf-8"))
         self.assertEqual(len(restored["reminders"]), 1)
         self.assertEqual(restored["reminders"][0]["language"], "en")
+
+    def test_legacy_template_journal_does_not_erase_local_matching_identifiers(self):
+        self.save_invoice("JSON-OLD-TEMPLATE")
+        self.app.refresh_json_journal()
+        payload = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
+        payload["vendor_logos"] = [{"vendor": "Supplier AB", "logo_file": "journal.svg"}]
+        old_journal = self.workspace / "old-template.json"
+        old_journal.write_text(json.dumps(payload), encoding="utf-8")
+        target_db = self.workspace / "old-template.sqlite3"
+        target_json = self.workspace / "old-template-restored.json"
+        self.app.DB_PATH = target_db
+        self.app.init_db()
+        with self.app.connect() as db:
+            db.execute(
+                "INSERT INTO vendor_logos(vendor,logo_file,org_number,bankgiro_number) VALUES(?,?,?,?)",
+                ("supplier ab", "local.svg", "5561234567", "12345678"),
+            )
+        import_journal(target_db, target_json, old_journal)
+        with closing(sqlite3.connect(target_db)) as db:
+            row = db.execute(
+                "SELECT logo_file,org_number,bankgiro_number FROM vendor_logos"
+            ).fetchone()
+        self.assertEqual(row, ("journal.svg", "5561234567", "12345678"))
 
     def test_pre_email_status_journal_restores_with_empty_status_dates(self):
         self.save_invoice("JSON-OLD-EMAIL-STATUS")

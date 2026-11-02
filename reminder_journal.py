@@ -514,10 +514,27 @@ def _import_templates(db, payload):
         for row in payload.get("vendor_logos", []):
             if not isinstance(row, dict) or not row.get("vendor"):
                 raise JournalError(_("JSON-journalen innehåller en ogiltig logotypmall."))
-            db.execute(
-                "INSERT OR REPLACE INTO vendor_logos(vendor,logo_file) VALUES(?,?)",
-                (str(row["vendor"]), str(row.get("logo_file") or "")),
-            )
+            vendor = str(row["vendor"])
+            existing = db.execute(
+                "SELECT * FROM vendor_logos WHERE lower(vendor)=lower(?)", (vendor,)
+            ).fetchone()
+            # A pre-identifier journal must not erase values already stored locally.
+            org_number = str(row.get(
+                "org_number", existing["org_number"] if existing is not None else ""
+            ) or "")
+            bankgiro_number = str(row.get(
+                "bankgiro_number", existing["bankgiro_number"] if existing is not None else ""
+            ) or "")
+            if existing is not None:
+                db.execute(
+                    "UPDATE vendor_logos SET logo_file=?,org_number=?,bankgiro_number=? WHERE vendor=?",
+                    (str(row.get("logo_file") or ""), org_number, bankgiro_number, existing["vendor"]),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO vendor_logos(vendor,logo_file,org_number,bankgiro_number) VALUES(?,?,?,?)",
+                    (vendor, str(row.get("logo_file") or ""), org_number, bankgiro_number),
+                )
     if _table_exists(db, "pdf_zones"):
         for row in payload.get("pdf_zones", []):
             if not isinstance(row, dict):

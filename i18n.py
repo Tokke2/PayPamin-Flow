@@ -215,6 +215,15 @@ _ENGLISH = {
     # PDF preview and field templates
     "Förhandsgranska faktura – markera fält att läsa": "Preview invoice – select fields to read",
     "Leverantör / mallnamn:": "Supplier / template name:",
+    "Leverantörens org.nr:": "Supplier org. no.:",
+    "Bankgiro:": "Bankgiro:",
+    "Kontrollera förslagen före sparning.": "Review suggestions before saving.",
+    "Ogiltigt organisationsnummer": "Invalid organisation number",
+    "Ange organisationsnumret med 10 siffror, till exempel 556123-4567.": "Enter the organisation number using 10 digits, for example 556123-4567.",
+    "Ogiltigt bankgironummer": "Invalid bankgiro number",
+    "Ange bankgironumret med 7 eller 8 siffror, till exempel 1234-5678.": "Enter the bankgiro number using 7 or 8 digits, for example 1234-5678.",
+    "Leverantörsuppgifterna används redan": "Supplier details already in use",
+    "Organisationsnumret eller bankgironumret används redan av leverantörsmallen {vendor}. Samma nummer kan inte sparas på flera mallar.": "The organisation or bankgiro number is already used by supplier template {vendor}. The same number cannot be saved on multiple templates.",
     "Dra en ruta över värdet. Sparade rutor kan återanvändas för samma mall.": "Drag a box around the value. Saved boxes can be reused for the same template.",
     "Sida 1": "Page 1",
     "Sida {page} av {pages}": "Page {page} of {pages}",
@@ -240,6 +249,7 @@ _ENGLISH = {
     "PDF-granskningen är fortfarande öppen. Försök igen eller fortsätt utan att spara mall.\n\n{error}": "The PDF review is still open. Try again or continue without saving the template.\n\n{error}",
     "Fortsätt utan att spara mall": "Continue without saving a template",
     "Spara markerade fält som mall och fortsätt": "Save selected fields as a template and continue",
+    "Spara leverantörsmall och fortsätt": "Save supplier template and continue",
 
     # Import and invoice editor
     "Importmapp tom": "Import folder empty",

@@ -42,6 +42,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "paypamin_flow.pyw",
     "reminder_archive.py",
     "reminder_journal.py",
+    "supplier_matching.py",
     "tray.py",
     "update_checker.py",
     "update_installer.py",

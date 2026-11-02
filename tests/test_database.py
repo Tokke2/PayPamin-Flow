@@ -91,6 +91,33 @@ class DatabaseTests(unittest.TestCase):
                     app.logger.removeHandler(handler)
                     handler.close()
 
+    def test_existing_vendor_logos_gain_matching_identifiers_without_data_loss(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            app = load_headless_app(workspace)
+            app.DB_PATH = workspace / "legacy-vendor.sqlite3"
+            try:
+                with app.connect() as db:
+                    db.execute(
+                        "CREATE TABLE vendor_logos (vendor TEXT PRIMARY KEY, logo_file TEXT NOT NULL DEFAULT '')"
+                    )
+                    db.execute(
+                        "INSERT INTO vendor_logos(vendor,logo_file) VALUES('supplier ab','supplier.svg')"
+                    )
+                app.init_db()
+                app.init_db()
+                with app.connect() as db:
+                    columns = {row[1] for row in db.execute("PRAGMA table_info(vendor_logos)")}
+                    row = db.execute(
+                        "SELECT logo_file,org_number,bankgiro_number FROM vendor_logos WHERE vendor='supplier ab'"
+                    ).fetchone()
+                self.assertTrue({"org_number", "bankgiro_number"}.issubset(columns))
+                self.assertEqual(tuple(row), ("supplier.svg", "", ""))
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
+
 
 if __name__ == "__main__":
     unittest.main()
