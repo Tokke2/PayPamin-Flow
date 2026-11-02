@@ -435,8 +435,7 @@ class LedgerUiTests(unittest.TestCase):
         plan = LedgerPlan(4, 0, (), "")
         result = LedgerResult(4, 0, 0)
         fake = SimpleNamespace(
-            refresh=Mock(), current_filter_key="all", current_filter=Mock(),
-            filter_options={"current": "Aktuella"},
+            refresh=Mock(), current_filter_key="all", select_invoice_filter=Mock(),
         )
         with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="ledger.pdf"), patch.object(
             self.app, "read_ledger_report", return_value=report
@@ -451,8 +450,7 @@ class LedgerUiTests(unittest.TestCase):
         apply_import.assert_called_once_with(self.app.DB_PATH, report)
         refresh_journal.assert_called_once_with(parent=fake)
         fake.refresh.assert_called_once_with()
-        self.assertEqual(fake.current_filter_key, "current")
-        fake.current_filter.set.assert_called_once_with("Aktuella")
+        fake.select_invoice_filter.assert_called_once_with("current")
 
     def test_import_logs_every_row_and_paid_candidate_before_automatic_apply(self):
         report = parse_ledger_pages(PAGES)
@@ -460,7 +458,7 @@ class LedgerUiTests(unittest.TestCase):
         payment = LedgerPaymentUpdate(78, "1002", "Listkund AB", 2000.0, "SEK", 0.0, 1500.0)
         plan = LedgerPlan(3, 1, (candidate,), "2026-10-26", (payment,))
         result = LedgerResult(3, 1, 1, 1)
-        fake = SimpleNamespace(refresh=Mock())
+        fake = SimpleNamespace(refresh=Mock(), select_invoice_filter=Mock())
         with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="/tmp/kundreskontra 2026-11-02.pdf"), patch.object(
             self.app, "read_ledger_report", return_value=report
         ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(
@@ -521,7 +519,7 @@ class LedgerUiTests(unittest.TestCase):
         report = parse_ledger_pages(PAGES)
         plan = LedgerPlan(4, 0, (), "")
         result = LedgerResult(4, 0, 0)
-        fake = SimpleNamespace(refresh=Mock())
+        fake = SimpleNamespace(refresh=Mock(), select_invoice_filter=Mock())
         with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="ledger.pdf"), patch.object(
             self.app, "read_ledger_report", return_value=report
         ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(

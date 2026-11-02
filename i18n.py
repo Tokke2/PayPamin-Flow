@@ -17,6 +17,7 @@ _ENGLISH = {
     # Workflow states and filters
     "Aktuella": "Current",
     "Alla": "All",
+    "Historik / arkiverade / betalda": "History / archived / paid",
     "Ignorerade": "Ignored",
     "Ignorerad": "Ignored",
     "IGNORERAD": "IGNORED",

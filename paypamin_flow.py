@@ -1381,11 +1381,20 @@ class ReminderApp(tk.Tk):
         self.build();self.refresh()
         if self.tray is not None:self.tray.refresh()
 
+    def select_invoice_filter(self,key):
+        """Select a main-list tab without changing any invoice data."""
+        if key not in getattr(self,'filter_options',{}):key='current'
+        self.current_filter_key=key
+        tabs=getattr(self,'view_tabs',None)
+        tab=getattr(self,'filter_tabs',{}).get(key)
+        if tabs is not None and tab is not None:tabs.select(tab)
+
     def on_filter_select(self,event=None):
-        selected=self.current_filter.get()
-        for key,label in self.filter_options.items():
-            if selected==label:self.current_filter_key=key;break
-        log_activity('ui','invoice_filter_changed','completed',filter=self.current_filter_key)
+        selected=str(self.view_tabs.select())
+        key=self.filter_tab_ids.get(selected)
+        if not key or key==self.current_filter_key:return
+        self.current_filter_key=key
+        log_activity('ui','invoice_filter_changed','completed',filter=key)
         self.refresh()
 
     def check_python_addons(self):
@@ -1456,6 +1465,8 @@ class ReminderApp(tk.Tk):
         s.map('Accent.TButton',background=[('active','#263d64')])
         s.configure('Treeview',font=(self.font_family,9),rowheight=30,background='white',fieldbackground='white')
         s.configure('Treeview.Heading',font=(self.font_family,9,'bold'),background='#e8edf4',foreground='#344054')
+        s.configure('TNotebook',background='#f3f5f8',borderwidth=0)
+        s.configure('TNotebook.Tab',font=(self.font_family,9),padding=(10,6))
 
     def _build_menu(self):
         menu=tk.Menu(self)
@@ -1501,10 +1512,16 @@ class ReminderApp(tk.Tk):
             for key,cmd,style in actions:
                 ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
         controls=ttk.Frame(self,padding=(22,0,22,10));controls.pack(fill='x')
-        ttk.Label(controls,text=_('Visa:')).pack(side='left')
-        self.filter_options={'current':_('Aktuella'),'all':_('Alla'),'ignored':_('Ignorerade'),'debt_review':_('Kronofogden – granska')}
-        self.current_filter=tk.StringVar(value=self.filter_options[self.current_filter_key])
-        cb=ttk.Combobox(controls,textvariable=self.current_filter,state='readonly',values=list(self.filter_options.values()),width=23);cb.pack(side='left',padx=8);cb.bind('<<ComboboxSelected>>',self.on_filter_select)
+        self.filter_options={'current':_('Aktuella'),'history':_('Historik / arkiverade / betalda'),'all':_('Alla'),'ignored':_('Ignorerade'),'debt_review':_('Kronofogden – granska')}
+        self.view_tabs=ttk.Notebook(controls)
+        self.filter_tabs={};self.filter_tab_ids={}
+        for key,label in self.filter_options.items():
+            tab=ttk.Frame(self.view_tabs)
+            self.view_tabs.add(tab,text=label)
+            self.filter_tabs[key]=tab;self.filter_tab_ids[str(tab)]=key
+        self.view_tabs.pack(side='left')
+        self.view_tabs.select(self.filter_tabs.get(self.current_filter_key,self.filter_tabs['current']))
+        self.view_tabs.bind('<<NotebookTabChanged>>',self.on_filter_select)
         ttk.Label(controls,text=_('Välj en rad för att förhandsgranska / hantera.')).pack(side='right')
         logo_bar=ttk.Frame(self,padding=(22,0,22,8));logo_bar.pack(fill='x')
         ttk.Label(logo_bar,text=_('Logotyp vid export:')).pack(side='left')
@@ -1554,10 +1571,11 @@ class ReminderApp(tk.Tk):
         flt=self.current_filter_key
         for r in rows:
             stage=next_stage(r)
+            remain=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
             if flt=='current' and (r['ignored'] or stage in ('Avslutad','Kronofogden – granska')):continue
+            if flt=='history' and not (r['ignored'] or remain<=0.005):continue
             if flt=='ignored' and not r['ignored']:continue
             if flt=='debt_review' and stage!='Kronofogden – granska':continue
-            remain=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
             fee=money(float(setting('fee') or 0),r['currency']) if r['p1_date'] else '—'
             p1_display=r['p1_date'] or '—'
             if r['ignored'] or remain<=0.005:p2_display='—'
@@ -2158,11 +2176,7 @@ class ReminderApp(tk.Tk):
             'payment_updates':result.payment_updates,
         }))
         previous_filter=getattr(self,'current_filter_key','current')
-        self.current_filter_key='current'
-        current_filter=getattr(self,'current_filter',None)
-        filter_options=getattr(self,'filter_options',{})
-        if current_filter is not None and 'current' in filter_options:
-            current_filter.set(filter_options['current'])
+        self.select_invoice_filter('current')
         log_activity('ledger','active_invoice_list_restored','completed',previous_filter=previous_filter,marked_paid=result.marked_paid)
         self.refresh()
         messagebox.showinfo(
