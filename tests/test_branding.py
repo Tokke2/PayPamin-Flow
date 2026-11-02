@@ -4,11 +4,13 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_NAME
+from i18n import set_language
 from test_database import load_headless_app
+from ui_icons import ICON_NAMES, LABEL_ICONS, icon_name_for_label
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,7 +48,8 @@ class BrandingTests(unittest.TestCase):
         description = root.find("{http://www.w3.org/2000/svg}desc")
         self.assertIsNotNone(title)
         self.assertEqual(title.text, APP_NAME)
-        self.assertIn("påminnelseklocka", description.text)
+        self.assertIn("fakturadokument", description.text)
+        self.assertIn("bock", description.text)
         self.assertNotIn("python", ET.tostring(root, encoding="unicode").lower())
 
     def test_png_icons_retain_creator_and_copyright_metadata(self):
@@ -57,6 +60,78 @@ class BrandingTests(unittest.TestCase):
                 self.assertEqual(icon.info.get("Title"), APP_NAME)
                 self.assertEqual(icon.info.get("Author"), APP_AUTHOR)
                 self.assertEqual(icon.info.get("Copyright"), APP_COPYRIGHT)
+
+    def test_horizontal_logo_has_vector_raster_and_creator_metadata(self):
+        from PIL import Image
+
+        root = ET.parse(ASSETS / "paypamin_logo.svg").getroot()
+        self.assertEqual(root.find("{http://www.w3.org/2000/svg}title").text, "PayPamin Flow logotyp")
+        self.assertIn(APP_AUTHOR, ET.tostring(root, encoding="unicode"))
+        with Image.open(ASSETS / "paypamin_logo.png") as logo:
+            self.assertEqual(logo.size, (256, 64))
+            self.assertEqual(logo.info.get("Title"), APP_NAME)
+            self.assertEqual(logo.info.get("Author"), APP_AUTHOR)
+            self.assertEqual(logo.info.get("Copyright"), APP_COPYRIGHT)
+
+    def test_every_action_icon_has_normal_and_light_transparent_versions(self):
+        from PIL import Image
+
+        self.assertGreaterEqual(len(ICON_NAMES), 30)
+        for name in ICON_NAMES:
+            for suffix in ("", "_light"):
+                with self.subTest(icon=name, variant=suffix), Image.open(ASSETS / "icons" / f"{name}{suffix}.png") as icon:
+                    self.assertEqual(icon.size, (16, 16))
+                    self.assertEqual(icon.mode, "RGBA")
+                    self.assertEqual(icon.info.get("Author"), APP_AUTHOR)
+                    alpha = icon.getchannel("A")
+                    minimum, maximum = alpha.getextrema()
+                    self.assertEqual(minimum, 0)
+                    self.assertGreater(maximum, 240)
+
+    def test_action_labels_resolve_in_both_languages(self):
+        try:
+            for language in ("sv", "en"):
+                set_language(language)
+                for source, expected in LABEL_ICONS.items():
+                    with self.subTest(language=language, label=source):
+                        self.assertEqual(icon_name_for_label(self.app_translation(source)), expected)
+                self.assertEqual(icon_name_for_label(self.app_translation("Om {app_name}", app_name=APP_NAME)), "info")
+                for level in ("P1", "P2"):
+                    self.assertEqual(icon_name_for_label(self.app_translation("Spara och skriv om {level}", level=level)), "save")
+        finally:
+            set_language("sv")
+
+    @staticmethod
+    def app_translation(source, **values):
+        from i18n import _
+        return _(source, **values)
+
+    def test_every_static_menu_and_button_label_has_an_action_icon(self):
+        tree = ast.parse((ROOT / "paypamin_flow.py").read_text(encoding="utf-8"))
+        labels = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            method = node.func.attr
+            if method not in {"add_command", "add_cascade", "Button"}:
+                continue
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+            value = keywords.get("text") if method == "Button" else keywords.get("label")
+            if (
+                isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                and value.func.id == "_" and value.args
+                and isinstance(value.args[0], ast.Constant)
+            ):
+                labels.add(value.args[0].value)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id in {"primary_actions", "secondary_actions"}
+                for target in node.targets
+            ):
+                labels.update(item.elts[0].value for item in node.value.elts)
+        dynamic = {"Om {app_name}", "Spara och skriv om {level}"}
+        set_language("sv")
+        self.assertEqual(sorted(label for label in labels - dynamic if not icon_name_for_label(label)), [])
 
     def test_every_secondary_window_uses_the_shared_icon_factory(self):
         tree = ast.parse((ROOT / "paypamin_flow.py").read_text(encoding="utf-8"))
@@ -97,6 +172,7 @@ class WindowIconTests(unittest.TestCase):
         window.title.assert_called_once_with("PDF-granskning")
         window.transient.assert_called_once_with(fake)
         fake._set_window_icon.assert_called_once_with(window)
+        window.after_idle.assert_called_once()
 
     def test_secondary_window_receives_all_png_icons(self):
         icons = [Mock(), Mock()]
@@ -135,6 +211,57 @@ class WindowIconTests(unittest.TestCase):
         fake.iconbitmap.assert_called_once_with(default=str(ASSETS / "paypamin_flow.ico"))
         native_icon.assert_called_once_with(fake)
         self.assertEqual(len(fake._window_icons), 4)
+        self.assertIsNotNone(fake._brand_logo)
+        self.assertEqual(fake._action_icons, {})
+
+    def test_action_icons_are_cached_with_light_variant(self):
+        fake = SimpleNamespace(_action_icons={})
+        normal, light = Mock(), Mock()
+        with patch.object(self.app, "ICON_DIR", ASSETS), patch.object(
+            self.app.tk, "PhotoImage", create=True, side_effect=[normal, light]
+        ) as photo:
+            self.assertIs(self.app.ReminderApp._ui_icon(fake, "save"), normal)
+            self.assertIs(self.app.ReminderApp._ui_icon(fake, "save"), normal)
+            self.assertIs(self.app.ReminderApp._ui_icon(fake, "save", inverse=True), light)
+        self.assertEqual(photo.call_count, 2)
+        self.assertEqual(Path(photo.call_args_list[0].kwargs["file"]).name, "save.png")
+        self.assertEqual(Path(photo.call_args_list[1].kwargs["file"]).name, "save_light.png")
+
+    def test_action_icons_are_applied_recursively_to_accent_buttons(self):
+        fake = SimpleNamespace(_action_icons={})
+        fake._ui_icon = MethodType(self.app.ReminderApp._ui_icon, fake)
+        fake._apply_action_icons = MethodType(self.app.ReminderApp._apply_action_icons, fake)
+        button = Mock()
+        button.winfo_class.return_value = "TButton"
+        button.cget.side_effect = lambda key: {"text": "Spara", "style": "Accent.TButton"}[key]
+        button.winfo_children.return_value = []
+        root = Mock()
+        root.winfo_class.return_value = "TFrame"
+        root.winfo_children.return_value = [button]
+        image = Mock()
+        with patch.object(self.app, "ICON_DIR", ASSETS), patch.object(
+            self.app.tk, "PhotoImage", create=True, return_value=image
+        ) as photo:
+            self.app.ReminderApp._apply_action_icons(fake, root)
+        button.configure.assert_called_once_with(image=image, compound="left")
+        self.assertEqual(Path(photo.call_args.kwargs["file"]).name, "save_light.png")
+
+    def test_menu_commands_and_cascades_receive_icons(self):
+        fake = SimpleNamespace(_action_icons={})
+        fake._ui_icon = MethodType(self.app.ReminderApp._ui_icon, fake)
+        menu = Mock()
+        menu.index.return_value = 1
+        menu.type.side_effect = ["command", "cascade"]
+        labels = {0: "Spara", 1: "Arkiv"}
+        menu.entrycget.side_effect = lambda index, key: labels[index]
+        with patch.object(self.app, "ICON_DIR", ASSETS), patch.object(
+            self.app.tk, "PhotoImage", create=True, side_effect=[Mock(), Mock()]
+        ):
+            self.app.ReminderApp._apply_menu_icons(fake, menu)
+        self.assertEqual(menu.entryconfigure.call_count, 2)
+        for call_args in menu.entryconfigure.call_args_list:
+            self.assertEqual(call_args.kwargs["compound"], "left")
+            self.assertIsNotNone(call_args.kwargs["image"])
 
 
 class MacOSBrandingTests(unittest.TestCase):

@@ -45,6 +45,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "reminder_journal.py",
     "supplier_matching.py",
     "tray.py",
+    "ui_icons.py",
     "update_checker.py",
     "update_installer.py",
     "requirements.txt",
@@ -56,6 +57,8 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "assets/paypamin_flow_48.png",
     "assets/paypamin_flow_256.png",
     "assets/paypamin_flow_512.png",
+    "assets/paypamin_logo.png",
+    "assets/paypamin_logo.svg",
 )
 SUPPORTED_PLATFORMS = "Windows · macOS · Linux"
 
@@ -93,6 +96,8 @@ def is_python_package_file(filename: str) -> bool:
         return path.suffix.lower() in {".py", ".pyw", ".txt", ".md", ".vbs", ".sh"}
     if len(path.parts) == 2 and path.parts[0] == "assets":
         return path.suffix.lower() in {".png", ".svg", ".ico", ".icns"}
+    if len(path.parts) == 3 and path.parts[:2] == ("assets", "icons"):
+        return path.suffix.lower() == ".png"
     if len(path.parts) == 2 and path.parts[0] == "packaging":
         return filename in {
             "packaging/install_linux.sh",

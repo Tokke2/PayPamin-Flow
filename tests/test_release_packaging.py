@@ -18,6 +18,7 @@ from app_info import (
 )
 from update_checker import ReleaseInfo
 from update_installer import _extract_python_package, _validate_package_build
+from ui_icons import ICON_NAMES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,8 +120,14 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("reminder_journal.py", names)
                 self.assertIn("supplier_matching.py", names)
                 self.assertIn("logo_matching.py", names)
+                self.assertIn("ui_icons.py", names)
                 self.assertIn("assets/paypamin_flow.ico", names)
                 self.assertIn("assets/paypamin_flow.icns", names)
+                self.assertIn("assets/paypamin_logo.png", names)
+                self.assertIn("assets/paypamin_logo.svg", names)
+                for icon_name in ICON_NAMES:
+                    self.assertIn(f"assets/icons/{icon_name}.png", names)
+                    self.assertIn(f"assets/icons/{icon_name}_light.png", names)
                 self.assertTrue(all(is_python_package_file(name) for name in names))
                 self.assertFalse(any(name.lower().endswith((".exe", ".dll", ".so", ".dylib", ".spec")) for name in names))
                 self.assertFalse(any(name.startswith(("tests/", ".git/", "import/", "export/", "svg/")) for name in names))
@@ -133,6 +140,9 @@ class ReleasePackagingTests(unittest.TestCase):
             self.assertTrue((validated / "tray.py").is_file())
             self.assertTrue((validated / "supplier_matching.py").is_file())
             self.assertTrue((validated / "logo_matching.py").is_file())
+            self.assertTrue((validated / "ui_icons.py").is_file())
+            self.assertTrue((validated / "assets" / "paypamin_logo.png").is_file())
+            self.assertTrue((validated / "assets" / "icons" / "save_light.png").is_file())
 
 
 if __name__ == "__main__":

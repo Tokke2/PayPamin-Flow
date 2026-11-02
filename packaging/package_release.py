@@ -32,7 +32,7 @@ def package_files(source: Path) -> list[Path]:
             candidates.append(path)
     for folder in (source / "assets", source / "packaging"):
         if folder.is_dir():
-            for path in folder.iterdir():
+            for path in folder.rglob("*"):
                 relative = path.relative_to(source).as_posix()
                 if path.is_file() and is_python_package_file(relative):
                     candidates.append(path)

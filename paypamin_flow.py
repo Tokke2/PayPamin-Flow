@@ -28,6 +28,7 @@ from app_backup import (
 from autostart import AutostartError, autostart_location, set_autostart
 from cache_cleaner import clean_cache
 from tray import TrayController, TrayUnavailable
+from ui_icons import icon_name_for_label
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from console_free import configure_console_free_subprocesses
 from error_log import ERROR_LOG_NAME, refresh_error_log
@@ -989,8 +990,8 @@ class ReminderApp(tk.Tk):
             messagebox.showerror(_('JSON-journalen kunde inte importeras'),str(exc),parent=self)
 
     def _configure_icons(self):
-        """Use the same product icon for the window, dialogs and OS taskbar/dock."""
-        self._window_icons=[];self._header_icon=None
+        """Use the new product identity for windows, OS icons and action icons."""
+        self._window_icons=[];self._header_icon=None;self._brand_logo=None;self._action_icons={}
         self._configure_macos_dock_icon()
         try:
             for size in (16,32,48,256):
@@ -999,6 +1000,8 @@ class ReminderApp(tk.Tk):
             if self._window_icons:self.iconphoto(True,*self._window_icons)
             header_path=ICON_DIR/'paypamin_flow_48.png'
             if header_path.is_file():self._header_icon=tk.PhotoImage(master=self,file=str(header_path))
+            logo_path=ICON_DIR/'paypamin_logo.png'
+            if logo_path.is_file():self._brand_logo=tk.PhotoImage(master=self,file=str(logo_path))
             # Keep the native Windows icon last so it is not replaced by the
             # generic pythonw.exe taskbar icon on older Tk/Windows versions.
             if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
@@ -1006,6 +1009,48 @@ class ReminderApp(tk.Tk):
                 configure_windows_window_icon(self)
         except tk.TclError:
             logger.exception('Application icon could not be loaded')
+
+    def _ui_icon(self,name,inverse=False):
+        """Load and retain one shared transparent action icon."""
+        if not name:return None
+        key=(name,bool(inverse))
+        if key in self._action_icons:return self._action_icons[key]
+        suffix='_light' if inverse else ''
+        path=ICON_DIR/'icons'/f'{name}{suffix}.png'
+        if not path.is_file():return None
+        try:
+            image=tk.PhotoImage(master=self,file=str(path))
+        except tk.TclError:
+            logger.warning('UI icon could not be loaded: %s',path)
+            return None
+        self._action_icons[key]=image
+        return image
+
+    def _apply_menu_icons(self,menu):
+        """Apply matching icons to every command/cascade in one Tk menu."""
+        try:
+            last=menu.index('end')
+            if last is None:return
+            for index in range(last+1):
+                if menu.type(index) not in ('command','cascade'):continue
+                name=icon_name_for_label(menu.entrycget(index,'label'))
+                image=self._ui_icon(name)
+                if image:menu.entryconfigure(index,image=image,compound='left')
+        except (tk.TclError,AttributeError):
+            logger.debug('Menu icons could not be applied',exc_info=True)
+
+    def _apply_action_icons(self,root):
+        """Recursively iconify known buttons without changing their commands."""
+        try:
+            if root.winfo_class() in ('TButton','Button'):
+                name=icon_name_for_label(root.cget('text'))
+                style=str(root.cget('style')) if root.winfo_class()=='TButton' else ''
+                image=self._ui_icon(name,inverse='Accent' in style)
+                if image:root.configure(image=image,compound='left')
+            children=root.winfo_children()
+        except (tk.TclError,AttributeError):
+            return
+        for child in children:self._apply_action_icons(child)
 
     def _set_window_icon(self,window):
         """Explicitly brand every secondary window on every desktop platform."""
@@ -1021,6 +1066,7 @@ class ReminderApp(tk.Tk):
         window=tk.Toplevel(self)
         window.title(title);window.transient(self)
         self._set_window_icon(window)
+        window.after_idle(lambda: self._apply_action_icons(window))
         return window
 
     def _configure_macos_dock_icon(self):
@@ -1045,8 +1091,10 @@ class ReminderApp(tk.Tk):
     def show_about(self):
         w=self._new_toplevel(_('Om {app_name}',app_name=APP_NAME));w.resizable(False,False);w.configure(bg='#f3f5f8')
         form=ttk.Frame(w,padding=24);form.pack()
-        if self._header_icon:ttk.Label(form,image=self._header_icon).pack(pady=(0,10))
-        ttk.Label(form,text=APP_NAME,style='Title.TLabel').pack()
+        if self._brand_logo:ttk.Label(form,image=self._brand_logo).pack(pady=(0,10))
+        else:
+            if self._header_icon:ttk.Label(form,image=self._header_icon).pack(pady=(0,10))
+            ttk.Label(form,text=APP_NAME,style='Title.TLabel').pack()
         ttk.Label(form,text=_('Version {version}',version=APP_VERSION),style='Sub.TLabel').pack(pady=(3,12))
         if APP_RELEASE_COMMIT:ttk.Label(form,text=_('Byggcommit: {commit}',commit=APP_RELEASE_COMMIT[:12]),style='Sub.TLabel').pack(pady=(0,8))
         ttk.Label(form,text=_('Lokal app för fakturor och betalningspåminnelser')).pack()
@@ -1339,13 +1387,16 @@ class ReminderApp(tk.Tk):
         help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
         menu.add_cascade(label=_('Hjälp'),menu=help_menu)
+        self._apply_menu_icons(file_menu);self._apply_menu_icons(help_menu);self._apply_menu_icons(menu)
         self.configure(menu=menu)
 
     def build(self):
         self._build_menu()
         header=ttk.Frame(self,padding=(22,17,22,10)); header.pack(fill='x')
-        if self._header_icon:tk.Label(header,image=self._header_icon,bg='#f3f5f8',borderwidth=0).pack(side='left',padx=(0,11))
-        ttk.Label(header,text=APP_NAME,style='Title.TLabel').pack(side='left')
+        if self._brand_logo:tk.Label(header,image=self._brand_logo,bg='#f3f5f8',borderwidth=0).pack(side='left',padx=(0,8))
+        else:
+            if self._header_icon:tk.Label(header,image=self._header_icon,bg='#f3f5f8',borderwidth=0).pack(side='left',padx=(0,11))
+            ttk.Label(header,text=APP_NAME,style='Title.TLabel').pack(side='left')
         ttk.Label(header,text=_('Lokal app · dina filer stannar på datorn'),style='Sub.TLabel').pack(side='left',padx=16,pady=(8,0))
         ttk.Button(header,text=_('Inställningar'),command=self.settings).pack(side='right')
         ttk.Button(header,text=_('Om {app_name}',app_name=APP_NAME),command=self.show_about).pack(side='right',padx=(0,7))
@@ -1353,9 +1404,12 @@ class ReminderApp(tk.Tk):
         self.update_button.pack(side='right',padx=(0,7))
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)
-        bar=ttk.Frame(self,padding=(22,5,22,12)); bar.pack(fill='x')
-        for key,cmd,style in [('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton'),('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa samlad fellogg',self.open_log,'TButton')]:
-            ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
+        primary_actions=[('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton')]
+        secondary_actions=[('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa samlad fellogg',self.open_log,'TButton')]
+        for actions,padding in ((primary_actions,(22,5,22,4)),(secondary_actions,(22,0,22,12))):
+            bar=ttk.Frame(self,padding=padding);bar.pack(fill='x')
+            for key,cmd,style in actions:
+                ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
         controls=ttk.Frame(self,padding=(22,0,22,10));controls.pack(fill='x')
         ttk.Label(controls,text=_('Visa:')).pack(side='left')
         self.filter_options={'current':_('Aktuella'),'all':_('Alla'),'ignored':_('Ignorerade'),'debt_review':_('Kronofogden – granska')}
@@ -1394,11 +1448,13 @@ class ReminderApp(tk.Tk):
         self.row_menu.add_command(label=_('Ignorera / återaktivera'),command=self.toggle_ignore)
         self.row_menu.add_separator()
         self.row_menu.add_command(label=_('Ta bort fakturarad'),command=self.delete_invoice)
+        self._apply_menu_icons(self.row_menu)
         self.detail=ttk.Label(self,text=_('Importera PDF eller lägg till en faktura manuellt.'),padding=(24,4,24,16),style='Sub.TLabel');self.detail.pack(fill='x')
         foot=ttk.Frame(self,padding=(22,0,22,12));foot.pack(fill='x')
         ttk.Label(foot,text=_('Startvärden: P1 +5 dagar · P2 +5 dagar · Kronofogden-granskning +5 dagar · avgift 150 i fakturans valuta · ränta 23%'),style='Sub.TLabel').pack(side='left')
         ttk.Button(foot,text=_('Ta bort vald'),command=self.delete_invoice).pack(side='right')
         ttk.Label(self,text=_('{copyright} · Skapare: {author}',copyright=APP_COPYRIGHT,author=APP_AUTHOR),padding=(24,0,24,9),style='Sub.TLabel').pack(fill='x')
+        self._apply_action_icons(self)
 
     def refresh(self):
         for i in self.tree.get_children():self.tree.delete(i)

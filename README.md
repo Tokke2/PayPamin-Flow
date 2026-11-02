@@ -22,7 +22,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser Fortnox-
 - Innan **P1** skapas kontrolleras en befintlig original-PDF mot fakturans sparade fakturanummer, kund, datum, belopp, valuta och fakturatext. Sparade fältmallar används vid kontrollen; avvikelser stoppar P1 utan att ändra fakturan eller påminnelsehistoriken. Manuella fakturor utan PDF fungerar som tidigare.
 - SVG-logotyp kan kopplas till en leverantörsmall och återanvändas vid export. Ett logotypval i PDF-matchningen sparas även direkt på fakturan och följer med till P1/P2 utan att fältmallen behöver sparas; valet påverkas inte av en senare global logotypändring.
 - Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta. **Skapa påminnelse** skapar en aktuell men saknad P1 och kan därefter fortsätta till P2 i samma klick när både P2-intervallet och P1:s sparade betalningsfrist har passerat; inget steg skapas i förtid. **Redigera P1** och **Redigera P2** kan byta logotyp och skriva om den befintliga nivåns PDF med ursprungligt datum, originaldata och oförändrade villkor/historik via interna P1/P2-snapshots; den gamla filen bevaras om skrivningen misslyckas. Om en registrerad P1-PDF saknas återskapas den först med ursprungligt datum och oförändrad historik, varefter en aktuell P2 kan skapas. En skadad eller oläsbar SVG ger ett tydligt fel i stället för att tyst ersättas med textlogotyp. Om fakturatext saknas eller bara innehåller blanksteg utelämnas **Avser**-raden helt i nya eller medvetet återskapade P1/P2-PDF:er, utan standardtext eller extra radavstånd; ifylld text visas som tidigare.
-- Samma nya PayPamin Flow-ikon med faktura och påminnelseklocka i fönster, dialoger, programmenyer, Windows-autostartgenväg och systemfältet – inte Pythons ikon.
+- **Ny logotyp och nya ikoner överallt:** fakturadokument med P-märke och turkos bock i fönster, dialoger, systemfält, aktivitetsfält, Aktivitetshanterarens appvy, Dock, Linux och Windows-autostartgenväg. Ny horisontell PayPamin Flow-logotyp i sidhuvud och Om-fönster samt ett enhetligt bibliotek med funktionsikoner för menyer, verktygsknappar, högerklick och dialoger på svenska och engelska.
 - **Stäng eller minimera till systemfältet:** fönstrets stäng- och minimeringsknappar döljer appen medan schemalagda kontroller fortsätter. **Arkiv → Avsluta helt** eller systemfältets **Avsluta helt** stänger appen helt.
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
 - **Autostart vid inloggning** på Windows, macOS och Linux. Appen startar då minimerad i systemfältet medan manuell start visar fönstret som vanligt. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
@@ -198,16 +198,22 @@ Autostart gäller endast den inloggade användaren och kräver inga administrat�
 
 Stäng av eller aktivera via **Inställningar → Starta PayPamin Flow automatiskt när jag loggar in**. Windows-genvägen skapas atomiskt med Windows eget genvägsgränssnitt via dold PowerShell och får explicit appens `.ico`-fil. Den tidigare registerposten under `CurrentVersion\Run` tas bort vid synkronisering så att ingen dubbelstart sker. Autostartkommandot använder **inte `.pyw`**. Om appmappen flyttas, starta appen en gång från den nya platsen så uppdateras sökvägen. Autostart sker efter inloggning och öppnar inget konsolfönster.
 
-## Applikationsikon
+## Logotyp och ikoner
 
-Ikonen föreställer ett fakturadokument med textrader, flödespil och en grön **påminnelseklocka**. Den är ritad för att vara tydlig även i små storlekar och används i stället för Pythons ikon. Original och skrivbordsformat ligger i `assets/`:
+Huvudikonen föreställer ett vitt fakturadokument med blått **P-märke** och en turkos **bock** på mörkblå bakgrund. Den är ritad för att vara tydlig även i små storlekar och används i stället för Pythons ikon. Samma motiv används för huvudfönster, sekundära fönster, systemfält, aktivitetsfält, Aktivitetshanterarens appvy, macOS Dock, Linux och Windows-autostartgenväg.
 
-- `paypamin_flow.svg` – vektororiginal.
+Den horisontella logotypen kombinerar symbolen med PayPamin Flow-ordmärket och används i sidhuvudet och Om-fönstret. Appens Arkiv-/Hjälpmenyer, högerklicksmeny, verktygsrader och dialogknappar använder dessutom samma bibliotek med transparenta 16 px-funktionsikoner. Mörka knappar har normala ikoner och accentknappar har ljusa varianter; etiketterna och kommandona ändras inte.
+
+Original och skrivbordsformat ligger i `assets/`:
+
+- `paypamin_flow.svg` – redigerbart vektororiginal för appikonen.
+- `paypamin_logo.svg` och `paypamin_logo.png` – horisontell logotyp.
 - `paypamin_flow.png` och storleksvarianter – Tkinter, systemfält och Linux.
 - `paypamin_flow.ico` – Windows, flera inbäddade storlekar.
 - `paypamin_flow.icns` – macOS-ikonkälla.
+- `icons/` – funktionsikoner med normal och `_light`-variant för varje symbol.
 
-Generera om raster- och skrivbordsikoner med Pillow installerat:
+Generera om logotyp, raster-/skrivbordsikoner och samtliga funktionsikoner med Pillow installerat:
 
 ```sh
 python assets/build_icons.py

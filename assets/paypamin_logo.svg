@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128" viewBox="0 0 512 128" role="img" aria-labelledby="title description">
+  <title id="title">PayPamin Flow logotyp</title>
+  <desc id="description">PayPamin Flows horisontella logotyp med fakturadokument, P-märke och turkos bock.</desc>
+  <metadata>Copyright © 2026 Rickard Länkvist. Skapare: Rickard Länkvist.</metadata>
+  <defs>
+    <linearGradient id="logo-background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#172048"/>
+      <stop offset="1" stop-color="#2563AA"/>
+    </linearGradient>
+    <linearGradient id="logo-completion" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#29D3B7"/>
+      <stop offset="1" stop-color="#0E918B"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(4 12) scale(0.203125)">
+    <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#logo-background)"/>
+    <path d="M48 388C140 462 272 454 360 394C416 358 448 320 466 274" fill="none" stroke="#85E1E0" stroke-opacity="0.15" stroke-width="22" stroke-linecap="round"/>
+    <path d="M148 64H316L384 132V388C384 410 370 424 346 424H148C128 424 112 410 112 388V104C112 80 128 64 148 64Z" fill="#FFFFFF"/>
+    <path d="M316 64V112L332 132H384L316 64Z" fill="#D8E7F5"/>
+    <path d="M174 288V148H238C272 148 286 160 286 182C286 204 272 216 238 216H174" fill="none" stroke="#2450A4" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M174 326H278M174 360H238" fill="none" stroke="#A2B8D2" stroke-width="15" stroke-linecap="round"/>
+    <circle cx="356" cy="352" r="88" fill="#FFFFFF"/>
+    <circle cx="356" cy="352" r="76" fill="url(#logo-completion)"/>
+    <path d="M312 350L342 380L400 318" fill="none" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="122" y="80" fill="#1D355E" font-family="'Segoe UI',Arial,sans-serif" font-size="48" font-weight="700">PayPamin</text>
+  <text x="365" y="80" fill="#11998F" font-family="'Segoe UI',Arial,sans-serif" font-size="48" font-weight="400">Flow</text>
+</svg>
