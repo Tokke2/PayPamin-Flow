@@ -52,6 +52,7 @@ _ENGLISH = {
     "Redigera vald": "Edit selected",
     "Visa fellogg": "Show error log",
     "Visa samlad fellogg": "Show consolidated error log",
+    "Visa teknisk logg": "View technical log",
     "Ta bort vald": "Delete selected",
     "Visa:": "Show:",
     "Välj en rad för att förhandsgranska / hantera.": "Select a row to preview / manage.",

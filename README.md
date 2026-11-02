@@ -240,6 +240,8 @@ Exportera en **komplett, textbaserad kundreskontralista som PDF** från Fortnox 
 
 Innan något sparas kontrollerar appen sidnumren, det totala fakturaantalet och att radernas saldo stämmer mot totalsumman för en SEK-lista. En rad som inte kan läsas säkert stoppar importen. Därefter visas en bekräftelse med listdatum, antal nya och befintliga fakturor samt vilka tidigare sedda fakturor som skulle markeras betalda. Först efter **Ja** sker en atomisk databasändring och JSON-journalen uppdateras.
 
+För felsökning skrivs detaljerade, strukturerade poster till den lokala tekniska loggen redan före bekräftelsen. De innehåller PDF:ens filnamn, listdatum, sid- och fakturaantal, förväntad och inläst totalsumma samt varje tolkad fakturarad med kundnummer, kund, fakturanummer, datum, valuta, belopp, saldo och delbetalning. Alla betalavstämningskandidater loggas, även fler än de åtta som kan visas i dialogen. Dessa poster finns även om du avbryter importen; PDF:ens fullständiga råtext dumpas inte. Öppna loggen via **Hjälp → Visa teknisk logg**. **Visa samlad fellogg** är fortfarande avsedd enbart för fel och tracebacks.
+
 Betalregeln är avsiktligt konservativ:
 
 - Den **första** importerade listan bygger bara historik. Ingen befintlig app-faktura betalmarkeras då.
@@ -269,7 +271,7 @@ OCR för skannade PDF:er kräver Tesseract med svenska språkdata (`swe`) och Po
 - Databas, mallar, inställningar och fellogg sparas i användarprofilen under `~/.paminnelseapp`. Det befintliga katalognamnet behålls så att tidigare data inte försvinner efter namnbytet.
 - `import/`, `export/` och `svg/` ligger i den skrivbara Python-appmappen.
 - Kundfakturor, exporter, lokala databaser, loggar och företagslogotyper ska inte checkas in. Se `.gitignore`.
-- Felloggen kan innehålla tekniska fel och filvägar. Granska den innan den delas.
+- Tekniska loggar och felloggar kan innehålla filnamn, filvägar, tekniska fel samt kund-, faktura- och beloppsuppgifter från reskontraimporten. Granska dem innan de delas.
 - Använd appens ZIP-säkerhetskopior regelbundet och före en manuell ominstallation.
 
 ## Tester

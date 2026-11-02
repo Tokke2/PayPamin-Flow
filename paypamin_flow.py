@@ -108,6 +108,47 @@ if not logger.handlers:
     logger.addHandler(log_handler)
 
 
+def _ledger_log_json(payload):
+    """Serialize diagnostic values without allowing newlines to forge log rows."""
+    return json.dumps(payload,ensure_ascii=False,sort_keys=True)
+
+
+def _log_ledger_report(source,report):
+    """Record every parsed value before the user confirms any database change."""
+    source_name=Path(source).name
+    logger.info('Customer ledger PDF read: %s',_ledger_log_json({
+        'source':source_name,'list_date':report.list_date,'pages':report.page_count,
+        'expected_count':report.expected_count,'read_count':len(report.entries),
+        'expected_total':f'{report.expected_total:.2f}',
+        'actual_total':f'{report.actual_total:.2f}','total_verified':report.total_verified,
+    }))
+    for row_number,entry in enumerate(report.entries,1):
+        logger.info('Customer ledger row: %s',_ledger_log_json({
+            'source':source_name,'row':row_number,'rows':len(report.entries),
+            'customer_number':entry.customer_number,'customer':entry.customer,
+            'invoice_no':entry.invoice_no,'invoice_date':entry.invoice_date,
+            'due_date':entry.due_date,'currency':entry.currency,
+            'amount':f'{entry.amount:.2f}','balance':f'{entry.balance:.2f}',
+            'paid':f'{entry.paid:.2f}',
+        }))
+
+
+def _log_ledger_plan(source,plan):
+    """Record all paid candidates, including those omitted from the short dialog."""
+    source_name=Path(source).name
+    logger.info('Customer ledger import plan: %s',_ledger_log_json({
+        'source':source_name,'previous_list_date':plan.previous_list_date,
+        'new':plan.new_count,'existing':plan.existing_count,
+        'paid_candidates':len(plan.missing),
+    }))
+    for candidate in plan.missing:
+        logger.info('Customer ledger paid candidate: %s',_ledger_log_json({
+            'source':source_name,'invoice_id':candidate.invoice_id,
+            'invoice_no':candidate.invoice_no,'customer':candidate.customer,
+            'amount':f'{candidate.amount:.2f}','currency':candidate.currency,
+        }))
+
+
 def configure_windows_app_identity():
     """Give pythonw.exe its own taskbar identity and product icon on Windows."""
 
@@ -1183,6 +1224,7 @@ class ReminderApp(tk.Tk):
         menu.add_cascade(label=_('Arkiv'),menu=file_menu)
         help_menu=tk.Menu(menu,tearoff=0)
         help_menu.add_command(label=_('Visa samlad fellogg'),command=self.open_log)
+        help_menu.add_command(label=_('Visa teknisk logg'),command=self.open_technical_log)
         help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
         menu.add_cascade(label=_('Hjälp'),menu=help_menu)
@@ -1376,6 +1418,12 @@ class ReminderApp(tk.Tk):
             logger.exception('Could not open consolidated error log')
             try:open_path(LOG_PATH)
             except Exception:logger.exception('Could not open diagnostic log')
+
+    def open_technical_log(self):
+        """Open the complete local log, including successful PDF diagnostics."""
+        logger.info('User opened technical diagnostic log')
+        try:open_path(LOG_PATH)
+        except Exception:logger.exception('Could not open technical diagnostic log')
 
     def _run_scheduled_error_log_refresh(self):
         """Keep the consolidated local view current without touching source logs."""
@@ -1743,15 +1791,19 @@ class ReminderApp(tk.Tk):
             title=_('Välj reskontralista'),filetypes=[('PDF','*.pdf')],
         )
         if not path:return None
+        source_name=Path(path).name
+        logger.info('Customer ledger import selected: %s',_ledger_log_json({'source':source_name}))
         try:
             report=read_ledger_report(path)
+            _log_ledger_report(path,report)
             plan=plan_ledger_import(DB_PATH,report)
+            _log_ledger_plan(path,plan)
         except LedgerImportError as exc:
-            logger.warning('Customer ledger validation failed: %s',exc)
+            logger.warning('Customer ledger validation failed: %s',_ledger_log_json({'source':source_name,'error':str(exc)}))
             messagebox.showerror(_('Reskontralistan kunde inte läsas'),_('Reskontralistan kunde inte läsas.\n\n{error}',error=exc),parent=self)
             return None
         except Exception as exc:
-            logger.exception('Customer ledger import planning failed')
+            logger.exception('Customer ledger import planning failed: file=%s',source_name)
             messagebox.showerror(_('Reskontralistan kunde inte läsas'),_('Reskontralistan kunde inte läsas.\n\n{error}',error=exc),parent=self)
             return None
 
@@ -1766,15 +1818,20 @@ class ReminderApp(tk.Tk):
               date=report.list_date,count=report.expected_count,pages=report.page_count,verification=verification,
               new=plan.new_count,existing=plan.existing_count,paid=len(plan.missing),missing=missing_text),
             parent=self,
-        ):return None
+        ):
+            logger.info('Customer ledger import cancelled: %s',_ledger_log_json({'source':source_name,'list_date':report.list_date}))
+            return None
         try:
             result=apply_ledger_import(DB_PATH,report)
         except Exception as exc:
-            logger.exception('Customer ledger import failed')
+            logger.exception('Customer ledger import failed: file=%s',source_name)
             messagebox.showerror(_('Reskontralistan kunde inte importeras'),_('Reskontralistan kunde inte importeras.\n\n{error}',error=exc),parent=self)
             return None
         refresh_json_journal(parent=self)
-        logger.info('Customer ledger imported: date=%s new=%d existing=%d marked_paid=%d',report.list_date,result.imported,result.existing,result.marked_paid)
+        logger.info('Customer ledger imported: %s',_ledger_log_json({
+            'source':source_name,'list_date':report.list_date,'new':result.imported,
+            'existing':result.existing,'marked_paid':result.marked_paid,
+        }))
         self.refresh()
         messagebox.showinfo(
             _('Reskontralistan är importerad'),

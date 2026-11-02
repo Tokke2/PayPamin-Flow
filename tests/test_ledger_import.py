@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from ledger_import import (
-    LedgerImportError, LedgerPlan, LedgerResult, apply_ledger_import,
-    parse_ledger_pages, plan_ledger_import, read_ledger_report,
+    LedgerImportError, LedgerPlan, LedgerResult, MissingLedgerInvoice,
+    apply_ledger_import, parse_ledger_pages, plan_ledger_import, read_ledger_report,
 )
 from reminder_journal import export_journal, import_journal
 from test_database import load_headless_app
@@ -309,6 +309,101 @@ class LedgerUiTests(unittest.TestCase):
         apply_import.assert_called_once_with(self.app.DB_PATH, report)
         refresh_journal.assert_called_once_with(parent=fake)
         fake.refresh.assert_called_once_with()
+
+    def test_import_logs_every_row_and_paid_candidate_before_cancellation(self):
+        report = parse_ledger_pages(PAGES)
+        candidate = MissingLedgerInvoice(77, "9999", "Saknad kund AB", 1234.0, "SEK")
+        plan = LedgerPlan(3, 1, (candidate,), "2026-10-26")
+        fake = SimpleNamespace(refresh=Mock())
+        with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="/tmp/kundreskontra 2026-11-02.pdf"), patch.object(
+            self.app, "read_ledger_report", return_value=report
+        ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(
+            self.app, "apply_ledger_import"
+        ) as apply_import, patch.object(
+            self.app.messagebox, "askyesno", create=True, return_value=False
+        ), self.assertLogs(self.app.logger, level="INFO") as captured:
+            returned = self.app.ReminderApp.import_ledger_list(fake)
+
+        self.assertIsNone(returned)
+        apply_import.assert_not_called()
+        fake.refresh.assert_not_called()
+        messages = [record.getMessage() for record in captured.records]
+
+        def payloads(prefix):
+            return [json.loads(message[len(prefix):]) for message in messages if message.startswith(prefix)]
+
+        selected = payloads("Customer ledger import selected: ")
+        summaries = payloads("Customer ledger PDF read: ")
+        rows = payloads("Customer ledger row: ")
+        plans = payloads("Customer ledger import plan: ")
+        candidates = payloads("Customer ledger paid candidate: ")
+        cancelled = payloads("Customer ledger import cancelled: ")
+        self.assertEqual(selected[0]["source"], "kundreskontra 2026-11-02.pdf")
+        self.assertEqual(summaries, [{
+            "actual_total": "5000.00", "expected_count": 4,
+            "expected_total": "5000.00", "list_date": "2026-11-02",
+            "pages": 3, "read_count": 4,
+            "source": "kundreskontra 2026-11-02.pdf", "total_verified": True,
+        }])
+        self.assertEqual(len(rows), 4)
+        self.assertEqual([row["row"] for row in rows], [1, 2, 3, 4])
+        self.assertEqual(rows[0]["customer_number"], "123800680")
+        self.assertEqual(rows[0]["customer"], "Sensor Försäkring Norden AB")
+        self.assertEqual(rows[0]["invoice_no"], "1001")
+        self.assertEqual(rows[0]["amount"], "1000.00")
+        self.assertEqual(rows[1]["balance"], "500.00")
+        self.assertEqual(rows[1]["paid"], "1500.00")
+        self.assertEqual(plans[0]["previous_list_date"], "2026-10-26")
+        self.assertEqual(plans[0]["paid_candidates"], 1)
+        self.assertEqual(candidates, [{
+            "amount": "1234.00", "currency": "SEK", "customer": "Saknad kund AB",
+            "invoice_id": 77, "invoice_no": "9999",
+            "source": "kundreskontra 2026-11-02.pdf",
+        }])
+        self.assertEqual(cancelled[0]["list_date"], "2026-11-02")
+
+    def test_successful_import_log_contains_actual_database_result(self):
+        report = parse_ledger_pages(PAGES)
+        plan = LedgerPlan(4, 0, (), "")
+        result = LedgerResult(4, 0, 0)
+        fake = SimpleNamespace(refresh=Mock())
+        with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="ledger.pdf"), patch.object(
+            self.app, "read_ledger_report", return_value=report
+        ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(
+            self.app, "apply_ledger_import", return_value=result
+        ), patch.object(self.app, "refresh_json_journal", return_value=True), patch.object(
+            self.app.messagebox, "askyesno", create=True, return_value=True
+        ), patch.object(self.app.messagebox, "showinfo", create=True), self.assertLogs(
+            self.app.logger, level="INFO"
+        ) as captured:
+            self.app.ReminderApp.import_ledger_list(fake)
+
+        prefix = "Customer ledger imported: "
+        outcomes = [
+            json.loads(record.getMessage()[len(prefix):])
+            for record in captured.records if record.getMessage().startswith(prefix)
+        ]
+        self.assertEqual(outcomes, [{
+            "existing": 0, "list_date": "2026-11-02", "marked_paid": 0,
+            "new": 4, "source": "ledger.pdf",
+        }])
+
+    def test_validation_failure_log_names_source_and_reason(self):
+        fake = SimpleNamespace()
+        with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="broken.pdf"), patch.object(
+            self.app, "read_ledger_report", side_effect=LedgerImportError("synthetic unreadable row")
+        ), patch.object(self.app.messagebox, "showerror", create=True), self.assertLogs(
+            self.app.logger, level="WARNING"
+        ) as captured:
+            returned = self.app.ReminderApp.import_ledger_list(fake)
+
+        self.assertIsNone(returned)
+        prefix = "Customer ledger validation failed: "
+        failures = [
+            json.loads(record.getMessage()[len(prefix):])
+            for record in captured.records if record.getMessage().startswith(prefix)
+        ]
+        self.assertEqual(failures, [{"error": "synthetic unreadable row", "source": "broken.pdf"}])
 
 
 if __name__ == "__main__":

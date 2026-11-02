@@ -157,6 +157,17 @@ class ConsolidatedErrorLogUiTests(unittest.TestCase):
         self.assertIn("Synthetic UI failure", consolidated)
         self.assertIn("SOURCE: app.log", consolidated)
 
+    def test_open_technical_log_opens_complete_app_log_with_info_records(self):
+        self.app.logger.info("Synthetic customer ledger row detail")
+
+        with patch.object(self.app, "open_path") as open_path:
+            self.app.ReminderApp.open_technical_log(SimpleNamespace())
+
+        open_path.assert_called_once_with(self.app.LOG_PATH)
+        technical = self.app.LOG_PATH.read_text(encoding="utf-8")
+        self.assertIn("Synthetic customer ledger row detail", technical)
+        self.assertIn("User opened technical diagnostic log", technical)
+
     def test_scheduled_refresh_keeps_running_after_an_aggregation_failure(self):
         scheduled = []
         fake = SimpleNamespace(
