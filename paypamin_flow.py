@@ -150,7 +150,7 @@ def _log_ledger_plan(source,plan):
 
 
 def configure_windows_app_identity():
-    """Give pythonw.exe its own taskbar identity and product icon on Windows."""
+    """Give pythonw.exe its own taskbar identity on Windows."""
 
     if not sys.platform.startswith('win'):
         return
@@ -167,6 +167,51 @@ def configure_windows_app_identity():
     except Exception as exc:
         # Icon setup must never prevent the main window from opening.
         logger.warning('Windows application identity could not be configured: %s',exc)
+
+
+_WINDOWS_NATIVE_ICONS = {}
+
+
+def configure_windows_window_icon(window):
+    """Set native small/big HWND icons for the taskbar and Task Manager app view.
+
+    The process-lifetime cache shares each loaded HICON between all app windows.
+    Windows reclaims them at exit. The Details tab can still use pythonw.exe's
+    embedded icon; changing that would require a native executable.
+    """
+    if not sys.platform.startswith('win'):return False
+    try:
+        import ctypes
+
+        icon_path=ICON_DIR/'paypamin_flow.ico'
+        if not icon_path.is_file():return False
+        user32=ctypes.windll.user32
+        get_metrics=user32.GetSystemMetrics
+        get_metrics.argtypes=[ctypes.c_int];get_metrics.restype=ctypes.c_int
+        load_image=user32.LoadImageW
+        load_image.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p,ctypes.c_uint,ctypes.c_int,ctypes.c_int,ctypes.c_uint]
+        load_image.restype=ctypes.c_void_p
+        send_message=user32.SendMessageW
+        send_message.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
+        send_message.restype=ctypes.c_ssize_t
+
+        def icon_handle(width,height):
+            key=(str(icon_path.resolve()),width,height)
+            if key not in _WINDOWS_NATIVE_ICONS:
+                handle=load_image(None,key[0],1,width,height,0x0010)
+                if not handle:raise OSError(f'LoadImageW failed for {width}x{height}')
+                _WINDOWS_NATIVE_ICONS[key]=handle
+            return _WINDOWS_NATIVE_ICONS[key]
+
+        small=icon_handle(get_metrics(49),get_metrics(50))
+        large=icon_handle(get_metrics(11),get_metrics(12))
+        hwnd=int(window.winfo_id())
+        send_message(hwnd,0x0080,0,small)
+        send_message(hwnd,0x0080,1,large)
+        return True
+    except Exception as exc:
+        logger.warning('Native Windows window icon could not be configured: %s',exc)
+        return False
 
 
 def open_path(path):
@@ -921,6 +966,7 @@ class ReminderApp(tk.Tk):
             # generic pythonw.exe taskbar icon on older Tk/Windows versions.
             if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
                 self.iconbitmap(default=str(ICON_DIR/'paypamin_flow.ico'))
+                configure_windows_window_icon(self)
         except tk.TclError:
             logger.exception('Application icon could not be loaded')
 
@@ -930,6 +976,7 @@ class ReminderApp(tk.Tk):
             if self._window_icons:window.iconphoto(False,*self._window_icons)
             if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
                 window.iconbitmap(str(ICON_DIR/'paypamin_flow.ico'))
+                configure_windows_window_icon(window)
         except tk.TclError:
             logger.exception('Secondary window icon could not be loaded')
 

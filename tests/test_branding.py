@@ -5,7 +5,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_NAME
 from test_database import load_headless_app
@@ -110,10 +110,31 @@ class WindowIconTests(unittest.TestCase):
     def test_windows_secondary_window_also_receives_native_icon(self):
         window = Mock()
         fake = SimpleNamespace(_window_icons=[Mock()])
-        with patch.object(self.app.sys, "platform", "win32"), patch.object(self.app, "ICON_DIR", ASSETS):
+        with patch.object(self.app.sys, "platform", "win32"), patch.object(
+            self.app, "ICON_DIR", ASSETS
+        ), patch.object(self.app, "configure_windows_window_icon", return_value=True) as native_icon:
             self.app.ReminderApp._set_window_icon(fake, window)
         window.iconphoto.assert_called_once()
         window.iconbitmap.assert_called_once_with(str(ASSETS / "paypamin_flow.ico"))
+        native_icon.assert_called_once_with(window)
+
+    def test_main_window_uses_png_native_and_process_level_windows_icons(self):
+        fake = SimpleNamespace(
+            _configure_macos_dock_icon=Mock(),
+            iconphoto=Mock(),
+            iconbitmap=Mock(),
+        )
+        with patch.object(self.app.sys, "platform", "win32"), patch.object(
+            self.app, "ICON_DIR", ASSETS
+        ), patch.object(self.app.tk, "PhotoImage", create=True, side_effect=lambda **_kwargs: Mock()), patch.object(
+            self.app, "configure_windows_window_icon", return_value=True
+        ) as native_icon:
+            self.app.ReminderApp._configure_icons(fake)
+
+        fake.iconphoto.assert_called_once()
+        fake.iconbitmap.assert_called_once_with(default=str(ASSETS / "paypamin_flow.ico"))
+        native_icon.assert_called_once_with(fake)
+        self.assertEqual(len(fake._window_icons), 4)
 
 
 class MacOSBrandingTests(unittest.TestCase):
@@ -139,6 +160,22 @@ class MacOSBrandingTests(unittest.TestCase):
 
 
 class WindowsBrandingTests(unittest.TestCase):
+    @staticmethod
+    def native_ctypes(load_image, send_message, get_metrics):
+        return SimpleNamespace(
+            windll=SimpleNamespace(user32=SimpleNamespace(
+                LoadImageW=load_image,
+                SendMessageW=send_message,
+                GetSystemMetrics=get_metrics,
+            )),
+            c_void_p="void-pointer",
+            c_wchar_p="wide-string",
+            c_uint="unsigned-int",
+            c_int="int",
+            c_size_t="size",
+            c_ssize_t="signed-size",
+        )
+
     def test_pythonw_receives_product_taskbar_identity(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = load_headless_app(Path(temporary_directory))
@@ -162,6 +199,58 @@ class WindowsBrandingTests(unittest.TestCase):
             set_app_id.assert_called_once_with(app.APP_ID)
             self.assertEqual(set_app_id.argtypes, ["wchar"])
             self.assertEqual(set_app_id.restype, "long")
+
+    def test_native_window_icons_cover_small_big_and_are_shared(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            load_image = Mock(side_effect=[1001, 1002])
+            send_message = Mock(return_value=0)
+            sizes = {49: 16, 50: 16, 11: 32, 12: 32}
+            get_metrics = Mock(side_effect=lambda index: sizes[index])
+            fake_ctypes = self.native_ctypes(load_image, send_message, get_metrics)
+            window = Mock()
+            window.winfo_id.return_value = 4242
+            try:
+                with patch.object(app.sys, "platform", "win32"), patch.dict(
+                    sys.modules, {"ctypes": fake_ctypes}
+                ), patch.object(app, "ICON_DIR", ASSETS):
+                    self.assertTrue(app.configure_windows_window_icon(window))
+                    self.assertTrue(app.configure_windows_window_icon(window))
+
+                icon_path = str((ASSETS / "paypamin_flow.ico").resolve())
+                self.assertEqual(load_image.call_args_list, [
+                    call(None, icon_path, 1, 16, 16, 0x0010),
+                    call(None, icon_path, 1, 32, 32, 0x0010),
+                ])
+                self.assertEqual(send_message.call_args_list, [
+                    call(4242, 0x0080, 0, 1001),
+                    call(4242, 0x0080, 1, 1002),
+                    call(4242, 0x0080, 0, 1001),
+                    call(4242, 0x0080, 1, 1002),
+                ])
+                self.assertEqual(len(app._WINDOWS_NATIVE_ICONS), 2)
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
+
+    def test_native_window_icon_failure_is_safe_and_sends_nothing(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            load_image = Mock(return_value=0)
+            send_message = Mock()
+            get_metrics = Mock(return_value=32)
+            fake_ctypes = self.native_ctypes(load_image, send_message, get_metrics)
+            try:
+                with patch.object(app.sys, "platform", "win32"), patch.dict(
+                    sys.modules, {"ctypes": fake_ctypes}
+                ), patch.object(app, "ICON_DIR", ASSETS):
+                    self.assertFalse(app.configure_windows_window_icon(Mock()))
+                send_message.assert_not_called()
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
 
 
 if __name__ == "__main__":

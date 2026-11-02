@@ -102,7 +102,9 @@ När du stänger eller minimerar huvudfönstret döljs det i systemfältet. Appe
 
 Om skrivbordsmiljön inte har ett fungerande systemfält lämnas fönstret synligt och appen erbjuder ett tydligt val att avsluta i stället för att gömmas oåtkomlig. På Linux kan skrivbordets AppIndicator-/systemfältsstöd behöva aktiveras.
 
-På Windows använder appen en egen app-identitet för aktivitetsfältets PayPamin Flow-ikon. Systemfältsikonen kan placeras under **^ / Dolda ikoner** av Windows; dra den till det synliga fältet om du vill ha den framme hela tiden. Start- och ikonfel loggas i `%USERPROFILE%\.paminnelseapp\app.log`.
+På Windows använder appen en egen app-identitet för aktivitetsfältets PayPamin Flow-ikon. Huvudfönstret och alla sekundära fönster får dessutom både stor och liten PayPamin Flow-ikon direkt via Windows fönsterhandle, för aktivitetsfältet och Aktivitetshanterarens appvy. Systemfältsikonen kan placeras under **^ / Dolda ikoner** av Windows; dra den till det synliga fältet om du vill ha den framme hela tiden. Start- och ikonfel loggas i `%USERPROFILE%\.paminnelseapp\app.log`.
+
+**Begränsning i Windows:** Aktivitetshanterarens **Detaljer**-flik och vissa bakgrundsprocessvyer kan fortfarande visa Python-ikonen. Windows hämtar då den inbäddade ikonen från `pythonw.exe`, inte från appfönstret. Att ersätta just den processikonen skulle kräva en native EXE med egen ikonresurs, vilket inte ingår i PayPamin Flows Python-only-distribution.
 
 ## Smart cache-rensning och betalda fakturor
 
