@@ -406,7 +406,10 @@ class LedgerUiTests(unittest.TestCase):
         report = parse_ledger_pages(PAGES)
         plan = LedgerPlan(4, 0, (), "")
         result = LedgerResult(4, 0, 0)
-        fake = SimpleNamespace(refresh=Mock())
+        fake = SimpleNamespace(
+            refresh=Mock(), current_filter_key="all", current_filter=Mock(),
+            filter_options={"current": "Aktuella"},
+        )
         with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="ledger.pdf"), patch.object(
             self.app, "read_ledger_report", return_value=report
         ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(
@@ -420,6 +423,8 @@ class LedgerUiTests(unittest.TestCase):
         apply_import.assert_called_once_with(self.app.DB_PATH, report)
         refresh_journal.assert_called_once_with(parent=fake)
         fake.refresh.assert_called_once_with()
+        self.assertEqual(fake.current_filter_key, "current")
+        fake.current_filter.set.assert_called_once_with("Aktuella")
 
     def test_import_logs_every_row_and_paid_candidate_before_automatic_apply(self):
         report = parse_ledger_pages(PAGES)

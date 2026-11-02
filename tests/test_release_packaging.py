@@ -115,6 +115,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("paypamin_flow_launcher.py", names)
                 self.assertIn("paypamin_flow.pyw", names)
                 self.assertIn("app_backup.py", names)
+                self.assertIn("activity_log.py", names)
                 self.assertIn("build_info.py", names)
                 self.assertIn("tray.py", names)
                 self.assertIn("reminder_journal.py", names)
@@ -137,6 +138,7 @@ class ReleasePackagingTests(unittest.TestCase):
             validated = output / "validated"
             _extract_python_package(asset, validated, APP_VERSION)
             self.assertTrue((validated / "paypamin_flow.py").is_file())
+            self.assertTrue((validated / "activity_log.py").is_file())
             self.assertTrue((validated / "tray.py").is_file())
             self.assertTrue((validated / "supplier_matching.py").is_file())
             self.assertTrue((validated / "logo_matching.py").is_file())

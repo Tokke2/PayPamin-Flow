@@ -48,6 +48,7 @@ class UpdateUiTests(unittest.TestCase):
             _set_update_check_busy=lambda busy: None,
         )
         fake._set_update_available = MethodType(self.app.ReminderApp._set_update_available, fake)
+        fake._refresh_tray_menu = lambda: None
         return fake
 
     def test_automatic_new_release_starts_silent_installation(self):
@@ -103,12 +104,33 @@ class UpdateUiTests(unittest.TestCase):
             _update_check_running=False,
             _update_install_running=False,
             update_button=button,
+            tray=Mock(),
         )
         fake._update_button_idle_text = MethodType(self.app.ReminderApp._update_button_idle_text, fake)
+        fake._refresh_tray_menu = MethodType(self.app.ReminderApp._refresh_tray_menu, fake)
         self.app.ReminderApp._set_update_available(fake, RELEASE)
         button.configure.assert_called_once_with(text="Uppdatering tillgänglig", state="normal")
         self.app.ReminderApp._set_update_available(fake, None)
         self.assertEqual(button.configure.call_args.kwargs["text"], "Uppdatera appen")
+        self.assertEqual(fake.tray.refresh.call_count, 2)
+
+    def test_tray_update_label_reflects_available_check_and_install_states(self):
+        self.app.set_language("sv")
+        fake = SimpleNamespace(
+            _available_update=None,
+            _update_check_running=False,
+            _update_install_running=False,
+        )
+        fake._update_button_idle_text = MethodType(self.app.ReminderApp._update_button_idle_text, fake)
+        fake._update_tray_label = MethodType(self.app.ReminderApp._update_tray_label, fake)
+
+        self.assertEqual(fake._update_tray_label(), "Uppdatera appen")
+        fake._available_update = RELEASE
+        self.assertEqual(fake._update_tray_label(), "Uppdatering tillgänglig")
+        fake._update_check_running = True
+        self.assertEqual(fake._update_tray_label(), "Söker…")
+        fake._update_install_running = True
+        self.assertEqual(fake._update_tray_label(), "Uppdaterar…")
 
     def test_force_check_bypasses_cached_release(self):
         scheduled = []
@@ -118,6 +140,7 @@ class UpdateUiTests(unittest.TestCase):
             _available_update=RELEASE,
             update_button=None,
             _set_update_check_busy=lambda busy: None,
+            _refresh_tray_menu=lambda: None,
             after=lambda delay, callback: scheduled.append(callback),
         )
         fake._set_update_available = MethodType(self.app.ReminderApp._set_update_available, fake)

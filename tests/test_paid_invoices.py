@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from invoice_parser import InvoiceSection
 from test_database import load_headless_app
@@ -59,6 +59,33 @@ class PaidInvoiceTests(unittest.TestCase):
         self.assertEqual(saved["paid"], saved["amount"])
         self.assertEqual(self.app.next_stage(saved), "Avslutad")
         self.assertEqual(refreshed, [True])
+
+    def test_paid_invoice_leaves_active_list_but_remains_in_history(self):
+        row = self.save_invoice(paid=1250.5)
+
+        class FakeTree:
+            def __init__(self):
+                self.rows = {}
+
+            def get_children(self):
+                return tuple(self.rows)
+
+            def delete(self, item):
+                self.rows.pop(item, None)
+
+            def insert(self, _parent, _position, **options):
+                self.rows[options["iid"]] = options["values"]
+
+        tree = FakeTree()
+        fake = SimpleNamespace(tree=tree, current_filter_key="current", show_detail=Mock())
+        self.app.ReminderApp.refresh(fake)
+        self.assertEqual(tree.rows, {})
+
+        fake.current_filter_key = "all"
+        self.app.ReminderApp.refresh(fake)
+        self.assertEqual(tree.rows[str(row["id"])][0], "F-3001")
+        with self.app.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0], 1)
 
     def test_automatic_folder_import_skips_paid_invoice_silently(self):
         self.save_invoice(paid=1250.5)

@@ -23,11 +23,12 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser Fortnox-
 - SVG-logotyp kan kopplas till en leverantörsmall och återanvändas vid export. Ett logotypval i PDF-matchningen sparas även direkt på fakturan och följer med till P1/P2 utan att fältmallen behöver sparas; valet påverkas inte av en senare global logotypändring.
 - Manuell granskningsgräns, P1/P2/Kronofogden-steg, justerbara dagar, avgift, betalningsfrist och ränta. **Skapa påminnelse** skapar en aktuell men saknad P1 och kan därefter fortsätta till P2 i samma klick när både P2-intervallet och P1:s sparade betalningsfrist har passerat; inget steg skapas i förtid. **Redigera P1** och **Redigera P2** kan byta logotyp och skriva om den befintliga nivåns PDF med ursprungligt datum, originaldata och oförändrade villkor/historik via interna P1/P2-snapshots; den gamla filen bevaras om skrivningen misslyckas. Om en registrerad P1-PDF saknas återskapas den först med ursprungligt datum och oförändrad historik, varefter en aktuell P2 kan skapas. En skadad eller oläsbar SVG ger ett tydligt fel i stället för att tyst ersättas med textlogotyp. Om fakturatext saknas eller bara innehåller blanksteg utelämnas **Avser**-raden helt i nya eller medvetet återskapade P1/P2-PDF:er, utan standardtext eller extra radavstånd; ifylld text visas som tidigare.
 - **Ny logotyp och nya ikoner överallt:** fakturadokument med P-märke och turkos bock i fönster, dialoger, systemfält, aktivitetsfält, Aktivitetshanterarens appvy, Dock, Linux och Windows-autostartgenväg. Ny horisontell PayPamin Flow-logotyp i sidhuvud och Om-fönster samt ett enhetligt bibliotek med funktionsikoner för menyer, verktygsknappar, högerklick och dialoger på svenska och engelska.
-- **Stäng eller minimera till systemfältet:** fönstrets stäng- och minimeringsknappar döljer appen medan schemalagda kontroller fortsätter. **Arkiv → Avsluta helt** eller systemfältets **Avsluta helt** stänger appen helt.
+- **Stäng eller minimera till systemfältet:** fönstrets stäng- och minimeringsknappar döljer appen medan schemalagda kontroller fortsätter. Systemfältets högerklicksmeny innehåller **Öppna**, **Uppdatera appen** och **Avsluta helt**. **Arkiv → Avsluta helt** eller systemfältets **Avsluta helt** stänger appen helt.
+- **Detaljerad aktivitetslogg:** knappar, menyer, systemfältsåtgärder, filter, fakturaval, uppdateringar och övriga viktiga händelser loggas strukturerat med start, slut/fel, varaktighet, sessions-ID och spårnings-ID. Befintliga detaljposter för PDF, reskontra, e-post, säkerhetskopior och bakgrundsjobb finns kvar i samma tekniska logg.
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
 - **Autostart vid inloggning** på Windows, macOS och Linux. Appen startar då minimerad i systemfältet medan manuell start visar fönstret som vanligt. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
-- **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med commit- och filjämförelse, SHA-256-verifiering och tyst omstart. Både nyare versioner och verkligt ändrade release-byggen med samma versionsnummer upptäcks. Manuell sökning och installation finns via den tydliga **Uppdatera appen**-knappen eller **Hjälp → Uppdatera appen**.
+- **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med commit- och filjämförelse, SHA-256-verifiering och tyst omstart. Både nyare versioner och verkligt ändrade release-byggen med samma versionsnummer upptäcks. Manuell sökning och installation finns via den tydliga **Uppdatera appen**-knappen, **Hjälp → Uppdatera appen** eller systemfältets högerklicksmeny.
 - PDF sparas lokalt och öppnas i datorns standardprogram. **Öppna exportmapp** i knappraden eller under **Arkiv** öppnar mappen med skapade påminnelser i datorns filhanterare. Den samlade felloggen öppnas via **Visa samlad fellogg** eller **Hjälp → Visa samlad fellogg**.
 - **Automatiskt påminnelsearkiv:** vid appstart och därefter regelbundet flyttas igenkända P1/P2-PDF:er vars ursprungliga påminnelsedatum är mer än 7 dagar gammalt från `export/` till `export/arkiv/`. Fakturor och påminnelsehistorik ändras inte, arkiverad P1 kan fortfarande redigeras och befintliga arkivfiler skrivs aldrig över.
 
@@ -97,6 +98,7 @@ Välj **Visa samlad fellogg** i knappraden eller **Hjälp → Visa samlad fellog
 När du stänger eller minimerar huvudfönstret döljs det i systemfältet. Appen fortsätter då med bland annat schemalagda uppdateringskontroller.
 
 - Klicka på PayPamin Flow-ikonen eller välj **Öppna PayPamin Flow** i systemfältet för att visa fönstret igen.
+- Högerklicka och välj **Uppdatera appen** för att visa fönstret och starta samma manuella uppdateringskontroll som i Hjälp-menyn. Valet visar även **Uppdatering tillgänglig**, **Söker…** eller **Uppdaterar…** när något pågår.
 - Välj **Arkiv → Dölj till systemfältet** för att dölja det utan musens stängknapp.
 - Välj **Arkiv → Avsluta helt** eller **Avsluta helt** i systemfältet för att avsluta bakgrundsaktiviteten och stänga appen.
 
@@ -168,7 +170,7 @@ Installationen sker **inuti appen**; du ska inte starta någon separat uppdateri
 
 Automatisk installation startar först när både Python-ZIP och SHA-256-fil finns i releasen. Om en release fortfarande publiceras väntar appen tyst till nästa kontroll i stället för att göra ett misslyckat installationsförsök. Under installationen visar uppdateringsknappen stegen **Hämtar och verifierar**, **Installerar filer** och **Startar om**.
 
-Manuell kontroll görs med den framhävda knappen **Uppdatera appen** eller **Hjälp → Uppdatera appen**. När en uppdatering hittats ändras knapptexten till **Uppdatering tillgänglig** och knappen öppnar den sparade dialogen direkt utan en onödig ny nätverkkontroll. Dialogen visar om ändringen gäller version, commit, filer eller båda, samt installerad och tillgänglig commit. Välj **Installera och starta om**, **Öppna nedladdningssida** eller **Sök igen** för att tvinga en färsk GitHub-kontroll. Om ZIP eller kontrollsumma saknas visas detta och installationsknappen är avaktiverad tills filerna är klara. Officiella byggen visar även sin commit under **Om PayPamin Flow**.
+Manuell kontroll görs med den framhävda knappen **Uppdatera appen**, **Hjälp → Uppdatera appen** eller **Uppdatera appen** i systemfältets högerklicksmeny. Systemfältsvalet visar fönstret först så att dialogen inte öppnas bakom en dold app. När en uppdatering hittats ändras knapp- och menytexten till **Uppdatering tillgänglig** och den sparade dialogen öppnas direkt utan en onödig ny nätverkkontroll. Dialogen visar om ändringen gäller version, commit, filer eller båda, samt installerad och tillgänglig commit. Välj **Installera och starta om**, **Öppna nedladdningssida** eller **Sök igen** för att tvinga en färsk GitHub-kontroll. Om ZIP eller kontrollsumma saknas visas detta och installationsknappen är avaktiverad tills filerna är klara. Officiella byggen visar även sin commit under **Om PayPamin Flow**.
 
 Kontrollen använder GitHubs publika API och skickar inga faktura-, kund- eller inställningsuppgifter. Automatiska nätverks- och installationsfel loggas utan popup och provas igen vid nästa schemalagda kontroll. Appmappen måste vara skrivbar för den aktuella användaren. Tekniska installationsfel loggas i `update.log` under `~/.paminnelseapp`.
 
@@ -243,6 +245,12 @@ Bevakningen fungerar även när huvudfönstret ligger i systemfältet; fönstret
 
 Detta är ingen direkt API-koppling: exporten från Fortnox görs fortfarande manuellt. Appen loggar inte in i Fortnox och skickar inga uppgifter dit.
 
+## Detaljerad aktivitets- och teknisk logg
+
+**Hjälp → Visa teknisk logg** öppnar `~/.paminnelseapp/app.log`. Samma logg innehåller både de tidigare detaljerade domänposterna och strukturerade `Activity`-händelser för knappar, menyer, högerklicksmenyer, systemfält, filter, fakturaval och uppdateringar. En åtgärd får start- och slutpost med samma spårnings-ID, varaktighet och returtyp; fel får i stället feltyp, meddelande och traceback. Sessionens ID och tidsstämpel med tidszon ingår i varje händelse. Oväntade Tk-callbackfel fångas också i den konsollfria installationen.
+
+PDF-/reskontraläsning, faktura- och kundändringar, betalavstämning, P1/P2, e-post, importbevakning, autostart, cache, arkivering, JSON-/ZIP-säkerhetskopior och uppdateringarnas hämtning/installation/omstart har dessutom sina mer detaljerade befintliga loggposter. Den generella aktivitetsloggen sparar inte e-postmeddelandens brödtext eller lösenord. Loggfilen roteras vid 5 MB med fem historikfiler. **Visa samlad fellogg** är fortfarande den kortare vyn för enbart fel och tracebacks. Loggar kan innehålla kund-, faktura-, belopps- och sökvägsuppgifter och ska granskas innan de delas.
+
 ## Kundreskontralista och betalavstämning
 
 Exportera en **komplett, textbaserad kundreskontralista som PDF** från Fortnox och välj **Arkiv → Importera reskontralista**. Välj PDF-filen med alla tryckta sidor kvar. Bilder och skannade listor används inte i detta flöde, eftersom OCR kan misstolka fakturanummer och belopp.
@@ -260,6 +268,8 @@ Betalregeln är avsiktligt konservativ:
 - Befintliga fakturors kunduppgifter, fakturabelopp, originalkällor, logotyper och P1/P2-/e-posthistorik skrivs inte över. Nya rader får belopp och delbetalning från listans Belopp och Saldo.
 - För listor med annan valuta än SEK kontrolleras sidor och fakturaantal, men befintliga rader och frånvarande fakturor ändrar inte betalstatus automatiskt eftersom totalsumman anges i SEK.
 - Reskontra-historiken ingår i JSON- och ZIP-säkerhetskopior.
+
+Efter en lyckad reskontraimport återgår huvudlistan automatiskt till **Visa: Aktuella**. Fakturor som just betalmarkerats försvinner därmed från arbetslistan i stället för att ligga kvar som avslutade rader. De raderas inte: posten, beloppen och P1/P2-/e-posthistoriken finns kvar och kan vid behov visas genom att välja **Visa: Alla**.
 
 En gång per fredag när appfönstret är synligt visas **Veckans reskontralista**, med möjlighet att välja veckans PDF direkt. Påminnelsen kan stängas av under **Inställningar → Påminn om att importera kundreskontralista varje fredag**. Ingen Fortnox-export eller betaländring sker i bakgrunden utan att du väljer en reskontra-PDF; efter ditt val körs import och betalavstämning automatiskt om listan klarar valideringen.
 

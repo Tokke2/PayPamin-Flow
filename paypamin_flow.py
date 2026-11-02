@@ -17,6 +17,7 @@ import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_ID, APP_NAME, APP_SLUG, APP_VERSION, MINIMIZED_START_ARG, SUPPORTED_PLATFORMS
+from activity_log import instrument_tk_command, log_activity
 from build_info import APP_RELEASE_COMMIT
 from app_backup import (
     BackupError,
@@ -115,7 +116,7 @@ ERROR_LOG_PATH = APP_DIR / ERROR_LOG_NAME
 logger = logging.getLogger(APP_SLUG)
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    log_handler=RotatingFileHandler(LOG_PATH,maxBytes=2_000_000,backupCount=3,encoding='utf-8')
+    log_handler=RotatingFileHandler(LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8')
     log_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logger.addHandler(log_handler)
 
@@ -884,14 +885,23 @@ class ReminderApp(tk.Tk):
         self.after(4500,self._run_scheduled_reminder_archive)
         self.after(6000,self._run_scheduled_ledger_reminder)
 
+    def report_callback_exception(self,exc_type,exc_value,exc_traceback):
+        """Retain unexpected Tk callback failures in a console-free installation."""
+        log_activity(
+            'ui','unhandled_callback_exception','error',level=logging.ERROR,
+            exc_info=(exc_type,exc_value,exc_traceback),
+            error_type=getattr(exc_type,'__name__',str(exc_type)),error=str(exc_value),
+        )
+
     def start_tray(self):
         """Start the tray icon lazily so unsupported desktops can still run the app."""
         if self.tray is not None and self.tray.running:return
         self.tray=TrayController(
             name=APP_NAME,identifier=APP_SLUG,icon_path=ICON_DIR/'paypamin_flow_256.png',
             scheduler=lambda callback:self.after(0,callback),on_open=self.show_from_tray,
-            on_exit=self.quit_app,open_label=lambda:_('Öppna {app_name}',app_name=APP_NAME),
-            exit_label=lambda:_('Avsluta helt'),on_error=self.handle_tray_error)
+            on_update=self.update_from_tray,on_exit=self.quit_app,
+            open_label=lambda:_('Öppna {app_name}',app_name=APP_NAME),
+            update_label=self._update_tray_label,exit_label=lambda:_('Avsluta helt'),on_error=self.handle_tray_error)
         try:
             self.tray.start();self._configure_macos_dock_icon();logger.info('System tray icon started')
         except TrayUnavailable as exc:
@@ -905,10 +915,20 @@ class ReminderApp(tk.Tk):
         messagebox.showwarning(_('Systemfältet är inte tillgängligt'),_('Systemfältet slutade fungera. Fönstret visas igen.'),parent=self)
 
     def show_from_tray(self):
+        log_activity('tray','open_window','started')
         self.deiconify();self.lift()
         try:self.focus_force()
         except tk.TclError:pass
         self.after_idle(self._maybe_show_ledger_reminder)
+        log_activity('tray','open_window','completed')
+
+    def update_from_tray(self):
+        """Open a visible manual update check from the system-tray menu."""
+        log_activity('tray','update_requested','started')
+        self.show_from_tray()
+        result=self.check_for_updates(manual=True)
+        log_activity('tray','update_requested','completed')
+        return result
 
     def _on_main_window_unmap(self,event):
         """Handle a window-manager minimize after Tk has updated its state."""
@@ -933,6 +953,7 @@ class ReminderApp(tk.Tk):
             if messagebox.askyesno(_('Systemfältet är inte tillgängligt'),_('Fönstret kan inte döljas i systemfältet på den här datorn. Vill du avsluta appen helt?'),parent=self):self.quit_app()
             return
         self.withdraw();logger.info('Main window hidden to system tray')
+        log_activity('tray','window_hidden','completed')
 
     def quit_app(self):
         """Exit the whole application rather than only hiding its window."""
@@ -943,6 +964,7 @@ class ReminderApp(tk.Tk):
         self._quitting=True
         if self.tray is not None:self.tray.stop()
         logger.info('Application exited by user')
+        log_activity('application','exit_requested','completed')
         self.destroy()
 
     def backup_paths(self):
@@ -1035,6 +1057,42 @@ class ReminderApp(tk.Tk):
         self._action_icons[key]=image
         return image
 
+    def _instrument_menu_actions(self,menu):
+        """Trace every menu command while retaining its registered Tk callback."""
+        try:
+            last=menu.index('end')
+            if last is None:return
+            completed=getattr(menu,'_activity_logged_entries',set())
+            for index in range(last+1):
+                if index in completed or menu.type(index)!='command':continue
+                command=menu.entrycget(index,'command')
+                if not command:continue
+                label=menu.entrycget(index,'label')
+                menu.entryconfigure(index,command=instrument_tk_command(menu,command,label,'menu'))
+                completed.add(index)
+            menu._activity_logged_entries=completed
+        except (tk.TclError,AttributeError,TypeError):
+            logger.debug('Menu activity tracing could not be applied',exc_info=True)
+
+    def _instrument_action_tree(self,root):
+        """Recursively trace buttons and checkboxes after a window has been built."""
+        try:
+            if root.winfo_class() in ('TButton','Button','TCheckbutton','Checkbutton','TRadiobutton','Radiobutton'):
+                if not getattr(root,'_activity_command_instrumented',False):
+                    command=root.cget('command')
+                    if command:
+                        label=root.cget('text') or root.winfo_class()
+                        root.configure(command=instrument_tk_command(root,command,label,'ui'))
+                    root._activity_command_instrumented=True
+            children=root.winfo_children()
+        except (tk.TclError,AttributeError,TypeError):
+            return
+        for child in children:self._instrument_action_tree(child)
+
+    def _finalize_window_actions(self,window):
+        self._apply_action_icons(window)
+        self._instrument_action_tree(window)
+
     def _apply_menu_icons(self,menu):
         """Apply matching icons to every command/cascade in one Tk menu."""
         try:
@@ -1075,7 +1133,7 @@ class ReminderApp(tk.Tk):
         window=tk.Toplevel(self)
         window.title(title);window.transient(self)
         self._set_window_icon(window)
-        window.after_idle(lambda: self._apply_action_icons(window))
+        window.after_idle(lambda: self._finalize_window_actions(window))
         return window
 
     def _configure_macos_dock_icon(self):
@@ -1119,8 +1177,20 @@ class ReminderApp(tk.Tk):
     def _update_button_idle_text(self):
         return _('Uppdatering tillgänglig') if getattr(self,'_available_update',None) is not None else _('Uppdatera appen')
 
+    def _update_tray_label(self):
+        if getattr(self,'_update_install_running',False):return _('Uppdaterar…')
+        if getattr(self,'_update_check_running',False):return _('Söker…')
+        return self._update_button_idle_text()
+
+    def _refresh_tray_menu(self):
+        tray=getattr(self,'tray',None)
+        if tray is not None:
+            try:tray.refresh()
+            except Exception:logger.debug('Tray update label could not be refreshed',exc_info=True)
+
     def _set_update_available(self,release):
         self._available_update=release
+        self._refresh_tray_menu()
         if getattr(self,'_update_check_running',False) or getattr(self,'_update_install_running',False):return
         button=getattr(self,'update_button',None)
         if not button:return
@@ -1128,6 +1198,7 @@ class ReminderApp(tk.Tk):
         except tk.TclError:pass
 
     def _set_update_check_busy(self,busy):
+        self._refresh_tray_menu()
         button=getattr(self,'update_button',None)
         if not button:return
         try:button.configure(text=_('Söker…') if busy else self._update_button_idle_text(),state='disabled' if busy else 'normal')
@@ -1136,6 +1207,7 @@ class ReminderApp(tk.Tk):
     def _set_update_install_busy(self,busy,stage=None):
         if busy and stage:self._update_install_stage=stage
         elif not busy:self._update_install_stage=None
+        self._refresh_tray_menu()
         button=getattr(self,'update_button',None)
         if not button:return
         labels={'download':_('Hämtar och verifierar…'),'install':_('Installerar filer…'),'restart':_('Startar om…')}
@@ -1145,11 +1217,14 @@ class ReminderApp(tk.Tk):
 
     def check_for_updates(self,manual=False,force=False):
         """Open a known update or check GitHub in a background worker."""
+        log_activity('update','check_requested','started',manual=manual,force=force)
         if self._update_check_running or self._update_install_running:
+            log_activity('update','check_requested','skipped',manual=manual,reason='already_running')
             if manual:messagebox.showinfo(_('Uppdateringskontroll'),_('En uppdateringskontroll eller installation pågår redan.'),parent=self)
             return
         available=getattr(self,'_available_update',None)
         if manual and available is not None and not force:
+            log_activity('update','check_requested','completed',manual=manual,cached=True)
             self.show_update_available(available);return
         if force:self._set_update_available(None)
         self._update_check_running=True;self._set_update_check_busy(True)
@@ -1158,6 +1233,7 @@ class ReminderApp(tk.Tk):
             try:result_queue.put(('ok',manual,fetch_latest_release()))
             except Exception as exc:result_queue.put(('error',manual,exc))
         threading.Thread(target=check,daemon=True).start()
+        log_activity('update','check_requested','completed',manual=manual,force=force,cached=False)
         self.after(200,lambda:self._poll_update_check(result_queue))
 
     def _poll_update_check(self,result_queue):
@@ -1166,6 +1242,7 @@ class ReminderApp(tk.Tk):
             self.after(200,lambda:self._poll_update_check(result_queue));return
         self._update_check_running=False;self._set_update_check_busy(False)
         if status=='error':
+            log_activity('update','check_finished','error',level=logging.WARNING,manual=manual,error=str(payload))
             logger.warning('GitHub update check failed: %s',payload)
             if manual:
                 details=str(payload) if isinstance(payload,UpdateCheckError) else _('Ett oväntat fel uppstod vid uppdateringskontrollen.')
@@ -1175,6 +1252,7 @@ class ReminderApp(tk.Tk):
         if is_update_available(release,APP_VERSION):
             self._set_update_available(release)
             missing=missing_release_assets(release)
+            log_activity('update','check_finished','update_available',manual=manual,version=release.version,release_id=release.release_id,commit=release.release_commit,missing_assets=missing)
             logger.info('New PayPamin Flow release available: current=%s latest=%s release_id=%s commit=%s files=%s missing_assets=%s',APP_VERSION,release.version,release.release_id,release.release_commit,release.package_fingerprint[:12],missing)
             if missing:
                 logger.warning('Release package is not ready; automatic installation waits')
@@ -1184,15 +1262,20 @@ class ReminderApp(tk.Tk):
             elif setting('update_auto')=='1':self.start_update_installation(release,manual=False)
             return
         self._set_update_available(None)
+        log_activity('update','check_finished','current',manual=manual,version=release.version,release_id=release.release_id,commit=release.release_commit)
         logger.info('No newer PayPamin Flow release: current=%s latest=%s',APP_VERSION,release.version)
         if manual:
             commit=release.release_commit[:12] or APP_RELEASE_COMMIT[:12] or _('okänd')
             messagebox.showinfo(_('Ingen uppdatering tillgänglig'),_('Ingen ny version eller ändrade releasefiler finns.\n\nInstallerad version: {current}\nSenaste release: {latest}\nRelease-commit: {commit}',current=APP_VERSION,latest=release.version,commit=commit),parent=self)
 
     def start_update_installation(self,release,manual=False):
-        if self._update_install_running:return
+        log_activity('update','install_requested','started',manual=manual,version=release.version,release_id=release.release_id)
+        if self._update_install_running:
+            log_activity('update','install_requested','skipped',manual=manual,reason='already_running')
+            return
         missing=missing_release_assets(release)
         if missing:
+            log_activity('update','install_requested','blocked',level=logging.WARNING,manual=manual,missing_assets=missing)
             logger.warning('Update installation blocked until release files are ready: %s',missing)
             if manual:messagebox.showwarning(_('Uppdateringsfiler saknas'),_('Releasefilerna är inte klara ännu. Försök igen senare.\n\nSaknas: {files}',files=', '.join(missing)),parent=self)
             return
@@ -1208,6 +1291,7 @@ class ReminderApp(tk.Tk):
                 result_queue.put(('restart',manual,release,installed))
             except Exception as exc:result_queue.put(('error',manual,release,exc))
         threading.Thread(target=install,daemon=True).start()
+        log_activity('update','install_requested','completed',manual=manual,version=release.version,release_id=release.release_id)
         self.after(200,lambda:self._poll_update_installation(result_queue))
 
     def _update_restart_failed(self,release,installed,error,manual):
@@ -1224,6 +1308,7 @@ class ReminderApp(tk.Tk):
         except queue.Empty:
             self.after(200,lambda:self._poll_update_installation(result_queue));return
         if status=='progress':
+            log_activity('update','install_stage','started',manual=manual,stage=payload,version=release.version)
             self._set_update_install_busy(True,payload)
             self.after(200,lambda:self._poll_update_installation(result_queue));return
         if status=='restart':
@@ -1306,6 +1391,7 @@ class ReminderApp(tk.Tk):
         selected=self.current_filter.get()
         for key,label in self.filter_options.items():
             if selected==label:self.current_filter_key=key;break
+        log_activity('ui','invoice_filter_changed','completed',filter=self.current_filter_key)
         self.refresh()
 
     def check_python_addons(self):
@@ -1397,6 +1483,7 @@ class ReminderApp(tk.Tk):
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
         menu.add_cascade(label=_('Hjälp'),menu=help_menu)
         self._apply_menu_icons(file_menu);self._apply_menu_icons(help_menu);self._apply_menu_icons(menu)
+        self._instrument_menu_actions(file_menu);self._instrument_menu_actions(help_menu);self._instrument_menu_actions(menu)
         self.configure(menu=menu)
 
     def build(self):
@@ -1458,12 +1545,14 @@ class ReminderApp(tk.Tk):
         self.row_menu.add_separator()
         self.row_menu.add_command(label=_('Ta bort fakturarad'),command=self.delete_invoice)
         self._apply_menu_icons(self.row_menu)
+        self._instrument_menu_actions(self.row_menu)
         self.detail=ttk.Label(self,text=_('Importera PDF eller lägg till en faktura manuellt.'),padding=(24,4,24,16),style='Sub.TLabel');self.detail.pack(fill='x')
         foot=ttk.Frame(self,padding=(22,0,22,12));foot.pack(fill='x')
         ttk.Label(foot,text=_('Startvärden: P1 +5 dagar · P2 +5 dagar · Kronofogden-granskning +5 dagar · avgift 150 i fakturans valuta · ränta 23%'),style='Sub.TLabel').pack(side='left')
         ttk.Button(foot,text=_('Ta bort vald'),command=self.delete_invoice).pack(side='right')
         ttk.Label(self,text=_('{copyright} · Skapare: {author}',copyright=APP_COPYRIGHT,author=APP_AUTHOR),padding=(24,0,24,9),style='Sub.TLabel').pack(fill='x')
         self._apply_action_icons(self)
+        self._instrument_action_tree(self)
 
     def refresh(self):
         for i in self.tree.get_children():self.tree.delete(i)
@@ -1495,9 +1584,16 @@ class ReminderApp(tk.Tk):
 
     def show_detail(self):
         sel=self.tree.selection()
-        if not sel:self.detail.configure(text=_('Importera PDF eller lägg till en faktura manuellt.'));return
+        if not sel:
+            if getattr(self,'_last_activity_invoice_id',None) is not None:
+                log_activity('invoice','selection_cleared','completed')
+            self._last_activity_invoice_id=None
+            self.detail.configure(text=_('Importera PDF eller lägg till en faktura manuellt.'));return
         with connect() as db:r=db.execute('SELECT * FROM invoices WHERE id=?',(int(sel[0]),)).fetchone()
         if r:
+            if getattr(self,'_last_activity_invoice_id',None)!=r['id']:
+                log_activity('invoice','selection_changed','completed',invoice_id=r['id'],invoice_no=r['invoice_no'])
+            self._last_activity_invoice_id=r['id']
             vendor=r['template_vendor'] or _('Ingen leverantörsmall')
             _logo_path,logo_name=self.invoice_logo(r)
             review=_('Granskad') if r['reviewed'] else _('KRÄVER GRANSKNING')
@@ -1513,6 +1609,7 @@ class ReminderApp(tk.Tk):
         item=self.tree.identify_row(event.y)
         if not item:return
         self.tree.selection_set(item);self.tree.focus(item);self.show_detail()
+        log_activity('ui','invoice_context_menu_opened','completed',invoice_id=int(item))
         try:self.row_menu.tk_popup(event.x_root,event.y_root)
         finally:self.row_menu.grab_release()
 
@@ -1551,6 +1648,7 @@ class ReminderApp(tk.Tk):
             set_setting('logo_path',str(SVG_DIR/selected))
         else:
             set_setting('logo_file','');set_setting('logo_path','')
+        log_activity('settings','export_logo_changed','completed',logo=self.logo_var.get(),sync_json=sync_json)
         if sync_json:refresh_json_journal(parent=self)
 
     def selected_logo_path(self):
@@ -2065,6 +2163,13 @@ class ReminderApp(tk.Tk):
             'existing':result.existing,'marked_paid':result.marked_paid,
             'payment_updates':result.payment_updates,
         }))
+        previous_filter=getattr(self,'current_filter_key','current')
+        self.current_filter_key='current'
+        current_filter=getattr(self,'current_filter',None)
+        filter_options=getattr(self,'filter_options',{})
+        if current_filter is not None and 'current' in filter_options:
+            current_filter.set(filter_options['current'])
+        log_activity('ledger','active_invoice_list_restored','completed',previous_filter=previous_filter,marked_paid=result.marked_paid)
         self.refresh()
         messagebox.showinfo(
             _('Reskontralistan är importerad'),
@@ -2236,6 +2341,7 @@ class ReminderApp(tk.Tk):
             db.execute('UPDATE invoices SET paid=amount WHERE id=?',(r['id'],))
         refresh_json_journal(parent=self)
         logger.info('Invoice marked as fully paid: id=%s',r['id'])
+        log_activity('invoice','marked_paid','completed',invoice_id=r['id'],invoice_no=r['invoice_no'])
         self.refresh()
 
     def toggle_ignore(self):
@@ -2243,6 +2349,7 @@ class ReminderApp(tk.Tk):
         if not r:return
         new=0 if r['ignored'] else 1
         with connect() as db:db.execute('UPDATE invoices SET ignored=? WHERE id=?',(new,r['id']))
+        log_activity('invoice','ignore_toggled','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],ignored=bool(new))
         refresh_json_journal(parent=self)
         self.refresh()
 
@@ -2250,6 +2357,7 @@ class ReminderApp(tk.Tk):
         r=self.selected()
         if r and messagebox.askyesno(_('Ta bort faktura'),_('Ta bort {invoice_no} permanent från den lokala databasen?',invoice_no=r['invoice_no'])):
             with connect() as db:db.execute('DELETE FROM invoices WHERE id=?',(r['id'],))
+            log_activity('invoice','deleted','completed',invoice_id=r['id'],invoice_no=r['invoice_no'])
             refresh_json_journal(parent=self)
             self.refresh()
 
@@ -2777,6 +2885,7 @@ def main():
         configure_windows_app_identity()
         init_db()
         logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
+        log_activity('application','started','completed',version=APP_VERSION,platform=sys.platform,commit=APP_RELEASE_COMMIT)
         try:
             report=refresh_error_log(APP_DIR)
             logger.info('Consolidated error log refreshed: errors=%d sources=%d',report.error_count,report.source_count)

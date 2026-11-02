@@ -85,35 +85,40 @@ class TrayControllerTests(unittest.TestCase):
         self.modules.start()
         self.addCleanup(self.modules.stop)
 
-    def controller(self, scheduled, opened, exited):
+    def controller(self, scheduled, opened, exited, updated=None):
+        if updated is None:
+            updated = []
         return tray.TrayController(
             name="PayPamin Flow",
             identifier="paypamin-flow",
             icon_path=self.icon_path,
             scheduler=scheduled.append,
             on_open=lambda: opened.append(True),
+            on_update=lambda: updated.append(True),
             on_exit=lambda: exited.append(True),
             open_label=lambda: "Open",
+            update_label=lambda: "Update app",
             exit_label=lambda: "Exit",
         )
 
     def test_tray_actions_are_marshalled_to_tk_scheduler(self):
-        scheduled, opened, exited = [], [], []
-        controller = self.controller(scheduled, opened, exited)
+        scheduled, opened, updated, exited = [], [], [], []
+        controller = self.controller(scheduled, opened, exited, updated)
         controller.start()
         icon = FakeIcon.instances[-1]
         self.assertTrue(icon.detached)
         self.assertTrue(icon.visible)
         self.assertFalse(icon.started)
         self.assertEqual(icon.menu.items[0].text(icon.menu.items[0]), "Open")
-        self.assertEqual(icon.menu.items[1].text(icon.menu.items[1]), "Exit")
-        icon.menu.items[0].action(icon, icon.menu.items[0])
-        icon.menu.items[1].action(icon, icon.menu.items[1])
-        self.assertEqual((opened, exited), ([], []))
-        self.assertEqual(len(scheduled), 2)
+        self.assertEqual(icon.menu.items[1].text(icon.menu.items[1]), "Update app")
+        self.assertEqual(icon.menu.items[2].text(icon.menu.items[2]), "Exit")
+        for item in icon.menu.items:
+            item.action(icon, item)
+        self.assertEqual((opened, updated, exited), ([], [], []))
+        self.assertEqual(len(scheduled), 3)
         for callback in scheduled:
             callback()
-        self.assertEqual((opened, exited), ([True], [True]))
+        self.assertEqual((opened, updated, exited), ([True], [True], [True]))
         controller.refresh()
         self.assertTrue(icon.refreshed)
         controller.stop()
@@ -206,6 +211,17 @@ class WindowCloseTests(unittest.TestCase):
         with patch.object(self.app.messagebox, "askyesno", return_value=False, create=True):
             self.app.ReminderApp.hide_to_tray(fake)
         self.assertEqual(events, ["shown"])
+
+    def test_tray_update_opens_window_and_starts_manual_check(self):
+        events = []
+        fake = SimpleNamespace(
+            show_from_tray=lambda: events.append("shown"),
+            check_for_updates=lambda manual: events.append(("manual", manual)),
+        )
+
+        self.app.ReminderApp.update_from_tray(fake)
+
+        self.assertEqual(events, ["shown", ("manual", True)])
 
     def test_explicit_exit_stops_tray_and_destroys_window(self):
         events = []

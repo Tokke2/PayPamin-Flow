@@ -23,6 +23,7 @@ RELEASE_ASSET_NAMES = {
     platform: PYTHON_RELEASE_ASSET for platform in ("windows", "macos", "linux", "python")
 }
 PYTHON_PACKAGE_REQUIRED_FILES = (
+    "activity_log.py",
     "app_backup.py",
     "app_info.py",
     "autostart.py",

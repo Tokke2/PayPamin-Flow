@@ -20,8 +20,10 @@ class TrayController:
         icon_path: str | Path,
         scheduler: Callable[[Callable[[], None]], None],
         on_open: Callable[[], None],
+        on_update: Callable[[], None],
         on_exit: Callable[[], None],
         open_label: Callable[[], str],
+        update_label: Callable[[], str],
         exit_label: Callable[[], str],
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
@@ -30,8 +32,10 @@ class TrayController:
         self.icon_path = Path(icon_path)
         self.scheduler = scheduler
         self.on_open = on_open
+        self.on_update = on_update
         self.on_exit = on_exit
         self.open_label = open_label
+        self.update_label = update_label
         self.exit_label = exit_label
         self.on_error = on_error
         self.icon = None
@@ -73,6 +77,7 @@ class TrayController:
                 image = source.convert("RGBA").copy()
             menu = pystray.Menu(
                 pystray.MenuItem(lambda item: self.open_label(), lambda icon, item: self._dispatch(self.on_open), default=True),
+                pystray.MenuItem(lambda item: self.update_label(), lambda icon, item: self._dispatch(self.on_update)),
                 pystray.MenuItem(lambda item: self.exit_label(), lambda icon, item: self._dispatch(self.on_exit)),
             )
             icon = pystray.Icon(self.identifier, image, self.name, menu)
