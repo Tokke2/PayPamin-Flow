@@ -638,6 +638,31 @@ def next_stage(row):
     return 'Väntar – efter P2'
 
 
+INVOICE_ROW_COLORS = {
+    'status-not-due':'#e2f4e8',
+    'status-p1':'#fff1c2',
+    'status-p2':'#fbdede',
+}
+
+
+def configure_invoice_row_colors(tree):
+    """Use pale backgrounds so the existing text and selection stay readable."""
+    for tag,background in INVOICE_ROW_COLORS.items():
+        tree.tag_configure(tag,background=background)
+
+
+def invoice_row_color_tag(row,stage=None,today=None):
+    """Map the existing reminder state to a color without changing the workflow."""
+    if row['ignored'] or is_fully_paid(row) or not row['reviewed']:return ''
+    due=dparse(row['due_date'])
+    if not due:return ''
+    stage=stage or next_stage(row)
+    if row['p2_date'] or stage=='P2 att skapa':return 'status-p2'
+    if row['p1_date'] or stage=='P1 att skapa':return 'status-p1'
+    if due>=(today or date.today()):return 'status-not-due'
+    return ''
+
+
 def due_reminder_invoices():
     """Return unpaid, reviewed invoices whose normal workflow is ready for P1/P2."""
     with connect() as db:
@@ -1263,6 +1288,7 @@ class ReminderApp(tk.Tk):
         wrap=ttk.Frame(self,padding=(22,0,22,12));wrap.pack(fill='both',expand=True)
         cols=('invoice_no','customer','due_date','amount','remaining','p1_date','p2_send_date','email_status','stage','fee')
         self.tree=ttk.Treeview(wrap,columns=cols,show='headings',selectmode='browse')
+        configure_invoice_row_colors(self.tree)
         labels={'invoice_no':_('Fakturanr'),'customer':_('Kund'),'due_date':_('Förfallodatum'),'amount':_('Fakturabelopp'),'remaining':_('Kvar att betala'),'p1_date':_('P1 skapades'),'p2_send_date':_('P2-datum'),'email_status':_('E-post (senaste)'),'stage':_('Status / nästa steg'),'fee':_('Påminnelseavgift')}
         widths={'invoice_no':110,'customer':170,'due_date':105,'amount':115,'remaining':120,'p1_date':105,'p2_send_date':125,'email_status':190,'stage':180,'fee':120}
         for c in cols:self.tree.heading(c,text=labels[c]);self.tree.column(c,width=widths[c],anchor='w')
@@ -1307,7 +1333,8 @@ class ReminderApp(tk.Tk):
                 p2_display=p2_due.isoformat() if p2_due else '—'
             else:p2_display='—'
             stage_display=(_('IGNORERAD')+' · ' if r['ignored'] else '')+_(stage)
-            self.tree.insert('', 'end',iid=str(r['id']),values=(r['invoice_no'],r['customer'],r['due_date'],money(float(r['amount'] or 0),r['currency']),money(remain,r['currency']),p1_display,p2_display,reminder_email_status(r),stage_display,fee))
+            color_tag=invoice_row_color_tag(r,stage)
+            self.tree.insert('', 'end',iid=str(r['id']),values=(r['invoice_no'],r['customer'],r['due_date'],money(float(r['amount'] or 0),r['currency']),money(remain,r['currency']),p1_display,p2_display,reminder_email_status(r),stage_display,fee),tags=(color_tag,) if color_tag else ())
         self.show_detail()
 
     def selected(self):
