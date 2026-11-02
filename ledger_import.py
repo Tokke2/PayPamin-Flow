@@ -309,7 +309,10 @@ def _plan(db, report: LedgerReport) -> LedgerPlan:
             key = _normalise_invoice_number(row["invoice_no"])
             if key in current or not row["ledger_first_seen"] or not row["ledger_last_seen"]:
                 continue
-            if row["ledger_last_seen"] >= report.list_date:
+            # Several complete exports can be replaced during the same day.
+            # Only a row seen in a future-dated list is incompatible here;
+            # older report dates are already rejected against ``previous``.
+            if row["ledger_last_seen"] > report.list_date:
                 continue
             if float(row["amount"] or 0) - float(row["paid"] or 0) <= 0.005:
                 continue

@@ -315,6 +315,34 @@ class LedgerDatabaseTests(unittest.TestCase):
         with self.app.connect() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0], 5)
 
+    def test_same_day_complete_list_marks_previously_seen_missing_rows_paid(self):
+        apply_ledger_import(self.app.DB_PATH, self.report)
+        self.save_existing("MANUAL-SAME-DAY", amount=900.0, paid=0.0)
+        remaining = tuple(entry for entry in self.report.entries if entry.invoice_no in {"1001", "1003"})
+        same_day = replace(
+            self.report, entries=remaining,
+            expected_count=2, expected_total=4000.0, actual_total=4000.0,
+        )
+
+        plan = plan_ledger_import(self.app.DB_PATH, same_day)
+
+        self.assertEqual(plan.previous_list_date, self.report.list_date)
+        self.assertEqual({row.invoice_no for row in plan.missing}, {"1002", "1004"})
+        result = apply_ledger_import(self.app.DB_PATH, same_day)
+        self.assertEqual((result.imported, result.existing, result.marked_paid), (0, 2, 2))
+        with self.app.connect() as db:
+            for invoice_no in ("1002", "1004"):
+                row = db.execute("SELECT amount,paid,ledger_first_seen,ledger_last_seen FROM invoices WHERE invoice_no=?", (invoice_no,)).fetchone()
+                self.assertEqual(row["paid"], row["amount"])
+                self.assertEqual(row["ledger_first_seen"], self.report.list_date)
+                self.assertEqual(row["ledger_last_seen"], self.report.list_date)
+            manual = db.execute("SELECT amount,paid FROM invoices WHERE invoice_no='MANUAL-SAME-DAY'").fetchone()
+            self.assertEqual((manual["amount"], manual["paid"]), (900.0, 0.0))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0], 5)
+
+        repeated = apply_ledger_import(self.app.DB_PATH, same_day)
+        self.assertEqual(repeated.marked_paid, 0)
+
     def test_unverified_non_sek_report_never_marks_missing_paid(self):
         apply_ledger_import(self.app.DB_PATH, self.report)
         second = replace(
