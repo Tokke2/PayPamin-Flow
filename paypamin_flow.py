@@ -1967,7 +1967,7 @@ class ReminderApp(tk.Tk):
         except Exception:logger.exception('Could not open export folder')
 
     def import_ledger_list(self):
-        """Import a complete customer ledger after validation and confirmation."""
+        """Import a complete ledger and reconcile paid invoices automatically after validation."""
         path=filedialog.askopenfilename(
             title=_('Välj reskontralista'),filetypes=[('PDF','*.pdf')],
         )
@@ -1988,20 +1988,6 @@ class ReminderApp(tk.Tk):
             messagebox.showerror(_('Reskontralistan kunde inte läsas'),_('Reskontralistan kunde inte läsas.\n\n{error}',error=exc),parent=self)
             return None
 
-        missing_lines=[f"{row.invoice_no} – {row.customer}" for row in plan.missing[:8]]
-        if len(plan.missing)>8:missing_lines.append(_('… och {count} till',count=len(plan.missing)-8))
-        missing_text='\n'.join(missing_lines) if missing_lines else '—'
-        verification=(_('Sidor, fakturaantal och totalsumma är verifierade.') if report.total_verified else
-                      _('Sidor och fakturaantal är verifierade. Icke-SEK-listor ändrar inte betalstatus automatiskt.'))
-        if not messagebox.askyesno(
-            _('Granska reskontralista'),
-            _('Lista per {date} med {count} fakturor från {pages} sidor.\n{verification}\n\nNya fakturor: {new}\nBefintliga som bevaras: {existing}\nTidigare sedda som saknas och markeras betalda: {paid}\n\n{missing}\n\nVill du importera listan?',
-              date=report.list_date,count=report.expected_count,pages=report.page_count,verification=verification,
-              new=plan.new_count,existing=plan.existing_count,paid=len(plan.missing),missing=missing_text),
-            parent=self,
-        ):
-            logger.info('Customer ledger import cancelled: %s',_ledger_log_json({'source':source_name,'list_date':report.list_date}))
-            return None
         try:
             result=apply_ledger_import(DB_PATH,report)
         except Exception as exc:

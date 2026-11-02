@@ -332,7 +332,7 @@ class LedgerUiTests(unittest.TestCase):
         question.assert_not_called()
         self.assertEqual(self.app.setting("ledger_last_friday_prompt"), "")
 
-    def test_import_requires_confirmation_and_refreshes_journal(self):
+    def test_validated_import_is_applied_without_confirmation_and_refreshes_journal(self):
         report = parse_ledger_pages(PAGES)
         plan = LedgerPlan(4, 0, (), "")
         result = LedgerResult(4, 0, 0)
@@ -342,31 +342,36 @@ class LedgerUiTests(unittest.TestCase):
         ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(
             self.app, "apply_ledger_import", return_value=result
         ) as apply_import, patch.object(self.app, "refresh_json_journal", return_value=True) as refresh_journal, patch.object(
-            self.app.messagebox, "askyesno", create=True, return_value=True
-        ), patch.object(self.app.messagebox, "showinfo", create=True):
+            self.app.messagebox, "askyesno", create=True
+        ) as confirm, patch.object(self.app.messagebox, "showinfo", create=True):
             returned = self.app.ReminderApp.import_ledger_list(fake)
         self.assertEqual(returned, result)
+        confirm.assert_not_called()
         apply_import.assert_called_once_with(self.app.DB_PATH, report)
         refresh_journal.assert_called_once_with(parent=fake)
         fake.refresh.assert_called_once_with()
 
-    def test_import_logs_every_row_and_paid_candidate_before_cancellation(self):
+    def test_import_logs_every_row_and_paid_candidate_before_automatic_apply(self):
         report = parse_ledger_pages(PAGES)
         candidate = MissingLedgerInvoice(77, "9999", "Saknad kund AB", 1234.0, "SEK")
         plan = LedgerPlan(3, 1, (candidate,), "2026-10-26")
+        result = LedgerResult(3, 1, 1)
         fake = SimpleNamespace(refresh=Mock())
         with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="/tmp/kundreskontra 2026-11-02.pdf"), patch.object(
             self.app, "read_ledger_report", return_value=report
         ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(
-            self.app, "apply_ledger_import"
-        ) as apply_import, patch.object(
-            self.app.messagebox, "askyesno", create=True, return_value=False
-        ), self.assertLogs(self.app.logger, level="INFO") as captured:
+            self.app, "apply_ledger_import", return_value=result
+        ) as apply_import, patch.object(self.app, "refresh_json_journal", return_value=True), patch.object(
+            self.app.messagebox, "askyesno", create=True
+        ) as confirm, patch.object(self.app.messagebox, "showinfo", create=True), self.assertLogs(
+            self.app.logger, level="INFO"
+        ) as captured:
             returned = self.app.ReminderApp.import_ledger_list(fake)
 
-        self.assertIsNone(returned)
-        apply_import.assert_not_called()
-        fake.refresh.assert_not_called()
+        self.assertEqual(returned, result)
+        confirm.assert_not_called()
+        apply_import.assert_called_once_with(self.app.DB_PATH, report)
+        fake.refresh.assert_called_once_with()
         messages = [record.getMessage() for record in captured.records]
 
         def payloads(prefix):
@@ -377,7 +382,6 @@ class LedgerUiTests(unittest.TestCase):
         rows = payloads("Customer ledger row: ")
         plans = payloads("Customer ledger import plan: ")
         candidates = payloads("Customer ledger paid candidate: ")
-        cancelled = payloads("Customer ledger import cancelled: ")
         self.assertEqual(selected[0]["source"], "kundreskontra 2026-11-02.pdf")
         self.assertEqual(summaries, [{
             "actual_total": "5000.00", "expected_count": 4,
@@ -400,7 +404,6 @@ class LedgerUiTests(unittest.TestCase):
             "invoice_id": 77, "invoice_no": "9999",
             "source": "kundreskontra 2026-11-02.pdf",
         }])
-        self.assertEqual(cancelled[0]["list_date"], "2026-11-02")
 
     def test_successful_import_log_contains_actual_database_result(self):
         report = parse_ledger_pages(PAGES)
@@ -412,8 +415,7 @@ class LedgerUiTests(unittest.TestCase):
         ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(
             self.app, "apply_ledger_import", return_value=result
         ), patch.object(self.app, "refresh_json_journal", return_value=True), patch.object(
-            self.app.messagebox, "askyesno", create=True, return_value=True
-        ), patch.object(self.app.messagebox, "showinfo", create=True), self.assertLogs(
+            self.app.messagebox, "showinfo", create=True), self.assertLogs(
             self.app.logger, level="INFO"
         ) as captured:
             self.app.ReminderApp.import_ledger_list(fake)
