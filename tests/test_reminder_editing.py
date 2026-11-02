@@ -7,6 +7,8 @@ from pathlib import Path
 from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, patch
 
+import fitz
+
 from test_database import load_headless_app
 
 
@@ -337,6 +339,41 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertIn("kunde inte läsas", str(raised.exception))
         with self.assertRaises(self.app.LogoEmbedError):
             self.app.load_svg_drawing(self.app.SVG_DIR / "missing.svg")
+
+    def write_note_pdf(self, row, note, path):
+        record = dict(row)
+        record["note"] = note
+        self.app.ReminderApp.write_pdf(
+            self.owner, path, record, "P1", 150.0, self.original_date,
+            1000.0, 1150.0, "", "",
+        )
+
+    def specification_y(self, path):
+        with fitz.open(path) as document:
+            matches = document[0].search_for("Specifikation")
+            self.assertTrue(matches)
+            return matches[0].y0
+
+    def pdf_text(self, path):
+        with fitz.open(path) as document:
+            return "\n".join(page.get_text() for page in document)
+
+    def test_empty_note_omits_reference_row_and_its_space(self):
+        row, _ = self.save_p1()
+        empty = self.workspace / "empty-note.pdf"
+        whitespace = self.workspace / "whitespace-note.pdf"
+        with_note = self.workspace / "present-note.pdf"
+        self.write_note_pdf(row, "", empty)
+        self.write_note_pdf(row, "  \n  ", whitespace)
+        self.write_note_pdf(row, "Konsulttjänst", with_note)
+
+        for path in (empty, whitespace):
+            text = self.pdf_text(path)
+            self.assertNotIn("Avser:", text)
+            self.assertNotIn("Överenskommen kostnad enligt fakturan.", text)
+        self.assertIn("Avser:", self.pdf_text(with_note))
+        self.assertIn("Konsulttjänst", self.pdf_text(with_note))
+        self.assertLess(self.specification_y(empty), self.specification_y(with_note))
 
     def test_write_letter_passes_snapshot_terms_to_pdf_writer(self):
         row, original_path = self.save_p1()

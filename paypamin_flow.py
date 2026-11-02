@@ -2642,7 +2642,9 @@ class ReminderApp(tk.Tk):
         deadline_text=format_long_date(deadline_date)
         story.append(Paragraph(f"<b>{escape(_('Betalning ska vara oss tillhanda senast {date}.',date=deadline_text))}</b>",styles['SmallText']))
         if level=='P2': story.append(Paragraph(escape(p2_warning),styles['AlertText']))
-        story.append(Paragraph(f"<b>{_('Avser:')}</b> "+escape(str(r['note'] or _('Överenskommen kostnad enligt fakturan.'))),styles['SmallText']))
+        note=str(r['note'] or '').strip()
+        if note:
+            story.append(Paragraph(f"<b>{_('Avser:')}</b> "+escape(note),styles['SmallText']))
         rows=[[Paragraph(f"<b>{_('Specifikation')}</b>",styles['SmallText']),Paragraph(f"<b>{_('Belopp')}</b>",styles['RightSmall'])],
               [Paragraph(_('Faktura {invoice_no} – obetalt belopp',invoice_no=escape(str(r['invoice_no']))),styles['SmallText']),Paragraph(money(remaining,currency),styles['RightSmall'])],
               [Paragraph(_('Påminnelseavgift (påminnelse 1)'),styles['SmallText']),Paragraph(money(fee,currency),styles['RightSmall'])]]
