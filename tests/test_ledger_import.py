@@ -64,6 +64,8 @@ class LedgerParserTests(unittest.TestCase):
         self.assertEqual(report.entries[0].customer, "Sensor Försäkring Norden AB")
         self.assertEqual(report.entries[0].customer_number, "123800680")
         self.assertEqual(report.entries[1].paid, 1500.0)
+        self.assertEqual(report.entries[0].note, "")
+        self.assertEqual(report.entries[1].note, "B 671")
         self.assertEqual(report.entries[2].due_date, "2026-10-27")
 
     def test_reads_text_based_pdf_without_ocr(self):
@@ -166,17 +168,55 @@ class LedgerDatabaseTests(unittest.TestCase):
         with self.app.connect() as db:
             preserved = db.execute("SELECT * FROM invoices WHERE id=?", (existing["id"],)).fetchone()
             new_row = db.execute("SELECT * FROM invoices WHERE invoice_no='1002'").fetchone()
+            empty_note_row = db.execute("SELECT note FROM invoices WHERE invoice_no='1003'").fetchone()
             self.assertEqual(preserved["amount"], 1234.0)
             self.assertEqual(preserved["paid"], 100.0)
             self.assertEqual(preserved["p1_date"], "2026-10-20")
             self.assertEqual(preserved["sent_count"], 1)
             self.assertEqual(preserved["template_vendor"], "Bevarad mall")
+            self.assertEqual(preserved["note"], "Bevarad text")
             self.assertEqual(preserved["ledger_first_seen"], "2026-11-02")
             self.assertEqual(preserved["ledger_last_seen"], "2026-11-02")
             self.assertEqual(new_row["amount"], 2000.0)
             self.assertEqual(new_row["paid"], 1500.0)
+            self.assertEqual(new_row["note"], "B 671")
+            self.assertEqual(empty_note_row["note"], "")
             self.assertEqual(new_row["source"], "")
             self.assertEqual(self.app.setting("ledger_last_list_date"), "2026-11-02")
+
+    def test_existing_invoice_note_is_not_overwritten_by_ledger_reference(self):
+        existing = self.save_existing("1002")
+
+        apply_ledger_import(self.app.DB_PATH, self.report)
+
+        with self.app.connect() as db:
+            preserved = db.execute("SELECT note FROM invoices WHERE id=?", (existing["id"],)).fetchone()
+            self.assertEqual(preserved["note"], "Bevarad text")
+
+    def test_imported_reference_is_printed_and_empty_reference_row_is_omitted(self):
+        import fitz
+
+        apply_ledger_import(self.app.DB_PATH, self.report)
+        with self.app.connect() as db:
+            rows = {
+                invoice_no: db.execute("SELECT * FROM invoices WHERE invoice_no=?", (invoice_no,)).fetchone()
+                for invoice_no in ("1002", "1003")
+            }
+
+        texts = {}
+        for invoice_no, row in rows.items():
+            path = self.workspace / f"ledger-{invoice_no}-reminder.pdf"
+            remaining = float(row["amount"]) - float(row["paid"])
+            self.app.ReminderApp.write_pdf(
+                SimpleNamespace(), path, row, "P1", 150.0, real_date(2026, 11, 2),
+                remaining, remaining + 150.0, "", "",
+            )
+            with fitz.open(path) as document:
+                texts[invoice_no] = "\n".join(page.get_text() for page in document)
+
+        self.assertIn("Avser:", texts["1002"])
+        self.assertIn("B 671", texts["1002"])
+        self.assertNotIn("Avser:", texts["1003"])
 
     def test_second_complete_list_marks_only_previously_seen_missing_rows_paid(self):
         apply_ledger_import(self.app.DB_PATH, self.report)

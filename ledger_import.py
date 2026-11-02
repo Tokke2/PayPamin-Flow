@@ -42,6 +42,7 @@ class LedgerEntry:
     currency: str
     amount: float
     balance: float
+    note: str = ""
 
     @property
     def paid(self) -> float:
@@ -161,6 +162,7 @@ def parse_ledger_pages(page_texts) -> LedgerReport:
                     currency=invoice.group("currency").upper(),
                     amount=float(_amount(invoice.group("amount"))),
                     balance=float(_amount(invoice.group("balance"))),
+                    note=(invoice.group("reference") or "").strip(),
                 ))
                 continue
             if _INVOICE_LIKE.match(line):
@@ -303,7 +305,7 @@ def apply_ledger_import(database_path, report: LedgerReport) -> LedgerResult:
                     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         entry.customer, entry.invoice_no, entry.invoice_date, entry.due_date, "",
-                        entry.amount, entry.currency, entry.paid, "", "", "", "", 1,
+                        entry.amount, entry.currency, entry.paid, "", "", "", entry.note, 1,
                         report.list_date, report.list_date, created,
                     ),
                 )
