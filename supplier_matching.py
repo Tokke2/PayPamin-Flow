@@ -1,8 +1,8 @@
-"""Conservative supplier-profile matching for imported invoice text.
+"""Conservative text and identifier matching for supplier profiles.
 
 Organisation and bankgiro numbers are matched only when they have an explicit
-label. Logo matching uses the logo filename and textual SVG title/text
-metadata; it deliberately does not claim to perform visual image recognition.
+label. This module handles names and textual SVG aliases; visual PDF/SVG logo
+comparison is isolated in :mod:`logo_matching`.
 """
 from __future__ import annotations
 

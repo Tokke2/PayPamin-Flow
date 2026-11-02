@@ -4,4 +4,5 @@ svglib>=1.5
 pytesseract>=0.3.10
 pdf2image>=1.17
 Pillow>=10.0
+opencv-python-headless>=4.8
 pystray>=0.19.5

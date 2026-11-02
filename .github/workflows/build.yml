@@ -55,7 +55,7 @@ jobs:
           fi
           exit "$status"
       - name: Verify desktop imports
-        run: python -c "import tkinter; import fitz; import reportlab; import PIL; import tray; import paypamin_flow"
+        run: python -c "import tkinter; import fitz; import reportlab; import PIL; import cv2; import tray; import paypamin_flow"
       - name: Package Python application, SHA-256 and build manifest
         if: runner.os == 'Linux'
         env:

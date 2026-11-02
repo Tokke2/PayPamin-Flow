@@ -36,6 +36,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "import_watcher.py",
     "invoice_parser.py",
     "ledger_import.py",
+    "logo_matching.py",
     "mail_compose.py",
     "paypamin_flow.py",
     "paypamin_flow_launcher.py",

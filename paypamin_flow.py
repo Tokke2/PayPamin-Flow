@@ -46,6 +46,7 @@ from ledger_import import (
     plan_ledger_import, read_ledger_report,
 )
 from mail_compose import default_thunderbird_executable, open_thunderbird_draft, windows_uses_thunderbird
+from logo_matching import match_pdf_logo
 from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders
 from supplier_matching import (
     extract_bankgiro_numbers,
@@ -1259,6 +1260,7 @@ class ReminderApp(tk.Tk):
         if importlib.util.find_spec('pdf2image') is None: missing.append('pdf2image')
         if importlib.util.find_spec('svglib') is None: missing.append('svglib')
         if importlib.util.find_spec('PIL') is None: missing.append('Pillow')
+        if importlib.util.find_spec('cv2') is None: missing.append('OpenCV')
         if importlib.util.find_spec('pystray') is None: missing.append('pystray')
         if not missing:
             self._python_addons_ready=True
@@ -1280,6 +1282,7 @@ class ReminderApp(tk.Tk):
             if 'pdf2image' in missing:packages.append('pdf2image')
             if 'svglib' in missing:packages.append('svglib>=1.5')
             if 'Pillow' in missing:packages.append('Pillow>=10.0')
+            if 'OpenCV' in missing:packages.append('opencv-python-headless>=4.8')
             if 'pystray' in missing:packages.append('pystray>=0.19')
             args=[sys.executable,'-m','pip','install']+packages
             flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
@@ -1593,14 +1596,23 @@ class ReminderApp(tk.Tk):
             logger.exception('Automatic reminder archive failed')
         if not self._quitting:self.after(REMINDER_ARCHIVE_INTERVAL_MS,self._run_scheduled_reminder_archive)
 
-    def guess_supplier(self,text):
-        matched=match_supplier(text,saved_supplier_profiles())
+    def guess_supplier(self,text,path=None,page_indexes=None):
+        profiles=saved_supplier_profiles()
+        matched=match_supplier(text,profiles)
         if matched:
             if not matched.vendor:
                 logger.warning('Supplier template match left unresolved: method=%s',matched.method)
                 return ''
             logger.info('Supplier template matched: vendor=%s method=%s score=%d',matched.vendor,matched.method,matched.score)
             return matched.vendor
+        if path:
+            matched=match_pdf_logo(path,page_indexes,profiles,SVG_DIR)
+            if matched:
+                if not matched.vendor:
+                    logger.warning('Visual supplier logo match left unresolved: method=%s',matched.method)
+                    return ''
+                logger.info('Supplier template matched visually: vendor=%s method=%s score=%d',matched.vendor,matched.method,matched.score)
+                return matched.vendor
         for line in [re.sub(r'\s+',' ',x).strip() for x in text.splitlines()[:18]]:
             if re.search(r'(?i)\b(?:AB|ASA|AS|HB)\s*$',line) and len(line)<60 and not re.search(r'faktura|datum|kundnr',line,re.I):
                 return line
@@ -1920,7 +1932,7 @@ class ReminderApp(tk.Tk):
                                 duplicates+=1
                                 logger.info('Duplicate import blocked: existing_id=%s file=%s pages=%s',duplicate['id'],path.name,','.join(str(index+1) for index in section.page_indexes))
                                 continue
-                            vendor=self.guess_supplier(section.text)
+                            vendor=self.guess_supplier(section.text,path=str(path) if len(candidates)==1 else None,page_indexes=section.page_indexes)
                             guess['template_vendor']=vendor
                             guess=self.apply_saved_zones(str(path),vendor,guess,page_indexes=section.page_indexes)
                             guess=self.preview_invoice(str(path),guess,vendor,page_indexes=section.page_indexes)
@@ -2061,7 +2073,7 @@ class ReminderApp(tk.Tk):
                         show_duplicate_invoice(duplicate,parent=self)
                         return
                     continue
-                vendor=self.guess_supplier(section.text)
+                vendor=self.guess_supplier(section.text,path=path if len(candidates)==1 else None,page_indexes=section.page_indexes)
                 guess['template_vendor']=vendor
                 guess=self.apply_saved_zones(path,vendor,guess,page_indexes=section.page_indexes)
                 logger.info('Invoice PDF section read: pages=%s extracted_chars=%s suggested_fields=%s',section.page_indexes,len(section.text),','.join(k for k,v in guess.items() if v))

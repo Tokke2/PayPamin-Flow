@@ -118,6 +118,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("tray.py", names)
                 self.assertIn("reminder_journal.py", names)
                 self.assertIn("supplier_matching.py", names)
+                self.assertIn("logo_matching.py", names)
                 self.assertIn("assets/paypamin_flow.ico", names)
                 self.assertIn("assets/paypamin_flow.icns", names)
                 self.assertTrue(all(is_python_package_file(name) for name in names))
@@ -131,6 +132,7 @@ class ReleasePackagingTests(unittest.TestCase):
             self.assertTrue((validated / "paypamin_flow.py").is_file())
             self.assertTrue((validated / "tray.py").is_file())
             self.assertTrue((validated / "supplier_matching.py").is_file())
+            self.assertTrue((validated / "logo_matching.py").is_file())
 
 
 if __name__ == "__main__":

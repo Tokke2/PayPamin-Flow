@@ -25,6 +25,12 @@ class MultiInvoiceImportUiTests(unittest.TestCase):
         self.addCleanup(cleanup)
 
     def fake_ui(self, previews):
+        guess_calls = []
+
+        def guess_supplier(text, **kwargs):
+            guess_calls.append(kwargs)
+            return ""
+
         def preview(path, guess, vendor="", page_indexes=None):
             previews.append(page_indexes)
             return guess
@@ -49,7 +55,8 @@ class MultiInvoiceImportUiTests(unittest.TestCase):
 
         return SimpleNamespace(
             _import_scan_running=False,
-            guess_supplier=lambda text: "",
+            guess_supplier=guess_supplier,
+            guess_calls=guess_calls,
             apply_saved_zones=lambda path, vendor, guess, page_indexes=None: guess,
             preview_invoice=preview,
             add_invoice=add_invoice,
@@ -73,6 +80,8 @@ class MultiInvoiceImportUiTests(unittest.TestCase):
             self.app.ReminderApp.import_invoice(fake)
 
         self.assertEqual(previews, [(0, 1), (2,)])
+        self.assertEqual([call["path"] for call in fake.guess_calls], [None, None])
+        self.assertEqual([call["page_indexes"] for call in fake.guess_calls], [(0, 1), (2,)])
         with self.app.connect() as db:
             rows = {row["invoice_no"]: row for row in db.execute("SELECT * FROM invoices")}
         self.assertEqual(set(rows), {"9001", "INV-9002"})
