@@ -165,6 +165,15 @@ class WindowIconTests(unittest.TestCase):
         fake._set_window_icon.assert_called_once_with(window)
         window.after_idle.assert_called_once()
 
+    def test_mapped_toplevel_reapplies_icon_before_action_finalization(self):
+        window = Mock()
+        fake = SimpleNamespace(_set_window_icon=Mock(), _finalize_window_actions=Mock())
+
+        self.app.ReminderApp._finalize_toplevel(fake, window)
+
+        self.assertEqual(fake._set_window_icon.call_args_list, [call(window)])
+        self.assertEqual(fake._finalize_window_actions.call_args_list, [call(window)])
+
     def test_secondary_window_receives_all_png_icons(self):
         icons = [Mock(), Mock()]
         window = Mock()
@@ -190,6 +199,7 @@ class WindowIconTests(unittest.TestCase):
             _configure_macos_dock_icon=Mock(),
             iconphoto=Mock(),
             iconbitmap=Mock(),
+            after_idle=Mock(),
         )
         with patch.object(self.app.sys, "platform", "win32"), patch.object(
             self.app, "ICON_DIR", ASSETS
@@ -197,10 +207,13 @@ class WindowIconTests(unittest.TestCase):
             self.app, "configure_windows_window_icon", return_value=True
         ) as native_icon:
             self.app.ReminderApp._configure_icons(fake)
+            fake.after_idle.call_args.args[0]()
 
         fake.iconphoto.assert_called_once()
         fake.iconbitmap.assert_called_once_with(default=str(ASSETS / "paypamin_flow.ico"))
-        native_icon.assert_called_once_with(fake)
+        self.assertEqual(native_icon.call_args_list[0], call(fake))
+        fake.after_idle.assert_called_once()
+        self.assertEqual(native_icon.call_args_list, [call(fake), call(fake)])
         self.assertEqual(len(fake._window_icons), 4)
         self.assertIsNotNone(fake._brand_logo)
         self.assertEqual(fake._action_icons, {})
@@ -269,12 +282,13 @@ class MacOSBrandingTests(unittest.TestCase):
 
 class WindowsBrandingTests(unittest.TestCase):
     @staticmethod
-    def native_ctypes(load_image, send_message, get_metrics):
+    def native_ctypes(load_image, send_message, get_metrics, get_ancestor):
         return SimpleNamespace(
             windll=SimpleNamespace(user32=SimpleNamespace(
                 LoadImageW=load_image,
                 SendMessageW=send_message,
                 GetSystemMetrics=get_metrics,
+                GetAncestor=get_ancestor,
             )),
             c_void_p="void-pointer",
             c_wchar_p="wide-string",
@@ -315,7 +329,8 @@ class WindowsBrandingTests(unittest.TestCase):
             send_message = Mock(return_value=0)
             sizes = {49: 16, 50: 16, 11: 32, 12: 32}
             get_metrics = Mock(side_effect=lambda index: sizes[index])
-            fake_ctypes = self.native_ctypes(load_image, send_message, get_metrics)
+            get_ancestor = Mock(return_value=9000)
+            fake_ctypes = self.native_ctypes(load_image, send_message, get_metrics, get_ancestor)
             window = Mock()
             window.winfo_id.return_value = 4242
             try:
@@ -331,11 +346,12 @@ class WindowsBrandingTests(unittest.TestCase):
                     call(None, icon_path, 1, 32, 32, 0x0010),
                 ])
                 self.assertEqual(send_message.call_args_list, [
-                    call(4242, 0x0080, 0, 1001),
-                    call(4242, 0x0080, 1, 1002),
-                    call(4242, 0x0080, 0, 1001),
-                    call(4242, 0x0080, 1, 1002),
+                    call(9000, 0x0080, 0, 1001),
+                    call(9000, 0x0080, 1, 1002),
+                    call(9000, 0x0080, 0, 1001),
+                    call(9000, 0x0080, 1, 1002),
                 ])
+                self.assertEqual(get_ancestor.call_args_list, [call(4242, 2), call(4242, 2)])
                 self.assertEqual(len(app._WINDOWS_NATIVE_ICONS), 2)
             finally:
                 for handler in app.logger.handlers[:]:
@@ -348,7 +364,8 @@ class WindowsBrandingTests(unittest.TestCase):
             load_image = Mock(return_value=0)
             send_message = Mock()
             get_metrics = Mock(return_value=32)
-            fake_ctypes = self.native_ctypes(load_image, send_message, get_metrics)
+            get_ancestor = Mock(return_value=9000)
+            fake_ctypes = self.native_ctypes(load_image, send_message, get_metrics, get_ancestor)
             try:
                 with patch.object(app.sys, "platform", "win32"), patch.dict(
                     sys.modules, {"ctypes": fake_ctypes}

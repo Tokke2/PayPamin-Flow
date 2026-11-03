@@ -4,7 +4,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import tray
 from test_database import load_headless_app
@@ -211,6 +211,21 @@ class WindowCloseTests(unittest.TestCase):
         with patch.object(self.app.messagebox, "askyesno", return_value=False, create=True):
             self.app.ReminderApp.hide_to_tray(fake)
         self.assertEqual(events, ["shown"])
+
+    def test_show_from_tray_reapplies_windows_taskbar_icon(self):
+        fake = SimpleNamespace(
+            deiconify=Mock(), lift=Mock(), focus_force=Mock(), after_idle=Mock(),
+            _maybe_show_ledger_reminder=Mock(),
+        )
+        with patch.object(self.app.sys, "platform", "win32"), patch.object(
+            self.app, "configure_windows_window_icon", return_value=True
+        ) as native_icon:
+            self.app.ReminderApp.show_from_tray(fake)
+            fake.after_idle.call_args_list[0].args[0]()
+
+        self.assertEqual(fake.after_idle.call_count, 2)
+        native_icon.assert_called_once_with(fake)
+        self.assertIs(fake.after_idle.call_args_list[1].args[0], fake._maybe_show_ledger_reminder)
 
     def test_tray_update_opens_window_and_starts_manual_check(self):
         events = []

@@ -215,6 +215,9 @@ def configure_windows_window_icon(window):
         send_message=user32.SendMessageW
         send_message.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
         send_message.restype=ctypes.c_ssize_t
+        get_ancestor=user32.GetAncestor
+        get_ancestor.argtypes=[ctypes.c_void_p,ctypes.c_uint]
+        get_ancestor.restype=ctypes.c_void_p
 
         def icon_handle(width,height):
             key=(str(icon_path.resolve()),width,height)
@@ -226,9 +229,13 @@ def configure_windows_window_icon(window):
 
         small=icon_handle(get_metrics(49),get_metrics(50))
         large=icon_handle(get_metrics(11),get_metrics(12))
-        hwnd=int(window.winfo_id())
+        source_hwnd=int(window.winfo_id())
+        # Tk's winfo_id() can be an inner child HWND. The taskbar, Alt-Tab
+        # and Task Manager app view read WM_SETICON from the top-level HWND.
+        hwnd=int(get_ancestor(source_hwnd,2) or source_hwnd)  # GA_ROOT
         send_message(hwnd,0x0080,0,small)
         send_message(hwnd,0x0080,1,large)
+        logger.info('Windows product icon applied: source_hwnd=%s root_hwnd=%s',source_hwnd,hwnd)
         return True
     except Exception as exc:
         logger.warning('Native Windows window icon could not be configured: %s',exc)
@@ -918,6 +925,8 @@ class ReminderApp(tk.Tk):
         self.deiconify();self.lift()
         try:self.focus_force()
         except tk.TclError:pass
+        if sys.platform.startswith('win'):
+            self.after_idle(lambda:configure_windows_window_icon(self))
         self.after_idle(self._maybe_show_ledger_reminder)
         log_activity('tray','open_window','completed')
 
@@ -1037,6 +1046,8 @@ class ReminderApp(tk.Tk):
             if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
                 self.iconbitmap(default=str(ICON_DIR/'paypamin_flow.ico'))
                 configure_windows_window_icon(self)
+                # Reapply after the native top-level window has been mapped.
+                self.after_idle(lambda:configure_windows_window_icon(self))
         except tk.TclError:
             logger.exception('Application icon could not be loaded')
 
@@ -1123,11 +1134,17 @@ class ReminderApp(tk.Tk):
         except tk.TclError:
             logger.exception('Secondary window icon could not be loaded')
 
+    def _finalize_toplevel(self,window):
+        # Repeat native branding after mapping so Windows cannot retain the
+        # generic pythonw.exe icon in the taskbar or window switcher.
+        self._set_window_icon(window)
+        self._finalize_window_actions(window)
+
     def _new_toplevel(self,title):
         window=tk.Toplevel(self)
         window.title(title);window.transient(self)
         self._set_window_icon(window)
-        window.after_idle(lambda: self._finalize_window_actions(window))
+        window.after_idle(lambda: self._finalize_toplevel(window))
         return window
 
     def _configure_macos_dock_icon(self):
