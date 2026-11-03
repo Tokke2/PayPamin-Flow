@@ -78,11 +78,12 @@ class UpdateCheckerTests(unittest.TestCase):
 
     def test_same_version_release_builds_use_release_identity(self):
         release = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0", release_id="200")
-        self.assertTrue(is_update_available(release, "0.6.0", "100"))
-        self.assertFalse(is_update_available(release, "0.6.0", "200"))
-        self.assertFalse(is_update_available(release, "0.6.0", ""))
-        self.assertTrue(is_update_available(release, "0.5.9", "100"))
-        self.assertFalse(is_update_available(release, "0.6.1", "100"))
+        legacy_build = {"current_release_commit": "", "current_package_fingerprint": ""}
+        self.assertTrue(is_update_available(release, "0.6.0", "100", **legacy_build))
+        self.assertFalse(is_update_available(release, "0.6.0", "200", **legacy_build))
+        self.assertFalse(is_update_available(release, "0.6.0", "", **legacy_build))
+        self.assertTrue(is_update_available(release, "0.5.9", "100", **legacy_build))
+        self.assertFalse(is_update_available(release, "0.6.1", "100", **legacy_build))
 
     def test_same_version_compares_commit_and_files_before_release_id(self):
         release = ReleaseInfo(
