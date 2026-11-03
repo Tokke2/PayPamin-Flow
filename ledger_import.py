@@ -262,6 +262,11 @@ def ensure_ledger_schema(db: sqlite3.Connection) -> None:
     for column in ("ledger_first_seen", "ledger_last_seen"):
         if column not in columns:
             db.execute(f"ALTER TABLE invoices ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+    if "paid_before_marking" not in columns:
+        db.execute("ALTER TABLE invoices ADD COLUMN paid_before_marking REAL")
+    for column in ("paid_marked_at", "paid_marked_source"):
+        if column not in columns:
+            db.execute(f"ALTER TABLE invoices ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
 
 def _previous_list_date(db) -> str:
@@ -408,9 +413,20 @@ def apply_ledger_import(database_path, report: LedgerReport) -> LedgerResult:
                     ),
                 )
             for update in plan.payment_updates:
-                db.execute("UPDATE invoices SET paid=? WHERE id=?", (update.new_paid, update.invoice_id))
+                if update.fully_paid:
+                    db.execute(
+                        """UPDATE invoices SET paid_before_marking=paid,paid_marked_at=?,
+                        paid_marked_source='ledger',paid=? WHERE id=?""",
+                        (created, update.new_paid, update.invoice_id),
+                    )
+                else:
+                    db.execute("UPDATE invoices SET paid=? WHERE id=?", (update.new_paid, update.invoice_id))
             for missing in plan.missing:
-                db.execute("UPDATE invoices SET paid=amount WHERE id=?", (missing.invoice_id,))
+                db.execute(
+                    """UPDATE invoices SET paid_before_marking=paid,paid_marked_at=?,
+                    paid_marked_source='ledger',paid=amount WHERE id=?""",
+                    (created, missing.invoice_id),
+                )
             db.execute(
                 "INSERT OR REPLACE INTO settings(key,value) VALUES('ledger_last_list_date',?)",
                 (report.list_date,),

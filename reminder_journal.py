@@ -34,7 +34,8 @@ MAX_JOURNAL_RECORDS = 100_000
 
 INVOICE_COLUMNS = (
     "customer", "invoice_no", "due_date", "invoice_date", "template_vendor",
-    "reviewed", "logo_file", "amount", "currency", "paid", "email", "source",
+    "reviewed", "logo_file", "amount", "currency", "paid", "paid_before_marking",
+    "paid_marked_at", "paid_marked_source", "email", "source",
     "source_hash", "ignored", "note", "p1_date", "p2_date", "sent_count",
     "p1_snapshot", "p2_snapshot", "p1_draft_date", "p2_draft_date",
     "p1_sent_date", "p2_sent_date", "ledger_first_seen", "ledger_last_seen", "created",
@@ -483,10 +484,16 @@ def _invoice_values(invoice, now):
     values["reviewed"] = int(values["reviewed"] if values["reviewed"] is not None else 1)
     values["ignored"] = int(values["ignored"] or 0)
     values["sent_count"] = int(values["sent_count"] or 0)
-    for column in ("p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date", "ledger_first_seen", "ledger_last_seen"):
+    for column in (
+        "p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date",
+        "ledger_first_seen", "ledger_last_seen", "paid_marked_at", "paid_marked_source",
+    ):
         values[column] = values[column] or ""
     values["amount"] = _float(values["amount"])
     values["paid"] = _float(values["paid"])
+    values["paid_before_marking"] = (
+        None if values["paid_before_marking"] is None else _float(values["paid_before_marking"])
+    )
     return values
 
 

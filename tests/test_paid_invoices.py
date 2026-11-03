@@ -57,8 +57,91 @@ class PaidInvoiceTests(unittest.TestCase):
         with self.app.connect() as db:
             saved = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
         self.assertEqual(saved["paid"], saved["amount"])
+        self.assertEqual(saved["paid_before_marking"], 0.0)
+        self.assertEqual(saved["paid_marked_source"], "manual")
+        self.assertTrue(saved["paid_marked_at"])
         self.assertEqual(self.app.next_stage(saved), "Avslutad")
         self.assertEqual(refreshed, [True])
+
+    def test_undo_paid_marking_restores_partial_payment_and_all_history(self):
+        row = self.save_invoice(paid=250.25)
+        with self.app.connect() as db:
+            db.execute(
+                """UPDATE invoices SET p1_date='2026-10-20',p2_date='2026-10-25',
+                sent_count=2,p1_draft_date='2026-10-20',p1_sent_date='2026-10-21',
+                ledger_first_seen='2026-10-01',ledger_last_seen='2026-10-15' WHERE id=?""",
+                (row["id"],),
+            )
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        owner = SimpleNamespace(selected=lambda: row, refresh=Mock(), current_filter_key="history")
+        owner.select_invoice_filter = lambda key: setattr(owner, "current_filter_key", key)
+        self.app.ReminderApp.mark_invoice_paid(owner)
+        with self.app.connect() as db:
+            paid_row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        owner.selected = lambda: paid_row
+
+        with patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm:
+            restored = self.app.ReminderApp.undo_invoice_paid(owner)
+
+        self.assertTrue(restored)
+        confirm.assert_called_once()
+        self.assertEqual(owner.current_filter_key, "current")
+        self.assertEqual(owner.refresh.call_count, 2)
+        with self.app.connect() as db:
+            saved = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertEqual(saved["paid"], 250.25)
+        self.assertIsNone(saved["paid_before_marking"])
+        self.assertEqual(saved["paid_marked_at"], "")
+        self.assertEqual(saved["paid_marked_source"], "")
+        self.assertNotEqual(self.app.next_stage(saved), "Avslutad")
+        self.assertEqual(
+            (saved["p1_date"], saved["p2_date"], saved["sent_count"]),
+            ("2026-10-20", "2026-10-25", 2),
+        )
+        self.assertEqual(
+            (saved["p1_draft_date"], saved["p1_sent_date"]),
+            ("2026-10-20", "2026-10-21"),
+        )
+        self.assertEqual(
+            (saved["ledger_first_seen"], saved["ledger_last_seen"]),
+            ("2026-10-01", "2026-10-15"),
+        )
+
+    def test_undo_paid_marking_can_be_declined_without_changes(self):
+        row = self.save_invoice(paid=1250.5)
+        with self.app.connect() as db:
+            db.execute(
+                """UPDATE invoices SET paid_before_marking=300,paid_marked_at='2026-11-01T10:00:00',
+                paid_marked_source='manual' WHERE id=?""",
+                (row["id"],),
+            )
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        owner = SimpleNamespace(selected=lambda: row, refresh=Mock())
+
+        with patch.object(self.app.messagebox, "askyesno", create=True, return_value=False):
+            restored = self.app.ReminderApp.undo_invoice_paid(owner)
+
+        self.assertFalse(restored)
+        owner.refresh.assert_not_called()
+        with self.app.connect() as db:
+            saved = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertEqual(saved["paid"], 1250.5)
+        self.assertEqual(saved["paid_before_marking"], 300.0)
+        self.assertEqual(saved["paid_marked_source"], "manual")
+
+    def test_undo_legacy_paid_marking_returns_row_with_zero_previous_payment(self):
+        row = self.save_invoice(paid=1250.5)
+        owner = SimpleNamespace(selected=lambda: row, refresh=Mock(), current_filter_key="history")
+        owner.select_invoice_filter = lambda key: setattr(owner, "current_filter_key", key)
+
+        with patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm:
+            self.assertTrue(self.app.ReminderApp.undo_invoice_paid(owner))
+
+        self.assertIn("Inget tidigare betalbelopp", confirm.call_args.args[1])
+        with self.app.connect() as db:
+            saved = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertEqual(saved["paid"], 0.0)
+        self.assertEqual(owner.current_filter_key, "current")
 
     def test_paid_invoice_leaves_active_list_but_remains_in_history(self):
         row = self.save_invoice(paid=1250.5)

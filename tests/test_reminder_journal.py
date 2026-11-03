@@ -199,6 +199,9 @@ class ReminderJournalTests(unittest.TestCase):
         payload = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
         invoice = next(item for item in payload["invoices"] if item["invoice_no"] == "JSON-PAID")
         self.assertEqual(invoice["paid"], invoice["amount"])
+        self.assertEqual(invoice["paid_before_marking"], 0.0)
+        self.assertEqual(invoice["paid_marked_source"], "manual")
+        self.assertTrue(invoice["paid_marked_at"])
 
     def test_json_refresh_failure_is_reported(self):
         with patch.object(self.app, "export_reminder_journal", side_effect=JournalError("synthetic write failure")), patch.object(
@@ -214,7 +217,7 @@ class ReminderJournalTests(unittest.TestCase):
         self.app.set_setting("fee", "175")
         self.app.set_setting("language", "en")
         with self.app.connect() as db:
-            db.execute("UPDATE invoices SET p1_date='2026-10-20',sent_count=1,p1_draft_date='2026-10-21',p2_draft_date='2026-10-25',p1_sent_date='2026-10-22',p2_sent_date='2026-10-26' WHERE id=?", (row["id"],))
+            db.execute("UPDATE invoices SET p1_date='2026-10-20',sent_count=1,p1_draft_date='2026-10-21',p2_draft_date='2026-10-25',p1_sent_date='2026-10-22',p2_sent_date='2026-10-26',paid=1250,paid_before_marking=125,paid_marked_at='2026-10-27T10:00:00',paid_marked_source='manual' WHERE id=?", (row["id"],))
             db.execute("INSERT INTO vendor_logos(vendor,logo_file,org_number,bankgiro_number) VALUES('supplier ab','supplier.svg','5561234567','12345678')")
             db.execute("INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES('supplier ab','amount',0,1,2,3,4,2)")
             db.execute("INSERT INTO pdf_zone_samples(vendor,field,page_index,x0,y0,x1,y1,created) VALUES('supplier ab','amount',0,1,2,3,4,'2026-10-20')")
@@ -243,6 +246,10 @@ class ReminderJournalTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT value FROM settings WHERE key='fee'").fetchone()[0], "175")
             self.assertEqual(db.execute("SELECT value FROM settings WHERE key='language'").fetchone()[0], "en")
             self.assertEqual(db.execute("SELECT p1_date,sent_count FROM invoices").fetchone(), ("2026-10-20", 1))
+            self.assertEqual(
+                db.execute("SELECT paid,paid_before_marking,paid_marked_at,paid_marked_source FROM invoices").fetchone(),
+                (1250.0, 125.0, "2026-10-27T10:00:00", "manual"),
+            )
             self.assertEqual(
                 db.execute("SELECT p1_draft_date,p2_draft_date,p1_sent_date,p2_sent_date FROM invoices").fetchone(),
                 ("2026-10-21", "2026-10-25", "2026-10-22", "2026-10-26"),
@@ -280,11 +287,14 @@ class ReminderJournalTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(row, ("journal.svg", "5561234567", "12345678"))
 
-    def test_pre_email_status_journal_restores_with_empty_status_dates(self):
+    def test_pre_status_journal_restores_with_empty_undo_and_email_fields(self):
         self.save_invoice("JSON-OLD-EMAIL-STATUS")
         self.app.refresh_json_journal()
         payload = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
-        for column in ("p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date"):
+        for column in (
+            "p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date",
+            "paid_before_marking", "paid_marked_at", "paid_marked_source",
+        ):
             payload["invoices"][0].pop(column)
         old_journal = self.workspace / "old-email-status.json"
         old_journal.write_text(json.dumps(payload), encoding="utf-8")
@@ -298,7 +308,11 @@ class ReminderJournalTests(unittest.TestCase):
             restored = db.execute(
                 "SELECT p1_draft_date,p2_draft_date,p1_sent_date,p2_sent_date FROM invoices"
             ).fetchone()
+            paid_undo = db.execute(
+                "SELECT paid_before_marking,paid_marked_at,paid_marked_source FROM invoices"
+            ).fetchone()
         self.assertEqual(restored, ("", "", "", ""))
+        self.assertEqual(paid_undo, (None, "", ""))
 
     def test_p2_snapshot_is_included_and_restored_after_reinstall(self):
         row = self.save_invoice("JSON-P2-SNAPSHOT")

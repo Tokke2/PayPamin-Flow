@@ -74,6 +74,11 @@ class DatabaseTests(unittest.TestCase):
                     self.assertIn("p2_snapshot", columns)
                     self.assertIn("ledger_first_seen", columns)
                     self.assertIn("ledger_last_seen", columns)
+                    self.assertTrue({"paid_before_marking", "paid_marked_at", "paid_marked_source"}.issubset(columns))
+                    paid_undo = db.execute(
+                        "SELECT paid_before_marking,paid_marked_at,paid_marked_source FROM invoices WHERE invoice_no='6258'"
+                    ).fetchone()
+                    self.assertEqual(tuple(paid_undo), (None, "", ""))
                     self.assertEqual(tuple(existing), (6563.0, 1000.0, "SEK", None, "", ""))
                     self.assertEqual(app.setting("ledger_friday_reminder"), "1")
                     self.assertEqual(app.setting("ledger_last_list_date"), "")

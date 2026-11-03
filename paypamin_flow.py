@@ -48,7 +48,7 @@ from ledger_import import (
 )
 from mail_compose import default_thunderbird_executable, open_thunderbird_draft, windows_uses_thunderbird
 from logo_matching import match_pdf_logo
-from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders
+from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders, customer_archive_path
 from supplier_matching import (
     SupplierMatch,
     extract_bankgiro_numbers,
@@ -325,6 +325,7 @@ def init_db():
             due_date TEXT NOT NULL, invoice_date TEXT DEFAULT '', template_vendor TEXT DEFAULT '', reviewed INTEGER NOT NULL DEFAULT 1,
             logo_file TEXT,
             amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'SEK', paid REAL NOT NULL DEFAULT 0,
+            paid_before_marking REAL, paid_marked_at TEXT NOT NULL DEFAULT '', paid_marked_source TEXT NOT NULL DEFAULT '',
             email TEXT DEFAULT '', source TEXT DEFAULT '', source_hash TEXT NOT NULL DEFAULT '', ignored INTEGER NOT NULL DEFAULT 0,
             note TEXT DEFAULT '', p1_date TEXT DEFAULT '', p2_date TEXT DEFAULT '', sent_count INTEGER NOT NULL DEFAULT 0,
             p1_snapshot TEXT DEFAULT '', p2_snapshot TEXT DEFAULT '',
@@ -336,6 +337,9 @@ def init_db():
         if 'reviewed' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 1")
         if 'logo_file' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN logo_file TEXT")
         if 'currency' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN currency TEXT NOT NULL DEFAULT 'SEK'")
+        if 'paid_before_marking' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN paid_before_marking REAL")
+        for column in ('paid_marked_at','paid_marked_source'):
+            if column not in existing:db.execute(f"ALTER TABLE invoices ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         if 'source_hash' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''")
         if 'p1_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p1_snapshot TEXT DEFAULT ''")
         if 'p2_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p2_snapshot TEXT DEFAULT ''")
@@ -933,7 +937,11 @@ def reminder_file_candidates(row,level):
     paths=[]
     for prefix in prefixes:
         path=reminder_file_path(base,level,original_date,prefix)
-        paths.extend((path,path.parent/ARCHIVE_FOLDER_NAME/path.name))
+        paths.extend((
+            path,
+            customer_archive_path(EXPORT_DIR,base['customer'],path.name),
+            path.parent/ARCHIVE_FOLDER_NAME/path.name,
+        ))
     return list(dict.fromkeys(paths))
 
 
@@ -962,7 +970,13 @@ def find_reminder_pdf(row,level):
             if not isinstance(payload,dict):continue
             pdf_name=Path(str(payload.get('pdf_name') or '')).name
             if pdf_name:
-                recorded.extend((EXPORT_DIR/pdf_name,EXPORT_DIR/ARCHIVE_FOLDER_NAME/pdf_name))
+                event_invoice=payload.get('invoice') if isinstance(payload.get('invoice'),dict) else {}
+                customer=event_invoice.get('customer') or row['customer']
+                recorded.extend((
+                    EXPORT_DIR/pdf_name,
+                    customer_archive_path(EXPORT_DIR,customer,pdf_name),
+                    EXPORT_DIR/ARCHIVE_FOLDER_NAME/pdf_name,
+                ))
         paths=recorded+paths
     return next((path for path in dict.fromkeys(paths) if path.is_file()),None)
 
@@ -998,6 +1012,29 @@ def record_reminder_draft_opened(row,level):
 def p1_file_missing(row):
     """A recorded P1 whose PDF no longer exists can be recreated safely."""
     return bool(row['p1_date']) and not any(path.is_file() for path in p1_file_candidates(row))
+
+
+def reminder_archive_customer_map():
+    """Map exact reminder basenames to their saved customer without guessing."""
+    customers={};ambiguous=set()
+    with connect() as db:rows=db.execute('SELECT * FROM invoices').fetchall()
+    for row in rows:
+        for level in ('P1','P2'):
+            if not row[level.lower()+'_date']:continue
+            snapshot_column=level.lower()+'_snapshot'
+            snapshot=read_reminder_snapshot(row[snapshot_column] if snapshot_column in row.keys() else '')
+            customer=str(snapshot['row'].get('customer') or row['customer']).strip() if snapshot else str(row['customer'] or '').strip()
+            if not customer:continue
+            for path in reminder_file_candidates(row,level):
+                name=path.name
+                if name in ambiguous:continue
+                existing=customers.get(name)
+                if existing is not None and existing.casefold()!=customer.casefold():
+                    ambiguous.add(name);customers.pop(name,None)
+                else:customers[name]=customer
+    if ambiguous:
+        logger.warning('Reminder archive skipped ambiguous customer mappings: files=%s',','.join(sorted(ambiguous)))
+    return customers
 
 
 class ReminderApp(tk.Tk):
@@ -1670,7 +1707,7 @@ class ReminderApp(tk.Tk):
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)
         primary_actions=[('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton')]
-        secondary_actions=[('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa samlad fellogg',self.open_log,'TButton')]
+        secondary_actions=[('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ångra betalmarkering',self.undo_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa samlad fellogg',self.open_log,'TButton')]
         for actions,padding in ((primary_actions,(22,5,22,4)),(secondary_actions,(22,0,22,12))):
             bar=ttk.Frame(self,padding=padding);bar.pack(fill='x')
             for key,cmd,style in actions:
@@ -1726,6 +1763,7 @@ class ReminderApp(tk.Tk):
         self.row_menu.add_command(label=_('Skapa e-postutkast'),command=self.create_reminder_email)
         self.row_menu.add_command(label=_('Markera e-post som skickad'),command=self.mark_reminder_email_sent)
         self.row_menu.add_command(label=_('Markera som betald'),command=self.mark_invoice_paid)
+        self.row_menu.add_command(label=_('Ångra betalmarkering'),command=self.undo_invoice_paid)
         self.row_menu.add_command(label=_('Ignorera / återaktivera'),command=self.toggle_ignore)
         self.row_menu.add_separator()
         self.row_menu.add_command(label=_('Ta bort fakturarad'),command=self.delete_invoice)
@@ -2008,9 +2046,9 @@ class ReminderApp(tk.Tk):
         """Archive old reminder PDFs without changing invoice or journal history."""
         if self._quitting:return
         try:
-            report=archive_old_reminders(EXPORT_DIR)
-            if report.archived or report.conflicts or report.errors:
-                logger.info('Reminder archive: archived=%d conflicts=%d errors=%d',report.archived,report.conflicts,report.errors)
+            report=archive_old_reminders(EXPORT_DIR,reminder_archive_customer_map())
+            if report.archived or report.conflicts or report.errors or report.unmatched:
+                logger.info('Reminder archive: archived=%d conflicts=%d errors=%d unmatched=%d',report.archived,report.conflicts,report.errors,report.unmatched)
         except Exception:
             logger.exception('Automatic reminder archive failed')
         if not self._quitting:self.after(REMINDER_ARCHIVE_INTERVAL_MS,self._run_scheduled_reminder_archive)
@@ -2730,16 +2768,70 @@ class ReminderApp(tk.Tk):
         return saved
 
     def mark_invoice_paid(self):
-        """Settle the selected invoice and suppress future matching PDF imports."""
+        """Settle the selected invoice while retaining one safe paid undo value."""
 
         r=self.selected()
-        if not r:return
+        if not r:return False
+        if is_fully_paid(r):
+            messagebox.showinfo(_('Redan betald'),_('Faktura {invoice_no} är redan markerad som betald.',invoice_no=r['invoice_no']),parent=self)
+            return False
+        marked_at=datetime.now().isoformat(timespec='seconds')
         with connect() as db:
-            db.execute('UPDATE invoices SET paid=amount WHERE id=?',(r['id'],))
+            db.execute(
+                "UPDATE invoices SET paid_before_marking=paid,paid_marked_at=?,paid_marked_source='manual',paid=amount WHERE id=?",
+                (marked_at,r['id']),
+            )
         refresh_json_journal(parent=self)
-        logger.info('Invoice marked as fully paid: id=%s',r['id'])
-        log_activity('invoice','marked_paid','completed',invoice_id=r['id'],invoice_no=r['invoice_no'])
+        logger.info('Invoice marked as fully paid: id=%s previous_paid=%s',r['id'],r['paid'])
+        log_activity('invoice','marked_paid','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],previous_paid=float(r['paid'] or 0),source='manual')
         self.refresh()
+        return True
+
+    def undo_invoice_paid(self):
+        """Restore a paid row to the active list without changing its history."""
+
+        r=self.selected()
+        if not r:return False
+        if not is_fully_paid(r):
+            messagebox.showinfo(_('Inte betalmarkerad'),_('Faktura {invoice_no} är inte helt betalmarkerad.',invoice_no=r['invoice_no']),parent=self)
+            return False
+        amount=float(r['amount'] or 0)
+        keys=r.keys();raw_previous=r['paid_before_marking'] if 'paid_before_marking' in keys else None
+        has_previous=raw_previous is not None and str(raw_previous)!=''
+        try:previous=float(raw_previous) if has_previous else 0.0
+        except (TypeError,ValueError):
+            messagebox.showerror(_('Betalbeloppet kan inte återställas'),_('Det sparade tidigare betalbeloppet är ogiltigt. Korrigera fakturan via Redigera faktura.'),parent=self)
+            return False
+        remaining=amount-previous
+        if previous<0 or remaining<=0.005:
+            messagebox.showerror(_('Betalbeloppet kan inte återställas'),_('Det tidigare betalbeloppet ger inget kvarstående belopp. Korrigera fakturan via Redigera faktura.'),parent=self)
+            return False
+        if has_previous:
+            restore_text=_('Redan betalt återställs till {paid} och kvar att betala blir {remaining}.',paid=money(previous,r['currency']),remaining=money(remaining,r['currency']))
+        else:
+            restore_text=_('Inget tidigare betalbelopp finns sparat för denna äldre betalmarkering. Redan betalt sätts till {paid} och kvar att betala blir {remaining}.',paid=money(0,r['currency']),remaining=money(remaining,r['currency']))
+        confirmed=messagebox.askyesno(
+            _('Ångra betalmarkering'),
+            _('Återför faktura {invoice_no} som obetald?\n\n{restore}\n\nP1/P2-, e-post- och reskontrahistorik ändras inte.',invoice_no=r['invoice_no'],restore=restore_text),
+            parent=self,
+        )
+        source=str(r['paid_marked_source'] or '') if 'paid_marked_source' in keys else ''
+        if not confirmed:
+            log_activity('invoice','paid_marking_undo_declined','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],source=source)
+            return False
+        with connect() as db:
+            db.execute(
+                "UPDATE invoices SET paid=?,paid_before_marking=NULL,paid_marked_at='',paid_marked_source='' WHERE id=?",
+                (previous,r['id']),
+            )
+        refresh_json_journal(parent=self)
+        logger.info('Invoice paid marking undone: id=%s restored_paid=%s source=%s',r['id'],previous,source or 'legacy')
+        log_activity('invoice','paid_marking_undone','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],restored_paid=previous,source=source or 'legacy')
+        selector=getattr(self,'select_invoice_filter',None)
+        if selector:selector('current')
+        else:self.current_filter_key='current'
+        self.refresh()
+        return True
 
     def toggle_ignore(self):
         r=self.selected()
