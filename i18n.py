@@ -442,8 +442,8 @@ _ENGLISH = {
     "Följande fakturor är redo för P1 eller P2:\n\n{reminders}\n\nVälj en faktura i listan och klicka på Skapa påminnelse.": "The following invoices are ready for P1 or P2:\n\n{reminders}\n\nSelect an invoice in the list and click Create reminder.",
     "… och {count} till": "… and {count} more",
     "Bevaka importmappen och importera nya PDF:er automatiskt": "Watch the import folder and import new PDFs automatically",
-    "Rensa gamla cachefiler automatiskt en gång per dygn": "Clear old cache files automatically once a day",
-    "Endast appens cachefiler äldre än 24 timmar. Fakturor och importmappen rörs inte.": "Only app cache files older than 24 hours. Invoices and the import folder are not touched.",
+    "Rensa appcache automatiskt en gång per dygn samt vid avslut": "Clear app cache automatically once a day and on exit",
+    "Under dagen endast cache äldre än 24 timmar; vid avslut all identifierad appcache.\nFakturor och importmappen rörs inte.": "During the day, only cache older than 24 hours; on exit, all identified app cache.\nInvoices and the import folder are not touched.",
 
     # Tray, menus and local backups
     "Arkiv": "File",

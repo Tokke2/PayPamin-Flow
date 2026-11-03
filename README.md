@@ -111,8 +111,8 @@ På Windows använder appen en egen app-identitet för aktivitetsfältets PayPam
 
 ## Smart cache-rensning och betalda fakturor
 
-- **Arkiv → Rensa cache nu** kör samma smarta filter som den automatiska rensningen. Automatisk rensning är aktiverad som standard och körs högst en gång per kalenderdygn; den kan stängas av under **Inställningar**.
-- Filtret tar endast bort appens egna Python-cachefiler och identifierbara tillfälliga uppdaterings-/backupkataloger som är äldre än 24 timmar. Det följer inte symlänkar och rör aldrig import-PDF:er, fakturadatabasen, inställningar, mallar, logotyper, exporter, loggar eller säkerhetskopior.
+- **Arkiv → Rensa cache nu** kör samma smarta filter som den automatiska rensningen. Automatisk rensning är aktiverad som standard och körs högst en gång per kalenderdygn samt vid **Avsluta helt**; den kan stängas av under **Inställningar**. Rensning vid avslut körs även om dagens automatiska rensning redan har körts, och ett cachefel hindrar inte appen från att stängas. Att stänga eller minimera fönstret till systemfältet är inte ett fullständigt avslut och utlöser därför ingen rensning.
+- Daglig och manuell rensning tar endast bort appens egna Python-cachefiler och identifierbara tillfälliga uppdaterings-/backupkataloger som är äldre än 24 timmar. Vid fullt avslut rensas alla identifierade poster i samma kategorier oavsett ålder. Filtret följer inte symlänkar och rör aldrig import-PDF:er, fakturadatabasen, inställningar, mallar, logotyper, exporter, loggar eller säkerhetskopior.
 - Markera en faktura och välj **Markera som betald** i knappraden eller högerklicksmenyn. Beloppet **Redan betalt** sätts till hela fakturabeloppet och statusen blir **Avslutad**. Betalda fakturor visas under **Visa → Alla** och kan korrigeras via **Redigera faktura** vid behov.
 - Om samma faktura ligger kvar i importmappen hoppas den över vid senare import via fakturanummer eller PDF-identitet. Automatisk import hoppar över betalda fakturor tyst; manuella sammanfattningar visar dem separat från vanliga dubbletter. Cache-rensningen tar inte bort PDF:en från importmappen.
 

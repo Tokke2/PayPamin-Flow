@@ -73,6 +73,28 @@ class SmartCacheCleanupTests(unittest.TestCase):
         self.assertGreater(report.freed_bytes, 0)
         self.assertEqual(report.errors, 0)
 
+    def test_zero_age_cleanup_removes_recent_known_cache_only(self):
+        bytecode = self.source / "__pycache__"
+        bytecode.mkdir()
+        recent_pyc = bytecode / "recent.pyc"
+        unknown = bytecode / "keep.txt"
+        recent_pyc.write_bytes(b"recent bytecode")
+        unknown.write_bytes(b"not a cache candidate")
+        self.age(recent_pyc, 1)
+        self.age(unknown, 1)
+        recent_update = self.temp_directory("paypamin-flow-python-update-recent", 1)
+        protected_pdf = self.source / "import" / "invoice.pdf"
+        protected_pdf.parent.mkdir()
+        protected_pdf.write_bytes(b"invoice")
+
+        report = clean_cache(self.source, temp_dir=self.temp, now=NOW, max_age_hours=0)
+
+        self.assertFalse(recent_pyc.exists())
+        self.assertFalse(recent_update.exists())
+        self.assertTrue(unknown.is_file())
+        self.assertTrue(protected_pdf.is_file())
+        self.assertEqual(report.errors, 0)
+
     def test_recent_file_protects_whole_temporary_work_directory(self):
         directory = self.temp_directory("paypamin-restore-active", 1)
         self.age(directory, 72)  # A new file must matter more than the parent timestamp.
@@ -151,6 +173,39 @@ class CacheCleanupUiTests(unittest.TestCase):
             self.app.ReminderApp._run_scheduled_cache_cleanup(fake)
         cleanup.assert_not_called()
         self.assertEqual(len(scheduled), 1)
+
+    def test_exit_cleanup_runs_even_after_the_daily_cleanup(self):
+        settings = {"cache_auto": "1", "cache_last_cleanup": self.app.date.today().isoformat()}
+        report = CleanupReport(removed_files=2, removed_directories=1, freed_bytes=100)
+        with (
+            patch.object(self.app, "setting", side_effect=lambda key: settings.get(key, "")),
+            patch.object(self.app, "set_setting", side_effect=lambda key, value: settings.__setitem__(key, value)) as save,
+            patch.object(self.app, "clean_cache", return_value=report) as cleanup,
+        ):
+            self.app.ReminderApp._run_exit_cache_cleanup(SimpleNamespace())
+        cleanup.assert_called_once_with(self.app.APP_FOLDER, max_age_hours=0)
+        save.assert_called_once_with("cache_last_cleanup", self.app.date.today().isoformat())
+
+    def test_exit_cleanup_respects_disabled_setting(self):
+        with (
+            patch.object(self.app, "setting", return_value="0"),
+            patch.object(self.app, "set_setting") as save,
+            patch.object(self.app, "clean_cache") as cleanup,
+        ):
+            self.app.ReminderApp._run_exit_cache_cleanup(SimpleNamespace())
+        cleanup.assert_not_called()
+        save.assert_not_called()
+
+    def test_exit_cleanup_failure_is_logged_without_raising(self):
+        with (
+            patch.object(self.app, "setting", return_value="1"),
+            patch.object(self.app, "clean_cache", side_effect=RuntimeError("cache is locked")),
+            patch.object(self.app, "set_setting") as save,
+            patch.object(self.app.logger, "exception") as error_log,
+        ):
+            self.app.ReminderApp._run_exit_cache_cleanup(SimpleNamespace())
+        save.assert_not_called()
+        error_log.assert_called_once_with("Exit smart cache cleanup failed")
 
     def test_manual_cleanup_reports_result_and_counts_as_daily_run(self):
         report = CleanupReport(removed_files=3, freed_bytes=2048)

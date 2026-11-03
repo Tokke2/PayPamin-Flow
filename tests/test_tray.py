@@ -242,11 +242,12 @@ class WindowCloseTests(unittest.TestCase):
         events = []
         fake = SimpleNamespace(
             _quitting=False,
+            _run_exit_cache_cleanup=lambda: events.append("cache cleaned"),
             tray=SimpleNamespace(stop=lambda: events.append("tray stopped")),
             destroy=lambda: events.append("destroyed"),
         )
         self.app.ReminderApp.quit_app(fake)
-        self.assertEqual(events, ["tray stopped", "destroyed"])
+        self.assertEqual(events, ["cache cleaned", "tray stopped", "destroyed"])
         self.assertTrue(fake._quitting)
 
 

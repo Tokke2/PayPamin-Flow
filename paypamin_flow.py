@@ -1013,6 +1013,7 @@ class ReminderApp(tk.Tk):
             messagebox.showinfo(_('Uppdatering pågår'),_('Vänta tills uppdateringen är klar. Appen startas sedan om automatiskt.'),parent=self)
             return
         self._quitting=True
+        self._run_exit_cache_cleanup()
         if self.tray is not None:self.tray.stop()
         logger.info('Application exited by user')
         log_activity('application','exit_requested','completed')
@@ -1872,6 +1873,19 @@ class ReminderApp(tk.Tk):
         except Exception as exc:
             logger.exception('Manual smart cache cleanup failed')
             messagebox.showerror(_('Kunde inte rensa cache'),str(exc),parent=self)
+
+    def _run_exit_cache_cleanup(self):
+        """Clean stale app caches on full exit without ever blocking the exit."""
+
+        try:
+            if setting('cache_auto')!='1':
+                logger.info('Smart cache cleanup on exit skipped: disabled')
+                return
+            report=clean_cache(APP_FOLDER,max_age_hours=0)
+            set_setting('cache_last_cleanup',date.today().isoformat())
+            logger.info('Exit smart cache cleanup: files=%d directories=%d bytes=%d errors=%d',report.removed_files,report.removed_directories,report.freed_bytes,report.errors)
+        except Exception:
+            logger.exception('Exit smart cache cleanup failed')
 
     def _run_scheduled_cache_cleanup(self):
         """Clean at most once per calendar day while the app is running."""
@@ -3022,8 +3036,8 @@ class ReminderApp(tk.Tk):
         ledger_reminder_var=tk.BooleanVar(value=setting('ledger_friday_reminder')=='1')
         ttk.Checkbutton(form,text=_('Påminn om att importera kundreskontralista varje fredag'),variable=ledger_reminder_var).grid(row=len(fields)+9,column=0,columnspan=3,sticky='w',pady=(10,3))
         automatic_cache_var=tk.BooleanVar(value=setting('cache_auto')=='1')
-        ttk.Checkbutton(form,text=_('Rensa gamla cachefiler automatiskt en gång per dygn'),variable=automatic_cache_var).grid(row=len(fields)+10,column=0,columnspan=3,sticky='w',pady=(10,3))
-        ttk.Label(form,text=_('Endast appens cachefiler äldre än 24 timmar. Fakturor och importmappen rörs inte.'),style='Sub.TLabel').grid(row=len(fields)+11,column=0,columnspan=3,sticky='w')
+        ttk.Checkbutton(form,text=_('Rensa appcache automatiskt en gång per dygn samt vid avslut'),variable=automatic_cache_var).grid(row=len(fields)+10,column=0,columnspan=3,sticky='w',pady=(10,3))
+        ttk.Label(form,text=_('Under dagen endast cache äldre än 24 timmar; vid avslut all identifierad appcache.\nFakturor och importmappen rörs inte.'),style='Sub.TLabel').grid(row=len(fields)+11,column=0,columnspan=3,sticky='w')
         def save():
             try:
                 for k,e in entries.items():
