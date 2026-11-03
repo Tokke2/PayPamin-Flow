@@ -153,6 +153,7 @@ def _log_ledger_plan(source,plan):
         'new':plan.new_count,'existing':plan.existing_count,
         'paid_candidates':len(plan.missing)+sum(update.fully_paid for update in plan.payment_updates),
         'payment_updates':len(plan.payment_updates),
+        'diagnostics':plan.diagnostics.__dict__,
     }))
     for candidate in plan.missing:
         logger.info('Customer ledger paid candidate: %s',_ledger_log_json({
@@ -168,6 +169,47 @@ def _log_ledger_plan(source,plan):
             'previous_paid':f'{update.previous_paid:.2f}',
             'new_paid':f'{update.new_paid:.2f}','fully_paid':update.fully_paid,
         }))
+
+
+def ledger_receipt_text(report,plan):
+    """Describe the actual applied plan, including an evidence-based zero result."""
+    lines=[]
+    fully_paid_updates=[update for update in plan.payment_updates if update.fully_paid]
+    partial_updates=[update for update in plan.payment_updates if not update.fully_paid]
+    if plan.missing or fully_paid_updates:
+        lines.append(_('Betalmarkerade fakturor'))
+        for candidate in plan.missing:
+            lines.append(_('{invoice} – {customer} – {amount} – Saknas i den nya kompletta listan',invoice=candidate.invoice_no,customer=candidate.customer,amount=money(candidate.amount,candidate.currency)))
+        for update in fully_paid_updates:
+            lines.append(_('{invoice} – {customer} – {previous} → {new} – Saldo 0 i listan',invoice=update.invoice_no,customer=update.customer,previous=money(update.previous_paid,update.currency),new=money(update.new_paid,update.currency)))
+    else:
+        lines.append(_('Inga fakturor betalmarkerades.'))
+        if not report.total_verified:
+            lines.append(_('Listans SEK-total är inte verifierad, därför ändrades ingen befintlig betalstatus automatiskt.'))
+        elif not plan.previous_list_date:
+            lines.append(_('Detta är den första reskontralistan. Den bygger listhistorik och använder inte frånvaro som bevis för betalning.'))
+        else:
+            lines.append(_('Ingen obetald faktura uppfyllde reglerna för automatisk betalmarkering.'))
+        diagnostics=plan.diagnostics
+        explanations=(
+            ('missing_already_paid','Saknade fakturor som redan var betalda: {count}'),
+            ('missing_without_history','Saknade fakturor utan tidigare listhistorik (oförändrade): {count}'),
+            ('missing_future_dated','Saknade fakturor med senare listdatum (skyddade): {count}'),
+            ('listed_already_paid','Fakturor i listan som redan var betalda: {count}'),
+            ('listed_unchanged','Fakturor i listan med oförändrat betalbelopp: {count}'),
+            ('listed_protected','Fakturor där belopp eller valuta skyddades mot osäker tolkning: {count}'),
+        )
+        added=False
+        for name,template in explanations:
+            count=getattr(diagnostics,name)
+            if count:lines.append(_(template,count=count));added=True
+        if report.total_verified and plan.previous_list_date and not added:
+            lines.append(_('Alla obetalda fakturor med tidigare listhistorik finns kvar i den valda listan.'))
+    if partial_updates:
+        lines.extend(('',_('Uppdaterade delbetalningar')))
+        for update in partial_updates:
+            lines.append(_('{invoice} – {customer} – {previous} → {new} – Belopp/Saldo i listan',invoice=update.invoice_no,customer=update.customer,previous=money(update.previous_paid,update.currency),new=money(update.new_paid,update.currency)))
+    return '\n'.join(lines)
 
 
 def configure_windows_app_identity():
@@ -874,6 +916,7 @@ class ReminderApp(tk.Tk):
         set_language(setting('language') or 'sv')
         super().__init__(); self.title(APP_NAME); self.geometry('1180x700'); self.minsize(940,560)
         self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
+        self.invoice_sort_column='due_date';self.invoice_sort_reverse=False
         self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._available_update=None;self._update_helper_process=None;self.update_button=None
         self.tray=None;self._quitting=False
         self._import_monitor=ImportFolderMonitor(IMPORT_DIR);self._import_scan_running=False;self._python_addons_ready=False
@@ -1414,6 +1457,20 @@ class ReminderApp(tk.Tk):
         log_activity('ui','invoice_filter_changed','completed',filter=key)
         self.refresh()
 
+    def on_invoice_search(self,*_args):
+        query=self.invoice_search_var.get().strip()
+        log_activity('ui','invoice_search_changed','completed',query=query)
+        self.refresh()
+
+    def sort_invoice_column(self,column):
+        previous=getattr(self,'invoice_sort_column','due_date')
+        if previous==column:
+            self.invoice_sort_reverse=not getattr(self,'invoice_sort_reverse',False)
+        else:
+            self.invoice_sort_column=column;self.invoice_sort_reverse=False
+        log_activity('ui','invoice_sort_changed','completed',column=self.invoice_sort_column,reverse=self.invoice_sort_reverse)
+        self.refresh()
+
     def check_python_addons(self):
         """Install required PDF packages in the background only when missing; no terminal window."""
         missing=[]
@@ -1539,7 +1596,11 @@ class ReminderApp(tk.Tk):
         self.view_tabs.pack(side='left')
         self.view_tabs.select(self.filter_tabs.get(self.current_filter_key,self.filter_tabs['current']))
         self.view_tabs.bind('<<NotebookTabChanged>>',self.on_filter_select)
-        ttk.Label(controls,text=_('Välj en rad för att förhandsgranska / hantera.')).pack(side='right')
+        self.invoice_search_var=tk.StringVar()
+        search=ttk.Entry(controls,textvariable=self.invoice_search_var,width=24)
+        search.pack(side='right')
+        ttk.Label(controls,text=_('Sök kund/faktura:')).pack(side='right',padx=(8,6))
+        self.invoice_search_var.trace_add('write',self.on_invoice_search)
         logo_bar=ttk.Frame(self,padding=(22,0,22,8));logo_bar.pack(fill='x')
         ttk.Label(logo_bar,text=_('Logotyp vid export:')).pack(side='left')
         self.logo_var=tk.StringVar(value=_('(Ingen logotyp)'))
@@ -1555,13 +1616,18 @@ class ReminderApp(tk.Tk):
         configure_invoice_row_colors(self.tree)
         labels={'invoice_no':_('Fakturanr'),'customer':_('Kund'),'due_date':_('Förfallodatum'),'amount':_('Fakturabelopp'),'remaining':_('Kvar att betala'),'p1_date':_('P1 skapades'),'p2_send_date':_('P2-datum'),'email_status':_('E-post (senaste)'),'stage':_('Status / nästa steg'),'fee':_('Påminnelseavgift')}
         widths={'invoice_no':110,'customer':170,'due_date':105,'amount':115,'remaining':120,'p1_date':105,'p2_send_date':125,'email_status':190,'stage':180,'fee':120}
-        for c in cols:self.tree.heading(c,text=labels[c]);self.tree.column(c,width=widths[c],anchor='w')
+        for c in cols:
+            self.tree.heading(c,text=labels[c],command=lambda column=c:self.sort_invoice_column(column))
+            self.tree.column(c,width=widths[c],anchor='w')
         self.tree.pack(side='top',fill='both',expand=True); sb=ttk.Scrollbar(wrap,orient='vertical',command=self.tree.yview);sb.pack(side='right',fill='y');xsb=ttk.Scrollbar(wrap,orient='horizontal',command=self.tree.xview);xsb.pack(side='bottom',fill='x');self.tree.configure(yscrollcommand=sb.set,xscrollcommand=xsb.set)
         self.tree.bind('<<TreeviewSelect>>',lambda e:self.show_detail())
         self.tree.bind('<Delete>',lambda e:self.delete_invoice())
         self.tree.bind('<Button-3>',self.show_row_context_menu)
         self.tree.bind('<Button-2>',self.show_row_context_menu)
         self.row_menu=tk.Menu(self,tearoff=0)
+        self.row_menu.add_command(label=_('Öppna original-PDF'),command=self.open_selected_invoice_pdf)
+        self.row_menu.add_command(label=_('Öppna senaste påminnelse-PDF'),command=self.open_selected_reminder_pdf)
+        self.row_menu.add_separator()
         self.row_menu.add_command(label=_('Redigera faktura'),command=self.edit_invoice)
         self.row_menu.add_command(label=_('Redigera kund'),command=self.edit_customer)
         self.row_menu.add_command(label=_('Redigera P1'),command=self.edit_p1)
@@ -1586,6 +1652,10 @@ class ReminderApp(tk.Tk):
         for i in self.tree.get_children():self.tree.delete(i)
         with connect() as db: rows=db.execute('SELECT * FROM invoices ORDER BY due_date').fetchall()
         flt=self.current_filter_key
+        search_var=getattr(self,'invoice_search_var',None)
+        query=' '.join(search_var.get().strip().casefold().split()) if search_var is not None else ''
+        fee_value=float(setting('fee') or 0)
+        visible=[]
         for r in rows:
             stage=next_stage(r)
             remain=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
@@ -1593,7 +1663,27 @@ class ReminderApp(tk.Tk):
             if flt=='history' and not (r['ignored'] or remain<=0.005):continue
             if flt=='ignored' and not r['ignored']:continue
             if flt=='debt_review' and stage!='Kronofogden – granska':continue
-            fee=money(float(setting('fee') or 0),r['currency']) if r['p1_date'] else '—'
+            if query:
+                searchable=' '.join(f"{r['invoice_no']} {r['customer']}".casefold().split())
+                if query not in searchable:continue
+            visible.append((r,stage,remain))
+        sort_column=getattr(self,'invoice_sort_column','due_date')
+        def sort_key(item):
+            r,stage,remain=item
+            if sort_column=='remaining':return remain
+            if sort_column=='amount':return float(r['amount'] or 0)
+            if sort_column=='fee':return fee_value if r['p1_date'] else -1.0
+            if sort_column=='invoice_no':
+                value=str(r['invoice_no'] or '')
+                return (0,int(value)) if value.isdigit() else (1,value.casefold())
+            if sort_column=='stage':return _(stage).casefold()
+            if sort_column=='email_status':return reminder_email_status(r).casefold()
+            if sort_column=='p2_send_date':return str(r['p2_date'] or '')
+            if sort_column in r.keys():return str(r[sort_column] or '').casefold()
+            return ''
+        visible.sort(key=sort_key,reverse=getattr(self,'invoice_sort_reverse',False))
+        for r,stage,remain in visible:
+            fee=money(fee_value,r['currency']) if r['p1_date'] else '—'
             p1_display=r['p1_date'] or '—'
             if r['ignored'] or remain<=0.005:p2_display='—'
             elif r['p2_date']:p2_display=_('Skapad {date}',date=r['p2_date'])
@@ -1610,6 +1700,39 @@ class ReminderApp(tk.Tk):
         sel=self.tree.selection()
         if not sel:messagebox.showinfo(_('Välj faktura'),_('Markera en faktura i listan först.'));return None
         with connect() as db:return db.execute('SELECT * FROM invoices WHERE id=?',(int(sel[0]),)).fetchone()
+
+    def open_selected_invoice_pdf(self):
+        row=self.selected()
+        if row is None:return None
+        path=Path(str(row['source'] or '')).expanduser()
+        if not str(row['source'] or '').strip() or not path.is_file():
+            messagebox.showinfo(_('Original-PDF saknas'),_('Det finns ingen sparad original-PDF för faktura {invoice}.',invoice=row['invoice_no']),parent=self)
+            return None
+        try:
+            open_path(path)
+            log_activity('invoice','original_pdf_opened','completed',invoice_id=row['id'],invoice_no=row['invoice_no'])
+            return path
+        except Exception as exc:
+            logger.exception('Could not open original invoice PDF: invoice=%s',row['id'])
+            messagebox.showerror(_('PDF kunde inte öppnas'),str(exc),parent=self)
+            return None
+
+    def open_selected_reminder_pdf(self):
+        row=self.selected()
+        if row is None:return None
+        level=latest_reminder_level(row)
+        path=find_reminder_pdf(row,level) if level else None
+        if path is None:
+            messagebox.showinfo(_('Påminnelse-PDF saknas'),_('Det finns ingen befintlig P1/P2-PDF för faktura {invoice}.',invoice=row['invoice_no']),parent=self)
+            return None
+        try:
+            open_path(path)
+            log_activity('invoice','reminder_pdf_opened','completed',invoice_id=row['id'],invoice_no=row['invoice_no'],level=level)
+            return path
+        except Exception as exc:
+            logger.exception('Could not open reminder PDF: invoice=%s level=%s',row['id'],level)
+            messagebox.showerror(_('PDF kunde inte öppnas'),str(exc),parent=self)
+            return None
 
     def show_detail(self):
         sel=self.tree.selection()
@@ -2158,6 +2281,37 @@ class ReminderApp(tk.Tk):
         try:open_path(EXPORT_DIR)
         except Exception:logger.exception('Could not open export folder')
 
+    def show_ledger_history(self,window):
+        search=getattr(self,'invoice_search_var',None)
+        if search is not None:search.set('')
+        self.select_invoice_filter('history')
+        self.refresh()
+        window.destroy()
+        log_activity('ledger','receipt_history_opened','completed')
+
+    def show_ledger_receipt(self,source_name,report,result,plan):
+        """Show every applied paid change and explain an unchanged import."""
+        actual_plan=result.plan or plan
+        win=self._new_toplevel(_('Reskontrakvitto'))
+        win.geometry('900x560');win.minsize(650,400)
+        form=ttk.Frame(win,padding=18);form.pack(fill='both',expand=True)
+        commit=APP_RELEASE_COMMIT[:12] or _('källkörning')
+        summary=_('Lista per {date} · {source}\nNya fakturor: {new} · Befintliga: {existing} · Betalmarkerade: {paid} · Uppdaterade betalbelopp: {updated}\nBuild: {commit}',date=report.list_date,source=source_name,new=result.imported,existing=result.existing,paid=result.marked_paid,updated=result.payment_updates,commit=commit)
+        ttk.Label(form,text=summary,style='Sub.TLabel',justify='left',wraplength=840).pack(anchor='w',pady=(0,12))
+        body=ttk.Frame(form);body.pack(fill='both',expand=True)
+        text=tk.Text(body,wrap='word',font=(self.font_family,10),background='white',foreground='#1f2a3d',relief='solid',borderwidth=1,padx=12,pady=12)
+        scroll=ttk.Scrollbar(body,orient='vertical',command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side='left',fill='both',expand=True);scroll.pack(side='right',fill='y')
+        text.insert('1.0',ledger_receipt_text(report,actual_plan));text.configure(state='disabled')
+        buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(12,0))
+        ttk.Button(buttons,text=_('Visa historik / arkiverade / betalda'),command=lambda:self.show_ledger_history(win),style='Accent.TButton').pack(side='left')
+        ttk.Button(buttons,text=_('Stäng'),command=win.destroy).pack(side='right')
+        self._finalize_window_actions(form)
+        win.grab_set()
+        log_activity('ledger','receipt_shown','completed',source=source_name,paid=result.marked_paid,payment_updates=result.payment_updates,commit=commit)
+        return win
+
     def import_ledger_list(self):
         """Import a complete ledger and reconcile paid invoices automatically after validation."""
         path=filedialog.askopenfilename(
@@ -2196,11 +2350,7 @@ class ReminderApp(tk.Tk):
         self.select_invoice_filter('current')
         log_activity('ledger','active_invoice_list_restored','completed',previous_filter=previous_filter,marked_paid=result.marked_paid)
         self.refresh()
-        messagebox.showinfo(
-            _('Reskontralistan är importerad'),
-            _('Nya fakturor: {new}\nBefintliga som bevarades: {existing}\nMarkerade som betalda: {paid}\nBefintliga med uppdaterat betalbelopp: {updated}',new=result.imported,existing=result.existing,paid=result.marked_paid,updated=result.payment_updates),
-            parent=self,
-        )
+        self.show_ledger_receipt(source_name,report,result,plan)
         return result
 
     def _maybe_show_ledger_reminder(self):

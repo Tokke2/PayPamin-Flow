@@ -1,9 +1,10 @@
 import json
 import tempfile
 import unittest
+from datetime import date as real_date
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call, patch
 
 from test_database import load_headless_app
 
@@ -73,9 +74,13 @@ class InvoiceViewTests(unittest.TestCase):
             )
             return db.execute("SELECT * FROM invoices WHERE invoice_no=?", (invoice_no,)).fetchone()
 
-    def render(self, filter_key):
+    def render(self, filter_key, *, query="", sort_column="due_date", reverse=False):
         tree = FakeTree()
-        fake = SimpleNamespace(tree=tree, current_filter_key=filter_key, show_detail=Mock())
+        fake = SimpleNamespace(
+            tree=tree, current_filter_key=filter_key, show_detail=Mock(),
+            invoice_search_var=SimpleNamespace(get=lambda: query),
+            invoice_sort_column=sort_column, invoice_sort_reverse=reverse,
+        )
         self.app.ReminderApp.refresh(fake)
         return {values[0]: values for values in tree.rows.values()}
 
@@ -102,6 +107,65 @@ class InvoiceViewTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT paid FROM invoices WHERE id=?", (paid["id"],)).fetchone()[0], 1000.0)
             self.assertEqual(db.execute("SELECT paid FROM invoices WHERE id=?", (active["id"],)).fetchone()[0], 0.0)
             self.assertEqual(db.execute("SELECT ignored FROM invoices WHERE id=?", (archived["id"],)).fetchone()[0], 1)
+
+    def test_history_search_matches_customer_or_invoice_without_editing_rows(self):
+        self.save_invoice("PAID-SEARCH", paid=1000.0)
+        self.save_invoice("OTHER-PAID", paid=1000.0)
+
+        by_customer = self.render("history", query="  kund   paid-search ")
+        by_invoice = self.render("history", query="other-paid")
+        no_match = self.render("history", query="saknas")
+
+        self.assertEqual(set(by_customer), {"PAID-SEARCH"})
+        self.assertEqual(set(by_invoice), {"OTHER-PAID"})
+        self.assertEqual(no_match, {})
+        with self.app.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0], 2)
+            self.assertEqual(db.execute("SELECT SUM(paid) FROM invoices").fetchone()[0], 2000.0)
+
+    def test_sort_is_numeric_for_invoice_numbers_and_reversible_for_amounts(self):
+        self.save_invoice("10", paid=1000.0, amount=1000.0)
+        self.save_invoice("2", paid=300.0, amount=300.0)
+        self.save_invoice("1", paid=500.0, amount=500.0)
+
+        by_number = self.render("history", sort_column="invoice_no")
+        by_amount = self.render("history", sort_column="amount")
+        by_amount_desc = self.render("history", sort_column="amount", reverse=True)
+
+        self.assertEqual(list(by_number), ["1", "2", "10"])
+        self.assertEqual(list(by_amount), ["2", "1", "10"])
+        self.assertEqual(list(by_amount_desc), ["10", "1", "2"])
+
+    def test_sort_heading_action_toggles_direction_and_refreshes(self):
+        fake = SimpleNamespace(
+            invoice_sort_column="amount", invoice_sort_reverse=False, refresh=Mock(),
+        )
+        self.app.ReminderApp.sort_invoice_column(fake, "amount")
+        self.assertEqual((fake.invoice_sort_column, fake.invoice_sort_reverse), ("amount", True))
+        self.app.ReminderApp.sort_invoice_column(fake, "customer")
+        self.assertEqual((fake.invoice_sort_column, fake.invoice_sort_reverse), ("customer", False))
+        self.assertEqual(fake.refresh.call_count, 2)
+
+    def test_open_original_and_latest_archived_reminder_pdf(self):
+        row = self.save_invoice("PDF-HISTORY", paid=1000.0)
+        original = self.workspace / "original-invoice.pdf"
+        original.write_bytes(b"original invoice")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET source=? WHERE id=?", (str(original), row["id"]))
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        p1 = self.app.reminder_file_path(row, "P1", real_date(2026, 11, 6))
+        p1.write_bytes(b"P1")
+        p2 = self.app.reminder_file_path(row, "P2", real_date(2026, 11, 11))
+        archived_p2 = p2.parent / self.app.ARCHIVE_FOLDER_NAME / p2.name
+        archived_p2.parent.mkdir(parents=True, exist_ok=True)
+        archived_p2.write_bytes(b"archived P2")
+        fake = SimpleNamespace(selected=lambda: row)
+
+        with patch.object(self.app, "open_path") as open_pdf:
+            self.assertEqual(self.app.ReminderApp.open_selected_invoice_pdf(fake), original)
+            self.assertEqual(self.app.ReminderApp.open_selected_reminder_pdf(fake), archived_p2)
+
+        self.assertEqual(open_pdf.call_args_list, [call(original), call(archived_p2)])
 
     def test_select_invoice_filter_selects_real_tab_and_defaults_safely(self):
         tabs = FakeNotebook("tab-history")

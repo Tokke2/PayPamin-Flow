@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -85,12 +85,24 @@ class LedgerPaymentUpdate:
 
 
 @dataclass(frozen=True)
+class LedgerDiagnostics:
+    """Explain unchanged rows without weakening any reconciliation safeguard."""
+    missing_already_paid: int = 0
+    missing_without_history: int = 0
+    missing_future_dated: int = 0
+    listed_already_paid: int = 0
+    listed_unchanged: int = 0
+    listed_protected: int = 0
+
+
+@dataclass(frozen=True)
 class LedgerPlan:
     new_count: int
     existing_count: int
     missing: tuple[MissingLedgerInvoice, ...]
     previous_list_date: str
     payment_updates: tuple[LedgerPaymentUpdate, ...] = ()
+    diagnostics: LedgerDiagnostics = field(default_factory=LedgerDiagnostics)
 
 
 @dataclass(frozen=True)
@@ -99,6 +111,7 @@ class LedgerResult:
     existing: int
     marked_paid: int
     payment_updates: int = 0
+    plan: LedgerPlan | None = None
 
 
 def _amount(value: str) -> Decimal:
@@ -298,32 +311,61 @@ def _plan(db, report: LedgerReport) -> LedgerPlan:
     existing_count = sum(1 for entry in report.entries if _normalise_invoice_number(entry.invoice_no) in by_number)
     missing = []
     payment_updates = []
+    diagnostics = LedgerDiagnostics()
     if report.total_verified:
+        listed_already_paid = listed_unchanged = listed_protected = 0
         for entry in report.entries:
             row = by_number.get(_normalise_invoice_number(entry.invoice_no))
-            if row is not None:
-                update = _present_payment_update(row, entry)
-                if update is not None:
-                    payment_updates.append(update)
+            if row is None:
+                continue
+            update = _present_payment_update(row, entry)
+            if update is not None:
+                payment_updates.append(update)
+                continue
+            amount = float(row["amount"] or 0)
+            previous_paid = float(row["paid"] or 0)
+            currency = str(row["currency"] or "SEK").strip().upper()
+            if amount - previous_paid <= 0.005:
+                listed_already_paid += 1
+            elif currency != entry.currency:
+                listed_protected += 1
+            elif entry.balance > 0.005 and abs(amount - entry.amount) > 0.005:
+                listed_protected += 1
+            else:
+                listed_unchanged += 1
+        missing_already_paid = missing_without_history = missing_future_dated = 0
         for row in rows:
             key = _normalise_invoice_number(row["invoice_no"])
-            if key in current or not row["ledger_first_seen"] or not row["ledger_last_seen"]:
+            if key in current:
+                continue
+            if not row["ledger_first_seen"] or not row["ledger_last_seen"]:
+                missing_without_history += 1
                 continue
             # Several complete exports can be replaced during the same day.
             # Only a row seen in a future-dated list is incompatible here;
             # older report dates are already rejected against ``previous``.
             if row["ledger_last_seen"] > report.list_date:
+                missing_future_dated += 1
                 continue
             if float(row["amount"] or 0) - float(row["paid"] or 0) <= 0.005:
+                missing_already_paid += 1
                 continue
             missing.append(MissingLedgerInvoice(
                 invoice_id=int(row["id"]), invoice_no=str(row["invoice_no"]),
                 customer=str(row["customer"]), amount=float(row["amount"] or 0),
                 currency=str(row["currency"] or "SEK"),
             ))
+        diagnostics = LedgerDiagnostics(
+            missing_already_paid=missing_already_paid,
+            missing_without_history=missing_without_history,
+            missing_future_dated=missing_future_dated,
+            listed_already_paid=listed_already_paid,
+            listed_unchanged=listed_unchanged,
+            listed_protected=listed_protected,
+        )
     return LedgerPlan(
         len(report.entries) - existing_count, existing_count, tuple(missing), previous,
-        tuple(payment_updates),
+        tuple(payment_updates), diagnostics,
     )
 
 
@@ -376,7 +418,7 @@ def apply_ledger_import(database_path, report: LedgerReport) -> LedgerResult:
             db.commit()
             marked_paid = len(plan.missing) + sum(update.fully_paid for update in plan.payment_updates)
             return LedgerResult(
-                plan.new_count, plan.existing_count, marked_paid, len(plan.payment_updates),
+                plan.new_count, plan.existing_count, marked_paid, len(plan.payment_updates), plan,
             )
         except Exception:
             db.rollback()

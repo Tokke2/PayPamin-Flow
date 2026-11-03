@@ -232,6 +232,13 @@ class LedgerDatabaseTests(unittest.TestCase):
 
         repeated = apply_ledger_import(self.app.DB_PATH, report)
         self.assertEqual((repeated.marked_paid, repeated.payment_updates), (0, 0))
+        receipt = self.app.ledger_receipt_text(report, result.plan)
+        self.assertIn("Betalmarkerade fakturor", receipt)
+        self.assertIn("1001", receipt)
+        self.assertIn("Saldo 0 i listan", receipt)
+        self.assertIn("Uppdaterade delbetalningar", receipt)
+        self.assertIn("1002", receipt)
+        self.assertIn("Belopp/Saldo i listan", receipt)
 
     def test_listed_partial_payment_with_amount_mismatch_is_not_guessed(self):
         self.save_existing("1002", amount=2500.0, paid=100.0)
@@ -330,6 +337,11 @@ class LedgerDatabaseTests(unittest.TestCase):
         self.assertEqual({row.invoice_no for row in plan.missing}, {"1002", "1004"})
         result = apply_ledger_import(self.app.DB_PATH, same_day)
         self.assertEqual((result.imported, result.existing, result.marked_paid), (0, 2, 2))
+        receipt = self.app.ledger_receipt_text(same_day, result.plan)
+        self.assertIn("Betalmarkerade fakturor", receipt)
+        for invoice_no in ("1002", "1004"):
+            self.assertIn(invoice_no, receipt)
+        self.assertIn("Saknas i den nya kompletta listan", receipt)
         with self.app.connect() as db:
             for invoice_no in ("1002", "1004"):
                 row = db.execute("SELECT amount,paid,ledger_first_seen,ledger_last_seen FROM invoices WHERE invoice_no=?", (invoice_no,)).fetchone()
@@ -343,6 +355,21 @@ class LedgerDatabaseTests(unittest.TestCase):
         repeated = apply_ledger_import(self.app.DB_PATH, same_day)
         self.assertEqual(repeated.marked_paid, 0)
 
+    def test_receipt_explains_first_and_repeated_import_without_paid_changes(self):
+        self.save_existing("MANUAL-RECEIPT", amount=900.0, paid=0.0)
+        first = apply_ledger_import(self.app.DB_PATH, self.report)
+        first_receipt = self.app.ledger_receipt_text(self.report, first.plan)
+        self.assertIn("Inga fakturor betalmarkerades", first_receipt)
+        self.assertIn("första reskontralistan", first_receipt)
+        self.assertIn("utan tidigare listhistorik", first_receipt)
+
+        repeated = apply_ledger_import(self.app.DB_PATH, self.report)
+        self.assertEqual((repeated.marked_paid, repeated.payment_updates), (0, 0))
+        repeated_receipt = self.app.ledger_receipt_text(self.report, repeated.plan)
+        self.assertIn("Ingen obetald faktura uppfyllde reglerna", repeated_receipt)
+        self.assertIn("oförändrat betalbelopp: 4", repeated_receipt)
+        self.assertIn("utan tidigare listhistorik (oförändrade): 1", repeated_receipt)
+
     def test_unverified_non_sek_report_never_marks_missing_paid(self):
         apply_ledger_import(self.app.DB_PATH, self.report)
         second = replace(
@@ -352,6 +379,8 @@ class LedgerDatabaseTests(unittest.TestCase):
         )
         plan = plan_ledger_import(self.app.DB_PATH, second)
         self.assertEqual(plan.missing, ())
+        receipt = self.app.ledger_receipt_text(second, plan)
+        self.assertIn("SEK-total är inte verifierad", receipt)
 
     def test_older_report_is_rejected(self):
         apply_ledger_import(self.app.DB_PATH, self.report)
@@ -392,6 +421,17 @@ class LedgerUiTests(unittest.TestCase):
             self.temporary.cleanup()
 
         self.addCleanup(cleanup)
+
+    def test_receipt_button_opens_history_without_changing_import_result(self):
+        window = Mock()
+        fake = SimpleNamespace(select_invoice_filter=Mock(), refresh=Mock(), invoice_search_var=Mock())
+
+        self.app.ReminderApp.show_ledger_history(fake, window)
+
+        fake.invoice_search_var.set.assert_called_once_with("")
+        fake.select_invoice_filter.assert_called_once_with("history")
+        fake.refresh.assert_called_once_with()
+        window.destroy.assert_called_once_with()
 
     def test_friday_reminder_offers_import_once_and_keeps_schedule(self):
         class Friday:
@@ -436,6 +476,7 @@ class LedgerUiTests(unittest.TestCase):
         result = LedgerResult(4, 0, 0)
         fake = SimpleNamespace(
             refresh=Mock(), current_filter_key="all", select_invoice_filter=Mock(),
+            show_ledger_receipt=Mock(),
         )
         with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="ledger.pdf"), patch.object(
             self.app, "read_ledger_report", return_value=report
@@ -451,6 +492,7 @@ class LedgerUiTests(unittest.TestCase):
         refresh_journal.assert_called_once_with(parent=fake)
         fake.refresh.assert_called_once_with()
         fake.select_invoice_filter.assert_called_once_with("current")
+        fake.show_ledger_receipt.assert_called_once_with("ledger.pdf", report, result, plan)
 
     def test_import_logs_every_row_and_paid_candidate_before_automatic_apply(self):
         report = parse_ledger_pages(PAGES)
@@ -458,7 +500,7 @@ class LedgerUiTests(unittest.TestCase):
         payment = LedgerPaymentUpdate(78, "1002", "Listkund AB", 2000.0, "SEK", 0.0, 1500.0)
         plan = LedgerPlan(3, 1, (candidate,), "2026-10-26", (payment,))
         result = LedgerResult(3, 1, 1, 1)
-        fake = SimpleNamespace(refresh=Mock(), select_invoice_filter=Mock())
+        fake = SimpleNamespace(refresh=Mock(), select_invoice_filter=Mock(), show_ledger_receipt=Mock())
         with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="/tmp/kundreskontra 2026-11-02.pdf"), patch.object(
             self.app, "read_ledger_report", return_value=report
         ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(
@@ -519,7 +561,7 @@ class LedgerUiTests(unittest.TestCase):
         report = parse_ledger_pages(PAGES)
         plan = LedgerPlan(4, 0, (), "")
         result = LedgerResult(4, 0, 0)
-        fake = SimpleNamespace(refresh=Mock(), select_invoice_filter=Mock())
+        fake = SimpleNamespace(refresh=Mock(), select_invoice_filter=Mock(), show_ledger_receipt=Mock())
         with patch.object(self.app.filedialog, "askopenfilename", create=True, return_value="ledger.pdf"), patch.object(
             self.app, "read_ledger_report", return_value=report
         ), patch.object(self.app, "plan_ledger_import", return_value=plan), patch.object(
