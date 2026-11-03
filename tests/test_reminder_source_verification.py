@@ -67,9 +67,24 @@ class ReminderSourceVerificationTests(unittest.TestCase):
             refresh=Mock(),
             logo_var=SimpleNamespace(get=lambda: ""),
         )
-        for name in ("selected_logo_path", "logo_file_path", "invoice_logo"):
+        for name in ("selected_logo_path", "logo_file_path", "invoice_logo", "confirm_ledger_p1_fallback"):
             setattr(owner, name, MethodType(getattr(self.app.ReminderApp, name), owner))
         return owner
+
+    def ledger_invoice(self, **changes):
+        row = self.save_invoice(**changes)
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET ledger_first_seen='2026-11-01',ledger_last_seen='2026-11-02' WHERE id=?",
+                (row["id"],),
+            )
+            return db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+
+    def p1_result(self, owner):
+        result = self.workspace / "ledger-p1.pdf"
+        result.write_bytes(b"ledger P1")
+        owner.write_letter.return_value = result
+        return result
 
     def test_matching_original_pdf_is_checked_before_p1_confirmation(self):
         row = self.save_invoice()
@@ -100,6 +115,68 @@ class ReminderSourceVerificationTests(unittest.TestCase):
         with self.app.connect() as db:
             saved = db.execute("SELECT p1_date,p1_snapshot,sent_count FROM invoices WHERE id=?", (row["id"],)).fetchone()
         self.assertEqual(tuple(saved), ("", "", 0))
+
+    def test_ledger_mismatch_can_use_saved_ledger_basis_after_explicit_approval(self):
+        row = self.ledger_invoice(paid=250.0)
+        owner = self.owner_for(row)
+        expected = self.p1_result(owner)
+        mismatched = self.candidate(row, amount=999.0, customer="Annans kund AB")
+        with (
+            patch.object(self.app, "read_invoice_candidates", return_value=[mismatched]),
+            patch.object(self.app.messagebox, "askyesno", create=True, side_effect=[True, True]) as confirm,
+        ):
+            result = self.app.ReminderApp.make_reminder(owner)
+        self.assertEqual(result, expected)
+        self.assertEqual(confirm.call_count, 2)
+        self.assertIn("reskontraunderlag", confirm.call_args_list[0].args[0])
+        self.assertIn("Fakturabelopp", confirm.call_args_list[0].args[1])
+        self.assertIn("Kundnamn", confirm.call_args_list[0].args[1])
+        self.assertIn("Underlag: reskontraimporten", confirm.call_args_list[1].args[1])
+        written_row = owner.write_letter.call_args.args[0]
+        self.assertEqual((written_row["amount"], written_row["paid"]), (1250.0, 250.0))
+        self.assertEqual(written_row["note"], "Original fakturatext")
+        with self.app.connect() as db:
+            saved = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertTrue(saved["p1_date"])
+        self.assertEqual(saved["paid"], 250.0)
+        self.assertEqual(saved["source"], str(self.pdf))
+        snapshot = self.app.read_p1_snapshot(saved["p1_snapshot"])
+        self.assertEqual(snapshot["row"]["amount"], 1250.0)
+        self.assertEqual(snapshot["row"]["paid"], 250.0)
+        self.assertEqual(snapshot["row"]["note"], "Original fakturatext")
+
+    def test_declined_ledger_fallback_creates_no_p1_or_history(self):
+        row = self.ledger_invoice()
+        owner = self.owner_for(row)
+        mismatched = self.candidate(row, note="Annan text")
+        with (
+            patch.object(self.app, "read_invoice_candidates", return_value=[mismatched]),
+            patch.object(self.app.messagebox, "askyesno", create=True, return_value=False) as confirm,
+        ):
+            result = self.app.ReminderApp.make_reminder(owner)
+        self.assertIsNone(result)
+        self.assertEqual(confirm.call_count, 1)
+        owner.write_letter.assert_not_called()
+        with self.app.connect() as db:
+            saved = db.execute("SELECT p1_date,p1_snapshot,sent_count FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertEqual(tuple(saved), ("", "", 0))
+
+    def test_unreadable_original_pdf_can_also_use_ledger_basis(self):
+        row = self.ledger_invoice()
+        owner = self.owner_for(row)
+        expected = self.p1_result(owner)
+        with (
+            patch.object(self.app, "read_invoice_candidates", side_effect=ValueError("synthetic PDF error")),
+            patch.object(self.app.messagebox, "askyesno", create=True, side_effect=[True, True]),
+            patch.object(self.app.messagebox, "showerror", create=True) as error,
+        ):
+            result = self.app.ReminderApp.make_reminder(owner)
+        self.assertEqual(result, expected)
+        error.assert_not_called()
+        owner.write_letter.assert_called_once()
+        with self.app.connect() as db:
+            p1_date = db.execute("SELECT p1_date FROM invoices WHERE id=?", (row["id"],)).fetchone()[0]
+        self.assertTrue(p1_date)
 
     def test_multi_invoice_pdf_uses_saved_section_identity(self):
         row = self.save_invoice()

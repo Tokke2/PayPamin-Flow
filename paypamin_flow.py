@@ -528,6 +528,13 @@ def find_invoice_pdf_candidate(row, candidates):
     return matches[0] if len(matches) == 1 else None
 
 
+def has_ledger_import_basis(row):
+    """Return whether this row has authoritative customer-ledger import markers."""
+
+    values = dict(row)
+    return bool(values.get('ledger_first_seen') or values.get('ledger_last_seen'))
+
+
 ORIGINAL_INVOICE_PROTECTED_FIELDS = ('invoice_no', 'amount', 'currency', 'paid')
 ORIGINAL_INVOICE_ENRICHABLE_FIELDS = (
     'customer', 'invoice_date', 'due_date', 'email', 'note', 'template_vendor',
@@ -2577,7 +2584,7 @@ class ReminderApp(tk.Tk):
 
         row=self.selected()
         if row is None:return None
-        if not (row['ledger_first_seen'] or row['ledger_last_seen']):
+        if not has_ledger_import_basis(row):
             logger.warning('Original invoice enrichment requires a ledger-imported row: invoice=%s',row['id'])
             messagebox.showinfo(_('Inte en reskontrafaktura'),_('Välj en faktura som har importerats från kundreskontran.'),parent=self)
             return None
@@ -2897,6 +2904,20 @@ class ReminderApp(tk.Tk):
             except Exception:logger.exception('UI refresh after email draft failed')
         return True
 
+    def confirm_ledger_p1_fallback(self,row,reason):
+        """Ask before using ledger data when original-PDF verification failed."""
+
+        confirmed=messagebox.askyesno(
+            _('Använd reskontraunderlag för P1?'),
+            _('Original-PDF:en kunde inte bekräfta fakturan.\n\n{reason}\n\nVill du skapa P1 med reskontraimportens uppgifter i stället? Valet loggas. Original-PDF:en och reskontradata ändras inte.',reason=reason),
+            parent=self,
+        )
+        action='p1_ledger_basis_accepted' if confirmed else 'p1_ledger_basis_declined'
+        log_activity('reminder',action,'completed',invoice_id=row['id'],invoice_no=row['invoice_no'],reason=reason)
+        if confirmed:logger.warning('P1 will use customer-ledger data after original-PDF verification failed: invoice=%s',row['id'])
+        else:logger.info('P1 customer-ledger fallback declined: invoice=%s',row['id'])
+        return confirmed
+
     def make_reminder(self):
         r=self.selected()
         if not r:return
@@ -2914,9 +2935,11 @@ class ReminderApp(tk.Tk):
             if recreated:return latest[2]
             messagebox.showwarning(_('Inte redo'),_('Fakturan är inte redo för påminnelse. Status: {stage}',stage=_(stage)));return
 
+        ledger_fallback_used=False
         while stage in ('P1 att skapa','P2 att skapa'):
             level='P1' if stage.startswith('P1') else 'P2'
             if level == 'P1':
+                source_differences=[]
                 try:
                     apply_zones = getattr(self, 'apply_saved_zones', None)
                     zone_applier = None
@@ -2930,12 +2953,17 @@ class ReminderApp(tk.Tk):
                     source_differences = verify_invoice_source(r, zone_applier=zone_applier)
                 except Exception as exc:
                     logger.exception('Original invoice verification failed before P1: invoice=%s',r['id'])
-                    messagebox.showerror(
-                        _('Originalfakturan kunde inte kontrolleras'),
-                        _('P1 skapades inte eftersom original-PDF:en kunde inte läsas.\n\n{error}',error=exc),
-                        parent=self,
-                    )
-                    return latest[2] if latest else None
+                    if has_ledger_import_basis(r):
+                        if not self.confirm_ledger_p1_fallback(r,str(exc)):
+                            return latest[2] if latest else None
+                        ledger_fallback_used=True
+                    else:
+                        messagebox.showerror(
+                            _('Originalfakturan kunde inte kontrolleras'),
+                            _('P1 skapades inte eftersom original-PDF:en kunde inte läsas.\n\n{error}',error=exc),
+                            parent=self,
+                        )
+                        return latest[2] if latest else None
                 if source_differences:
                     labels = dict(INVOICE_PDF_COMPARE_FIELDS)
                     details = []
@@ -2950,16 +2978,23 @@ class ReminderApp(tk.Tk):
                         actual = '—' if actual in (None, '') else str(actual)
                         details.append(_('{label}: sparat {saved} · PDF {actual}',label=label,saved=saved,actual=actual))
                     logger.warning('P1 blocked because saved invoice differs from source PDF: invoice=%s fields=%s',r['id'],','.join(item['field'] for item in source_differences))
-                    messagebox.showwarning(
-                        _('Fakturan stämmer inte med original-PDF:en'),
-                        _('P1 skapades inte. Kontrollera och redigera fakturan innan du försöker igen.\n\n{details}',details='\n'.join(details)),
-                        parent=self,
-                    )
-                    return latest[2] if latest else None
+                    if has_ledger_import_basis(r):
+                        if not self.confirm_ledger_p1_fallback(r,'\n'.join(details)):
+                            return latest[2] if latest else None
+                        ledger_fallback_used=True
+                    else:
+                        messagebox.showwarning(
+                            _('Fakturan stämmer inte med original-PDF:en'),
+                            _('P1 skapades inte. Kontrollera och redigera fakturan innan du försöker igen.\n\n{details}',details='\n'.join(details)),
+                            parent=self,
+                        )
+                        return latest[2] if latest else None
             fee=float(setting('fee') or 0);locked=setting('fee_locked')=='1'
             template_name=r['template_vendor'] or _('Ingen matchad mall')
             logo_path,logo_name=self.invoice_logo(r)
             confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
+            if ledger_fallback_used and level=='P1':
+                confirmation+='\n\n'+_('Underlag: reskontraimporten. Original-PDF-kontrollen har kringgåtts efter ditt godkännande.')
             if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
                 break
             day=date.today().isoformat()
