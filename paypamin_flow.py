@@ -50,6 +50,7 @@ from mail_compose import default_thunderbird_executable, open_thunderbird_draft,
 from logo_matching import match_pdf_logo
 from reminder_archive import ARCHIVE_FOLDER_NAME, archive_old_reminders
 from supplier_matching import (
+    SupplierMatch,
     extract_bankgiro_numbers,
     extract_org_numbers,
     format_bankgiro_number,
@@ -57,6 +58,7 @@ from supplier_matching import (
     match_supplier,
     normalize_bankgiro_number,
     normalize_org_number,
+    parse_supplier_identifier,
     svg_logo_aliases,
     validate_supplier_logo_link,
 )
@@ -394,6 +396,58 @@ def saved_supplier_profiles():
         profiles.append({'vendor':row['vendor'],'logo_file':'','org_number':'','bankgiro_number':'','aliases':[]})
         known.add(key)
     return profiles
+
+
+def match_saved_identifier_zones(path,page_indexes,profiles):
+    """Match supplier identifiers from their saved, supplier-specific PDF zones."""
+
+    profile_by_key={
+        str(profile.get('vendor') or '').strip().casefold():profile
+        for profile in profiles if str(profile.get('vendor') or '').strip()
+    }
+    try:
+        with connect() as db:
+            zones=db.execute(
+                "SELECT vendor,field,page_index,x0,y0,x1,y1 FROM pdf_zones WHERE field IN ('org_number','bankgiro_number') ORDER BY vendor,field"
+            ).fetchall()
+        if not zones:return None
+        import fitz
+        candidates={}
+        with fitz.open(path) as doc:
+            available_pages=list(page_indexes) if page_indexes is not None else list(range(len(doc)))
+            for zone in zones:
+                key=str(zone['vendor'] or '').strip().casefold()
+                profile=profile_by_key.get(key)
+                if not profile:continue
+                field=zone['field']
+                normalizer=normalize_org_number if field=='org_number' else normalize_bankgiro_number
+                try:expected=normalizer(profile.get(field))
+                except ValueError:continue
+                if not expected:continue
+                relative_page=zone['page_index']
+                if relative_page<0 or relative_page>=len(available_pages):continue
+                source_page=available_pages[relative_page]
+                if source_page<0 or source_page>=len(doc):continue
+                page=doc[source_page]
+                rect=fitz.Rect(
+                    zone['x0']*page.rect.width,zone['y0']*page.rect.height,
+                    zone['x1']*page.rect.width,zone['y1']*page.rect.height,
+                )
+                actual=parse_supplier_identifier(field,page.get_text('text',clip=rect))
+                if not actual or normalizer(actual)!=expected:continue
+                entry=candidates.setdefault(key,{'vendor':profile['vendor'],'org':False,'bg':False})
+                entry['org' if field=='org_number' else 'bg']=True
+    except Exception:
+        logger.exception('Saved supplier identifier zones could not be read: file=%s',path)
+        return None
+    if not candidates:return None
+    if len(candidates)!=1:return SupplierMatch('', 'ambiguous_identifier_zone',0)
+    entry=next(iter(candidates.values()))
+    methods=[]
+    if entry['org']:methods.append('org_number_zone')
+    if entry['bg']:methods.append('bankgiro_number_zone')
+    score=(1000 if entry['org'] else 0)+(800 if entry['bg'] else 0)
+    return SupplierMatch(entry['vendor'],'+'.join(methods),score)
 
 
 def apply_saved_customer_contact(values):
@@ -1935,10 +1989,22 @@ class ReminderApp(tk.Tk):
             if not matched.vendor:
                 logger.warning('Supplier template match left unresolved: file=%s pages=%s method=%s',source,pages,matched.method)
                 return ''
-            logger.info('Supplier template matched: file=%s pages=%s vendor=%s method=%s score=%d',source,pages,matched.vendor,matched.method,matched.score)
-            return matched.vendor
+            exact_text=any(method in ('org_number','bankgiro_number') for method in matched.method.split('+'))
+            if not path or exact_text:
+                logger.info('Supplier template matched: file=%s pages=%s vendor=%s method=%s score=%d',source,pages,matched.vendor,matched.method,matched.score)
+                return matched.vendor
         if path:
-            logger.info('No supplier text match; trying visual logo: file=%s pages=%s profiles=%d',source,pages,len(profiles))
+            zone_match=match_saved_identifier_zones(path,page_indexes,profiles)
+            if zone_match:
+                if not zone_match.vendor:
+                    logger.warning('Supplier identifier-zone match left unresolved: file=%s pages=%s method=%s',source,pages,zone_match.method)
+                    return ''
+                logger.info('Supplier template matched by saved identifier zone: file=%s pages=%s vendor=%s method=%s score=%d',source,pages,zone_match.vendor,zone_match.method,zone_match.score)
+                return zone_match.vendor
+            if matched:
+                logger.info('Supplier template matched: file=%s pages=%s vendor=%s method=%s score=%d',source,pages,matched.vendor,matched.method,matched.score)
+                return matched.vendor
+            logger.info('No supplier text or identifier-zone match; trying visual logo: file=%s pages=%s profiles=%d',source,pages,len(profiles))
             matched=match_pdf_logo(path,page_indexes,profiles,SVG_DIR)
             if matched:
                 if not matched.vendor:
@@ -1959,6 +2025,7 @@ class ReminderApp(tk.Tk):
     def parse_zone_value(self,field,text):
         raw='\n'.join(x.strip() for x in text.splitlines() if x.strip()).strip()
         if not raw:return ''
+        if field in ('org_number','bankgiro_number'):return parse_supplier_identifier(field,raw)
         if field=='amount':
             value=parse_amount_value(raw)
             return value if value is not None else ''
@@ -2056,7 +2123,7 @@ class ReminderApp(tk.Tk):
         ttk.Label(nav,textvariable=page_var).pack(side='left',padx=10)
         ttk.Button(nav,text='▶',command=lambda:change_page(1)).pack(side='left')
         ttk.Label(nav,text=_('Markera fält:')).pack(side='left',padx=(25,5))
-        fields={_('Fakturanummer'):'invoice_no',_('Belopp (ATT BETALA)'):'amount',_('Valuta'):'currency',_('Fakturadatum'):'invoice_date',_('Förfallodatum'):'due_date',_('Kundnamn'):'customer',_('Fakturatext / Avser'):'note'}
+        fields={_('Fakturanummer'):'invoice_no',_('Belopp (ATT BETALA)'):'amount',_('Valuta'):'currency',_('Fakturadatum'):'invoice_date',_('Förfallodatum'):'due_date',_('Kundnamn'):'customer',_('Fakturatext / Avser'):'note',_('Org.nr (leverantör)'):'org_number',_('Bankgiro (leverantör)'):'bankgiro_number'}
         field_labels={key:label for label,key in fields.items()}
         field_var=tk.StringVar(value=_('Belopp (ATT BETALA)'))
         ttk.Combobox(nav,textvariable=field_var,state='readonly',values=list(fields),width=24).pack(side='left')
@@ -2071,7 +2138,8 @@ class ReminderApp(tk.Tk):
         ttk.Label(right,text=_('Logotyp som matchar fakturan'),font=(self.font_family,9,'bold')).pack(anchor='w',pady=(3,0))
         logo_combo=ttk.Combobox(right,textvariable=preview_logo_var,state='readonly',values=logo_choices,width=27)
         logo_combo.pack(fill='x',pady=(2,2))
-        ttk.Label(right,text=_('Logotypen kopplas till vald leverantör/mall ovan.'),wraplength=210,style='Sub.TLabel').pack(anchor='w',pady=(0,6))
+        ttk.Label(right,text=_('Logotypen kopplas till vald leverantör/mall ovan.'),wraplength=210,style='Sub.TLabel').pack(anchor='w',pady=(0,2))
+        ttk.Button(right,text=_('Matcha bildlogotyp i PDF'),command=lambda:match_visual_supplier()).pack(fill='x',pady=(0,6))
         def load_selected_profile(event=None):
             profile=supplier_profile(vendor_var.get())
             if not profile:return
@@ -2087,12 +2155,29 @@ class ReminderApp(tk.Tk):
         vendor_combo.bind('<<ComboboxSelected>>',load_selected_profile)
         result_labels={}
         status=tk.StringVar(value=_('Klicka Markera vid ett fält och dra sedan en ruta runt värdet.'))
+        def match_visual_supplier():
+            matched=match_pdf_logo(path,available_pages,supplier_profiles,SVG_DIR)
+            if matched and matched.vendor:
+                vendor_var.set(matched.vendor);load_selected_profile()
+                status.set(_('Bildlogotypen i PDF:en matchar {vendor}.',vendor=matched.vendor))
+                logger.info('Dialog visual supplier logo matched: file=%s page=%d vendor=%s',path,available_pages[0]+1,matched.vendor)
+                return
+            if matched:
+                status.set(_('Bildlogotypen är tvetydig. Välj leverantör manuellt.'))
+                logger.warning('Dialog visual supplier logo match was ambiguous: file=%s page=%d method=%s',path,available_pages[0]+1,matched.method)
+                messagebox.showwarning(_('Bildlogotypen är tvetydig'),_('Flera leverantörers logotyper liknar bilden i PDF:en. Välj leverantör manuellt.'),parent=win)
+                return
+            status.set(_('Ingen entydig bildlogotypmatchning hittades i PDF:en.'))
+            logger.warning('Dialog visual supplier logo match failed: file=%s page=%d',path,available_pages[0]+1)
+            messagebox.showinfo(_('Ingen bildlogotypmatchning'),_('Logotypen i PDF:en kunde inte matchas entydigt. Kontrollera den tekniska loggen eller välj leverantör manuellt.'),parent=win)
         def activate_field(label):
             field_var.set(label);status.set(_('Markera värdet för: {label}',label=label))
         for label,key in fields.items():
             row=ttk.Frame(right);row.pack(fill='x',pady=(4,0))
             ttk.Label(row,text=label,font=(self.font_family,9,'bold')).pack(side='left',anchor='w')
             ttk.Button(row,text=_('Markera'),command=lambda name=label:activate_field(name)).pack(side='right')
+            # Identifier values already have editable fields at the top; avoid a duplicate row here.
+            if key in ('org_number','bankgiro_number'):continue
             lab=ttk.Label(right,text=str(guess.get(key,'') or '—'),wraplength=210,foreground='#344054');lab.pack(anchor='w')
             result_labels[key]=lab
         ttk.Label(right,textvariable=status,wraplength=210,foreground='#475467').pack(anchor='w',pady=8)
@@ -2148,8 +2233,15 @@ class ReminderApp(tk.Tk):
                     raw=pytesseract.image_to_string(Image.open(io.BytesIO(pix.tobytes('png'))),lang='swe+eng')
                 except Exception:logger.exception('OCR of selected PDF zone failed')
             value=self.parse_zone_value(field,raw)
-            if value=='':status.set(_('Ingen text hittades i rutan. Försök igen eller kontrollera OCR.'));return
-            guess[field]=value;result_labels[field].configure(text=str(value))
+            if value=='':
+                if field in ('org_number','bankgiro_number'):
+                    status.set(_('Inget giltigt org.nr eller bankgironummer hittades. Markera endast leverantörens nummer.'))
+                else:status.set(_('Ingen text hittades i rutan. Försök igen eller kontrollera OCR.'))
+                return
+            guess[field]=value
+            if field in result_labels:result_labels[field].configure(text=str(value))
+            if field=='org_number':org_var.set(value)
+            elif field=='bankgiro_number':bg_var.set(value)
             p=doc[state['page']]
             pending[field]={'page_index':available_pages.index(state['page']),'x0':rect.x0/p.rect.width,'y0':rect.y0/p.rect.height,'x1':rect.x1/p.rect.width,'y1':rect.y1/p.rect.height}
             if state['rect']:canvas.delete(state['rect']);state['rect']=None

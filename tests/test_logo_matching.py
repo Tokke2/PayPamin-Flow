@@ -96,6 +96,14 @@ class VisualLogoMatchingTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match.vendor, "Nordic AB")
 
+    def test_pdf_filename_is_not_used_for_visual_match(self):
+        renamed = self.root / "not-a-supplier-name.pdf"
+        self.invoice.rename(renamed)
+        match = match_pdf_logo(renamed, [0], self.profiles, self.root)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.vendor, "Nordic AB")
+        self.assertEqual(match.method, "visual_logo")
+
     def test_scale_and_position_changes_are_accepted(self):
         smaller = self.root / "smaller.pdf"
         write_invoice(smaller, self.nordic_png, (48, 70, 178, 113))

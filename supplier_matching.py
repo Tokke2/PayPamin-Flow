@@ -1,8 +1,9 @@
 """Conservative text and identifier matching for supplier profiles.
 
-Organisation and bankgiro numbers are matched only when they have an explicit
-label. This module handles names and textual SVG aliases; visual PDF/SVG logo
-comparison is isolated in :mod:`logo_matching`.
+Organisation and bankgiro numbers in running text are matched only when they
+have an explicit label. A number explicitly isolated by a user-drawn template
+zone may instead be bare. This module handles names and textual SVG aliases;
+visual PDF/SVG logo comparison is isolated in :mod:`logo_matching`.
 """
 from __future__ import annotations
 
@@ -152,6 +153,25 @@ def svg_logo_aliases(path) -> list[str]:
 def _safe_identifier(normalizer, value) -> str:
     try:
         return normalizer(value)
+    except ValueError:
+        return ""
+
+
+def parse_supplier_identifier(field, text) -> str:
+    """Parse a labelled or explicitly zoned organisation/bankgiro number."""
+
+    if field == "org_number":
+        normalizer, extractor, formatter = normalize_org_number, extract_org_numbers, format_org_number
+    elif field == "bankgiro_number":
+        normalizer, extractor, formatter = normalize_bankgiro_number, extract_bankgiro_numbers, format_bankgiro_number
+    else:
+        return ""
+    values = extractor(text)
+    try:
+        if len(values) == 1:
+            return formatter(next(iter(values)))
+        # A hand-drawn zone may contain only the number without its label.
+        return formatter(normalizer(text))
     except ValueError:
         return ""
 

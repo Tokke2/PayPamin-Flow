@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import fitz
+
 from test_database import load_headless_app
 
 from supplier_matching import (
@@ -14,6 +16,7 @@ from supplier_matching import (
     match_supplier,
     normalize_bankgiro_number,
     normalize_org_number,
+    parse_supplier_identifier,
     svg_logo_aliases,
     validate_supplier_logo_link,
 )
@@ -49,6 +52,15 @@ class SupplierIdentifierTests(unittest.TestCase):
         self.assertEqual(extract_bankgiro_numbers(text), {"12345678", "1234567", "5551234"})
         self.assertEqual(extract_org_numbers("556123-4567 utan etikett"), set())
         self.assertEqual(extract_bankgiro_numbers("1234-5678 utan etikett"), set())
+
+    def test_drawn_identifier_zones_accept_labelled_or_bare_numbers(self):
+        self.assertEqual(parse_supplier_identifier("org_number", "Org.nr: 556123-4567"), "556123-4567")
+        self.assertEqual(parse_supplier_identifier("org_number", "556123-4567"), "556123-4567")
+        self.assertEqual(parse_supplier_identifier("bankgiro_number", "Bankgiro 1234-5678"), "1234-5678")
+        self.assertEqual(parse_supplier_identifier("bankgiro_number", "1234-5678"), "1234-5678")
+        self.assertEqual(parse_supplier_identifier("org_number", "Org.nr 556123-4567\nOrg.nr 559999-0001"), "")
+        self.assertEqual(parse_supplier_identifier("bankgiro_number", "inte ett nummer"), "")
+        self.assertEqual(parse_supplier_identifier("amount", "1234-5678"), "")
 
 
 class SupplierProfileMatchingTests(unittest.TestCase):
@@ -182,6 +194,12 @@ class SupplierAppIntegrationTests(unittest.TestCase):
     def guess(self, text):
         return self.app.ReminderApp.guess_supplier(SimpleNamespace(), text)
 
+    def test_template_zone_parser_normalizes_supplier_identifiers(self):
+        parser = self.app.ReminderApp.parse_zone_value
+        self.assertEqual(parser(SimpleNamespace(), "org_number", "556123-4567"), "556123-4567")
+        self.assertEqual(parser(SimpleNamespace(), "bankgiro_number", "Bankgiro 1234-5678"), "1234-5678")
+        self.assertEqual(parser(SimpleNamespace(), "org_number", "felaktigt"), "")
+
     def test_real_app_uses_saved_identifiers_and_logo_aliases(self):
         with self.app.connect() as db:
             db.execute(
@@ -211,6 +229,82 @@ class SupplierAppIntegrationTests(unittest.TestCase):
                 ("Martin G", "two.svg", "5561234567", ""),
             )
         self.assertEqual(self.guess("Direktglas AB\nOrg.nr 556123-4567"), "")
+
+    def test_saved_identifier_zones_match_supplier_without_visual_guessing(self):
+        for field, number, normalized in (
+            ("org_number", "556123-4567", "5561234567"),
+            ("bankgiro_number", "1234-5678", "12345678"),
+        ):
+            with self.subTest(field=field):
+                vendor = f"Zon {field} AB"
+                org_number = normalized if field == "org_number" else ""
+                bankgiro_number = normalized if field == "bankgiro_number" else ""
+                with self.app.connect() as db:
+                    db.execute(
+                        "INSERT INTO vendor_logos(vendor,logo_file,org_number,bankgiro_number) VALUES(?,?,?,?)",
+                        (vendor, "", org_number, bankgiro_number),
+                    )
+                    db.execute(
+                        "INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES(?,?,?,?,?,?,?,?)",
+                        (vendor, field, 0, 0.05, 0.05, 0.95, 0.25, 1),
+                    )
+                pdf = self.workspace / f"{field}.pdf"
+                document = fitz.open()
+                page = document.new_page(width=300, height=300)
+                page.insert_text((30, 50), number, fontsize=12)
+                document.save(pdf)
+                document.close()
+                with patch.object(self.app, "match_pdf_logo") as visual:
+                    result = self.app.ReminderApp.guess_supplier(
+                        SimpleNamespace(), "Faktura utan textträff", path=str(pdf), page_indexes=(0,)
+                    )
+                self.assertEqual(result, vendor)
+                visual.assert_not_called()
+
+    def test_identifier_zone_beats_a_weaker_supplier_name_match(self):
+        with self.app.connect() as db:
+            db.execute("INSERT INTO vendor_logos(vendor) VALUES(?)", ("Fel Namn AB",))
+            db.execute("INSERT INTO vendor_logos(vendor,org_number) VALUES(?,?)", ("Rätt Zon AB", "5561234567"))
+            db.execute(
+                "INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES(?,?,?,?,?,?,?,?)",
+                ("Rätt Zon AB", "org_number", 0, 0.05, 0.05, 0.95, 0.25, 1),
+            )
+        pdf = self.workspace / "zone-before-name.pdf"
+        document = fitz.open()
+        page = document.new_page(width=300, height=300)
+        page.insert_text((30, 50), "556123-4567", fontsize=12)
+        document.save(pdf)
+        document.close()
+        result = self.app.ReminderApp.guess_supplier(
+            SimpleNamespace(), "Fel Namn AB\nFaktura", path=str(pdf), page_indexes=(0,)
+        )
+        self.assertEqual(result, "Rätt Zon AB")
+
+    def test_conflicting_identifier_zones_are_not_guessed(self):
+        with self.app.connect() as db:
+            db.execute("INSERT INTO vendor_logos(vendor,org_number) VALUES(?,?)", ("Org Zon AB", "5561234567"))
+            db.execute("INSERT INTO vendor_logos(vendor,bankgiro_number) VALUES(?,?)", ("BG Zon AB", "12345678"))
+            db.execute(
+                "INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES(?,?,?,?,?,?,?,?)",
+                ("Org Zon AB", "org_number", 0, 0.05, 0.05, 0.95, 0.25, 1),
+            )
+            db.execute(
+                "INSERT INTO pdf_zones(vendor,field,page_index,x0,y0,x1,y1,samples) VALUES(?,?,?,?,?,?,?,?)",
+                ("BG Zon AB", "bankgiro_number", 0, 0.05, 0.40, 0.95, 0.65, 1),
+            )
+        pdf = self.workspace / "conflicting-zones.pdf"
+        document = fitz.open()
+        page = document.new_page(width=300, height=300)
+        page.insert_text((30, 50), "556123-4567", fontsize=12)
+        page.insert_text((30, 150), "1234-5678", fontsize=12)
+        document.save(pdf)
+        document.close()
+        with patch.object(self.app, "match_pdf_logo") as visual:
+            result = self.app.ReminderApp.guess_supplier(
+                SimpleNamespace(), "Faktura utan textträff", path=str(pdf), page_indexes=(0,)
+            )
+        self.assertEqual(result, "")
+        visual.assert_not_called()
 
     def test_failed_supplier_match_is_logged_for_manual_review(self):
         with patch.object(self.app.logger, "warning") as warning:
