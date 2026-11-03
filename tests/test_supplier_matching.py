@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from test_database import load_headless_app
 
@@ -14,6 +15,7 @@ from supplier_matching import (
     normalize_bankgiro_number,
     normalize_org_number,
     svg_logo_aliases,
+    validate_supplier_logo_link,
 )
 
 
@@ -115,6 +117,17 @@ class SupplierProfileMatchingTests(unittest.TestCase):
         self.assertEqual(match.vendor, "Annat namn AB")
         self.assertEqual(match.method, "logo")
 
+    def test_linking_an_existing_logo_requires_an_explicit_supplier(self):
+        for vendor in ("", "   "):
+            with self.subTest(vendor=vendor), self.assertRaises(ValueError):
+                validate_supplier_logo_link(vendor, "nordic.svg", ["nordic.svg"])
+        self.assertEqual(
+            validate_supplier_logo_link("  Nordic AB  ", "nordic.svg", ["nordic.svg"]),
+            "Nordic AB",
+        )
+        self.assertEqual(validate_supplier_logo_link("", "(Välj logotyp)", ["nordic.svg"]), "")
+        self.assertEqual(validate_supplier_logo_link("", "", []), "")
+
     def test_equal_name_matches_are_not_guessed(self):
         profiles = [
             {"vendor": "Direktglas AB", "logo_file": "one.svg"},
@@ -198,6 +211,12 @@ class SupplierAppIntegrationTests(unittest.TestCase):
                 ("Martin G", "two.svg", "5561234567", ""),
             )
         self.assertEqual(self.guess("Direktglas AB\nOrg.nr 556123-4567"), "")
+
+    def test_failed_supplier_match_is_logged_for_manual_review(self):
+        with patch.object(self.app.logger, "warning") as warning:
+            self.assertEqual(self.guess("Faktura utan känd leverantör"), "")
+        messages = [call.args[0] for call in warning.call_args_list]
+        self.assertTrue(any("manual review required" in message for message in messages))
 
     def test_legacy_company_name_guess_remains_when_no_profile_matches(self):
         self.assertEqual(self.guess("Faktura\nSnickeriet AB\nATT BETALA 100 SEK"), "Snickeriet AB")

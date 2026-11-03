@@ -2,7 +2,7 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import patch
 
 import fitz
@@ -173,6 +173,48 @@ class VisualLogoAppIntegrationTests(unittest.TestCase):
     def test_real_app_matches_saved_svg_visually(self):
         self.add_vendor()
         self.assertEqual(self.guess(), "Nordic AB")
+
+    def test_folder_import_uses_visual_match_without_preselected_vendor(self):
+        self.add_vendor()
+        events = []
+
+        def preview(path, guess, vendor="", page_indexes=None):
+            events.append(("preview", vendor))
+            return guess
+
+        def add_invoice(**kwargs):
+            events.append(("add", kwargs["guess"]["template_vendor"]))
+
+        fake = SimpleNamespace(
+            _import_scan_running=False,
+            apply_saved_zones=lambda path, vendor, guess, page_indexes=None: guess,
+            preview_invoice=preview,
+            add_invoice=add_invoice,
+            refresh=lambda: None,
+            connect=self.app.connect,
+        )
+        fake.guess_supplier = MethodType(self.app.ReminderApp.guess_supplier, fake)
+        section = SimpleNamespace(text="Faktura utan leverantörsnamn", page_indexes=(0,))
+        with (
+            patch.object(self.app, "read_invoice_candidates", return_value=[(section, {"invoice_no": "WATCH-1"}, "watch-visual")]),
+            patch.object(self.app, "show_due_reminder_dialog"),
+        ):
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True, paths=[self.invoice])
+        self.assertEqual(events, [("preview", "Nordic AB"), ("add", "Nordic AB")])
+
+    def test_failed_visual_match_logs_reason_and_manual_review(self):
+        other = self.app.SVG_DIR / "other.svg"
+        write_svg(other, OTHER_SVG)
+        with self.app.connect() as db:
+            db.execute(
+                "INSERT INTO vendor_logos(vendor,logo_file,org_number,bankgiro_number) VALUES(?,?,?,?)",
+                ("Other AB", other.name, "", ""),
+            )
+        with patch.object(self.app.logger, "warning") as warning:
+            self.assertEqual(self.guess(), "")
+        messages = [call.args[0] for call in warning.call_args_list]
+        self.assertTrue(any("acceptance threshold" in message for message in messages))
+        self.assertTrue(any("manual review required" in message for message in messages))
 
     def test_visual_ambiguity_does_not_fall_back_to_company_name_guess(self):
         self.add_vendor("First AB")

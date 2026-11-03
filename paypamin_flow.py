@@ -58,6 +58,7 @@ from supplier_matching import (
     normalize_bankgiro_number,
     normalize_org_number,
     svg_logo_aliases,
+    validate_supplier_logo_link,
 )
 from reminder_journal import (
     JOURNAL_FILENAME,
@@ -1927,24 +1928,32 @@ class ReminderApp(tk.Tk):
 
     def guess_supplier(self,text,path=None,page_indexes=None):
         profiles=saved_supplier_profiles()
+        source=Path(path).name if path else ''
+        pages=','.join(str(index+1) for index in page_indexes) if page_indexes is not None else ('1' if path else '')
         matched=match_supplier(text,profiles)
         if matched:
             if not matched.vendor:
-                logger.warning('Supplier template match left unresolved: method=%s',matched.method)
+                logger.warning('Supplier template match left unresolved: file=%s pages=%s method=%s',source,pages,matched.method)
                 return ''
-            logger.info('Supplier template matched: vendor=%s method=%s score=%d',matched.vendor,matched.method,matched.score)
+            logger.info('Supplier template matched: file=%s pages=%s vendor=%s method=%s score=%d',source,pages,matched.vendor,matched.method,matched.score)
             return matched.vendor
         if path:
+            logger.info('No supplier text match; trying visual logo: file=%s pages=%s profiles=%d',source,pages,len(profiles))
             matched=match_pdf_logo(path,page_indexes,profiles,SVG_DIR)
             if matched:
                 if not matched.vendor:
-                    logger.warning('Visual supplier logo match left unresolved: method=%s',matched.method)
+                    logger.warning('Visual supplier logo match left unresolved: file=%s pages=%s method=%s',source,pages,matched.method)
                     return ''
-                logger.info('Supplier template matched visually: vendor=%s method=%s score=%d',matched.vendor,matched.method,matched.score)
+                logger.info('Supplier template matched visually: file=%s pages=%s vendor=%s method=%s score=%d',source,pages,matched.vendor,matched.method,matched.score)
                 return matched.vendor
+            logger.warning('Supplier visual logo matching failed; trying legacy name fallback: file=%s pages=%s',source,pages)
+        elif page_indexes is not None:
+            logger.info('Visual supplier logo matching skipped for bundled invoice: pages=%s',pages)
         for line in [re.sub(r'\s+',' ',x).strip() for x in text.splitlines()[:18]]:
             if re.search(r'(?i)\b(?:AB|ASA|AS|HB)\s*$',line) and len(line)<60 and not re.search(r'faktura|datum|kundnr',line,re.I):
+                logger.info('Supplier template matched by legacy company-name fallback: file=%s pages=%s vendor=%s',source,pages,line)
                 return line
+        logger.warning('Supplier template matching failed; manual review required: file=%s pages=%s profiles=%d',source,pages,len(profiles))
         return ''
 
     def parse_zone_value(self,field,text):
@@ -2008,7 +2017,8 @@ class ReminderApp(tk.Tk):
         if not available_pages:
             doc.close()
             return guess
-        original_vendor=vendor or Path(path).stem
+        # Never turn the PDF filename into a supplier when no match was found.
+        original_vendor=vendor or ''
         supplier_profiles=saved_supplier_profiles()
         def supplier_profile(name):
             key=str(name or '').strip().casefold()
@@ -2055,13 +2065,13 @@ class ReminderApp(tk.Tk):
         ttk.Label(right,text=_('Avlästa värden'),font=(self.font_family,11,'bold')).pack(anchor='w',pady=(0,8))
         logo_files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
         mapped_logo=initial_profile.get('logo_file') if initial_profile else ''
-        active_logo=self.logo_var.get()
         logo_choices=[_('(Välj logotyp för mallen)'),_('(Ingen logotyp)')]+logo_files
-        initial_logo=mapped_logo if mapped_logo in logo_files else active_logo if active_logo in logo_files else logo_choices[0]
+        initial_logo=mapped_logo if mapped_logo in logo_files else logo_choices[0]
         preview_logo_var=tk.StringVar(value=initial_logo)
         ttk.Label(right,text=_('Logotyp som matchar fakturan'),font=(self.font_family,9,'bold')).pack(anchor='w',pady=(3,0))
         logo_combo=ttk.Combobox(right,textvariable=preview_logo_var,state='readonly',values=logo_choices,width=27)
-        logo_combo.pack(fill='x',pady=(2,6))
+        logo_combo.pack(fill='x',pady=(2,2))
+        ttk.Label(right,text=_('Logotypen kopplas till vald leverantör/mall ovan.'),wraplength=210,style='Sub.TLabel').pack(anchor='w',pady=(0,6))
         def load_selected_profile(event=None):
             profile=supplier_profile(vendor_var.get())
             if not profile:return
@@ -2147,15 +2157,19 @@ class ReminderApp(tk.Tk):
             status.set(_('{label} avläst: {value}',label=field_var.get(),value=value))
         canvas.bind('<ButtonPress-1>',start_draw);canvas.bind('<B1-Motion>',move_draw);canvas.bind('<ButtonRelease-1>',parse_zone)
         def save_and_finish(save):
-            guess['template_vendor']=vendor_var.get().strip()
             selected_logo=preview_logo_var.get()
             save_logo=selected_logo not in (_('(Välj logotyp för mallen)'),'')
+            try:mall=validate_supplier_logo_link(vendor_var.get(),selected_logo,logo_files)
+            except ValueError:
+                logger.warning('Supplier logo link blocked because no supplier was selected: logo=%s',selected_logo)
+                messagebox.showerror(_('Leverantör saknas'),_('Välj vilken leverantör logotypen tillhör innan den kopplas.'),parent=win)
+                return
+            guess['template_vendor']=mall
             if save_logo:
                 # Keep the choice on this invoice even without saving field zones.
                 guess['logo_file']=selected_logo if selected_logo in logo_files else ''
             raw_org=org_var.get().strip();raw_bg=bg_var.get().strip()
-            if save and (pending or save_logo or raw_org or raw_bg or initial_org or initial_bg or vendor_var.get().strip()!=original_vendor):
-                mall=vendor_var.get().strip()
+            if save and (pending or save_logo or raw_org or raw_bg or initial_org or initial_bg or mall!=original_vendor):
                 if not mall:messagebox.showerror(_('Mallnamn saknas'),_('Ange leverantör eller mallnamn.'),parent=win);return
                 try:org_number=normalize_org_number(raw_org)
                 except ValueError:

@@ -9,10 +9,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
+import logging
 from math import isfinite
 from pathlib import Path
 
+from app_info import APP_SLUG
 from supplier_matching import SupplierMatch
+
+
+logger = logging.getLogger(APP_SLUG)
 
 
 _REFERENCE_CACHE = {}
@@ -192,20 +197,24 @@ def match_pdf_logo(path, page_indexes, profiles, svg_dir) -> SupplierMatch | Non
         import cv2
         import numpy as np
     except (ImportError, ModuleNotFoundError):
+        logger.warning('Visual supplier logo matching unavailable because OpenCV is missing: file=%s',path)
         return None
 
     indexes = list(page_indexes) if page_indexes is not None else [0]
     page_index = indexes[0] if indexes else 0
     page = _page_image(path, page_index)
     if page is None:
+        logger.warning('Visual supplier logo matching could not read the PDF page: file=%s page=%d',path,page_index+1)
         return None
     page_gray = cv2.cvtColor(page, cv2.COLOR_RGB2GRAY)
     try:
         sift = cv2.SIFT_create(nfeatures=1800, contrastThreshold=0.02)
         page_keypoints, page_descriptors = sift.detectAndCompute(page_gray, None)
-    except (AttributeError, cv2.error):
+    except (AttributeError, cv2.error) as exc:
+        logger.warning('Visual supplier logo feature extraction failed: file=%s page=%d error=%s',path,page_index+1,exc)
         return None
     if page_descriptors is None:
+        logger.warning('Visual supplier logo matching found no usable PDF features: file=%s page=%d',path,page_index+1)
         return None
 
     candidates = {}
@@ -217,13 +226,17 @@ def match_pdf_logo(path, page_indexes, profiles, svg_dir) -> SupplierMatch | Non
             continue
         logo_path = _safe_logo_path(svg_dir, logo_file)
         if logo_path is None:
+            logger.warning('Supplier logo reference is missing or outside the SVG folder: vendor=%s logo=%s',vendor,logo_file)
             continue
         cache_key = str(logo_path)
         if cache_key not in quality_by_logo:
             reference = _reference_image(logo_path)
+            if reference is None:
+                logger.warning('Supplier logo reference could not be rendered: vendor=%s logo=%s',vendor,logo_file)
             try:
                 quality = _feature_quality(reference, page, sift, page_keypoints, page_descriptors, cv2, np) if reference is not None else None
-            except cv2.error:
+            except cv2.error as exc:
+                logger.warning('Supplier logo comparison failed: vendor=%s logo=%s error=%s',vendor,logo_file,exc)
                 quality = None
             quality_by_logo[cache_key] = quality
         quality = quality_by_logo[cache_key]
@@ -235,11 +248,14 @@ def match_pdf_logo(path, page_indexes, profiles, svg_dir) -> SupplierMatch | Non
             candidates[key] = candidate
 
     if not candidates:
+        logger.warning('Visual supplier logo matching found no candidate above the acceptance threshold: file=%s page=%d',path,page_index+1)
         return None
     ranked = sorted(candidates.values(), key=lambda candidate: candidate.quality, reverse=True)
     best = ranked[0]
     if len(ranked) > 1:
         second = ranked[1]
         if second.quality >= best.quality - 4 and second.quality >= best.quality * 0.85:
+            logger.warning('Visual supplier logo match is ambiguous: file=%s page=%d first=%s second=%s',path,page_index+1,best.vendor,second.vendor)
             return SupplierMatch("", "ambiguous_visual_logo", 0)
+    logger.info('Visual supplier logo accepted: file=%s page=%d vendor=%s quality=%.2f',path,page_index+1,best.vendor,best.quality)
     return SupplierMatch(best.vendor, "visual_logo", int(round(best.quality * 10)))

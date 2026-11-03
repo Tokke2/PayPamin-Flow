@@ -156,6 +156,16 @@ def _safe_identifier(normalizer, value) -> str:
         return ""
 
 
+def validate_supplier_logo_link(vendor, selected_logo, logo_files) -> str:
+    """Require an explicit supplier before an existing logo is linked."""
+
+    supplier = str(vendor or "").strip()
+    selected = str(selected_logo or "")
+    if selected in set(logo_files) and not supplier:
+        raise ValueError("A supplier is required when linking a logo")
+    return supplier
+
+
 def match_supplier(text, profiles) -> SupplierMatch | None:
     """Return one match, ``None`` for no match or an empty-vendor ambiguity.
 
