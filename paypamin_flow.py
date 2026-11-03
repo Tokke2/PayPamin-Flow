@@ -528,6 +528,33 @@ def find_invoice_pdf_candidate(row, candidates):
     return matches[0] if len(matches) == 1 else None
 
 
+ORIGINAL_INVOICE_PROTECTED_FIELDS = ('invoice_no', 'amount', 'currency', 'paid')
+ORIGINAL_INVOICE_ENRICHABLE_FIELDS = (
+    'customer', 'invoice_date', 'due_date', 'email', 'note', 'template_vendor',
+)
+
+
+def merge_original_invoice_values(row, pdf_values):
+    """Add reviewed original-PDF details without replacing ledger financial data."""
+
+    merged = dict(row)
+    pdf_values = pdf_values or {}
+    for field in ORIGINAL_INVOICE_ENRICHABLE_FIELDS:
+        if field not in pdf_values:
+            continue
+        value = pdf_values.get(field)
+        if isinstance(value, str):
+            value = value.strip()
+        if value is None or value == '':
+            continue
+        merged[field] = value
+    if 'logo_file' in pdf_values:
+        merged['logo_file'] = pdf_values.get('logo_file')
+    for field in ORIGINAL_INVOICE_PROTECTED_FIELDS:
+        merged[field] = row[field]
+    return merged
+
+
 def compare_invoice_pdf_values(row, pdf_values):
     """Return saved/PDF differences without changing the reviewed invoice."""
     saved = dict(row)
@@ -623,8 +650,8 @@ def save_invoice_record(values,row_id=None):
                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',params+(datetime.now().isoformat(timespec='seconds'),))
             else:
                 db.execute('''UPDATE invoices SET customer=?,invoice_no=?,invoice_date=?,due_date=?,
-                    template_vendor=?,amount=?,currency=?,paid=?,email=?,source_hash=?,note=?,reviewed=?,logo_file=?
-                    WHERE id=?''',params[:9]+params[10:]+(row_id,))
+                    template_vendor=?,amount=?,currency=?,paid=?,email=?,source=?,source_hash=?,note=?,reviewed=?,logo_file=?
+                    WHERE id=?''',params+(row_id,))
             save_customer_contact(db,values['customer'],values['email'])
     return duplicate
 
@@ -1682,6 +1709,7 @@ class ReminderApp(tk.Tk):
         self.tree.bind('<Button-2>',self.show_row_context_menu)
         self.row_menu=tk.Menu(self,tearoff=0)
         self.row_menu.add_command(label=_('Öppna original-PDF'),command=self.open_selected_invoice_pdf)
+        self.row_menu.add_command(label=_('Importera originalfaktura till vald'),command=self.import_original_invoice)
         self.row_menu.add_command(label=_('Öppna senaste påminnelse-PDF'),command=self.open_selected_reminder_pdf)
         self.row_menu.add_separator()
         self.row_menu.add_command(label=_('Redigera faktura'),command=self.edit_invoice)
@@ -2544,6 +2572,61 @@ class ReminderApp(tk.Tk):
             self.refresh()
             messagebox.showinfo(_('Skanning klar'),_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nBetalda som hoppades över: {paid}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,paid=paid_skipped,skipped=skipped,failed=failed),parent=self)
 
+    def import_original_invoice(self):
+        """Enrich one ledger-imported row from its reviewed original invoice PDF."""
+
+        row=self.selected()
+        if row is None:return None
+        if not (row['ledger_first_seen'] or row['ledger_last_seen']):
+            logger.warning('Original invoice enrichment requires a ledger-imported row: invoice=%s',row['id'])
+            messagebox.showinfo(_('Inte en reskontrafaktura'),_('Välj en faktura som har importerats från kundreskontran.'),parent=self)
+            return None
+        path=filedialog.askopenfilename(title=_('Välj originalfaktura-PDF'),filetypes=[('PDF','*.pdf')])
+        if not path:return None
+        try:
+            candidates=read_invoice_candidates(path)
+            candidate=find_invoice_pdf_candidate(row,candidates)
+            if candidate is None and len(candidates)==1 and not str((candidates[0][1] or {}).get('invoice_no') or '').strip():
+                # A single invoice with an unreadable number may be corrected in
+                # the normal preview, but is verified again before anything saves.
+                candidate=candidates[0]
+            if candidate is None:
+                logger.warning('Original invoice PDF has no unique matching section: invoice=%s invoice_no=%s file=%s candidates=%d',row['id'],row['invoice_no'],path,len(candidates))
+                messagebox.showerror(_('Originalfakturan matchar inte'),_('PDF:en innehåller ingen entydig fakturasektion med fakturanummer {invoice_no}. Välj originalfakturan för den markerade reskontrafakturan.',invoice_no=row['invoice_no']),parent=self)
+                return None
+            section,guess,candidate_hash=candidate
+            duplicate=find_duplicate_invoice('',candidate_hash,exclude_id=row['id'])
+            if duplicate:
+                logger.warning('Original invoice PDF is already linked to another row: invoice=%s duplicate=%s file=%s',row['id'],duplicate['id'],path)
+                show_duplicate_invoice(duplicate,parent=self)
+                return None
+            vendor=str(row['template_vendor'] or '').strip()
+            if not vendor:
+                vendor=self.guess_supplier(section.text,path=path if len(candidates)==1 else None,page_indexes=section.page_indexes)
+            guess=dict(guess);guess['template_vendor']=vendor
+            guess=self.apply_saved_zones(path,vendor,guess,page_indexes=section.page_indexes)
+            guess=self.preview_invoice(path,guess,vendor,page_indexes=section.page_indexes)
+            if normalize_invoice_number(guess.get('invoice_no'))!=normalize_invoice_number(row['invoice_no']):
+                logger.warning('Original invoice enrichment blocked by invoice-number mismatch: invoice=%s expected=%s actual=%s file=%s',row['id'],row['invoice_no'],guess.get('invoice_no'),path)
+                messagebox.showerror(_('Originalfakturan matchar inte'),_('Fakturanumret i originalfakturan måste vara {invoice_no} innan informationen kan sparas.',invoice_no=row['invoice_no']),parent=self)
+                return None
+            saved=self.invoice_dialog(
+                'Komplettera faktura från original-PDF',row=row,source=str(Path(path).resolve()),
+                guess=guess,source_hash=candidate_hash,enrich_original=True,
+            )
+            if not saved:
+                logger.info('Original invoice enrichment cancelled: invoice=%s file=%s',row['id'],path)
+                return None
+            with connect() as db:updated=db.execute('SELECT * FROM invoices WHERE id=?',(row['id'],)).fetchone()
+            logger.info('Original invoice linked and ledger row enriched: invoice=%s invoice_no=%s file=%s pages=%s',row['id'],row['invoice_no'],path,section.page_indexes)
+            log_activity('invoice','original_invoice_imported','completed',invoice_id=row['id'],invoice_no=row['invoice_no'],source=Path(path).name,pages=list(section.page_indexes))
+            messagebox.showinfo(_('Originalfaktura importerad'),_('Faktura {invoice_no} har kompletterats med originalfakturans uppgifter. Reskontrans belopp, valuta och betalda belopp samt P1/P2-historik har inte ändrats.',invoice_no=row['invoice_no']),parent=self)
+            return updated
+        except Exception as exc:
+            logger.exception('Original invoice enrichment failed: invoice=%s file=%s',row['id'],path)
+            messagebox.showerror(_('Originalfakturan kunde inte importeras'),str(exc),parent=self)
+            return None
+
     def add_invoice(self,source='',guess=None,source_hash=''):
         self.invoice_dialog('Lägg till faktura',source=source,guess=guess,source_hash=source_hash)
 
@@ -2585,23 +2668,33 @@ class ReminderApp(tk.Tk):
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='left')
         w.wait_window()
 
-    def invoice_dialog(self,title,row=None,source='',guess=None,source_hash=''):
+    def invoice_dialog(self,title,row=None,source='',guess=None,source_hash='',enrich_original=False):
         w=self._new_toplevel(_(title));w.grab_set();w.resizable(False,False);w.configure(bg='#f3f5f8')
         fields=[('Kundnamn','customer'),('Fakturanummer','invoice_no'),('Fakturadatum (ÅÅÅÅ-MM-DD)','invoice_date'),('Förfallodatum (ÅÅÅÅ-MM-DD)','due_date'),('Fakturabelopp','amount'),('Valuta (ISO-kod, t.ex. SEK/EUR)','currency'),('Redan betalt','paid'),('E-post','email'),('Fakturatext / Avser','note')]
-        vals={k:(row[k] if row else (guess or {}).get(k,'')) for _label,k in fields}
+        enriched=merge_original_invoice_values(row,guess) if enrich_original and row is not None else None
+        vals={k:(enriched[k] if enriched is not None else (row[k] if row else (guess or {}).get(k,''))) for _label,k in fields}
         vals['currency']=normalize_currency(vals.get('currency'))
-        vals['source']=row['source'] if row else source
-        vals['source_hash']=row['source_hash'] if row else source_hash
-        vals['template_vendor']=row['template_vendor'] if row else (guess or {}).get('template_vendor','')
-        vals['logo_file']=row['logo_file'] if row else (guess or {}).get('logo_file')
+        vals['source']=source if enrich_original else (row['source'] if row else source)
+        vals['source_hash']=source_hash if enrich_original else (row['source_hash'] if row else source_hash)
+        vals['template_vendor']=enriched['template_vendor'] if enriched is not None else (row['template_vendor'] if row else (guess or {}).get('template_vendor',''))
+        vals['logo_file']=enriched['logo_file'] if enriched is not None else (row['logo_file'] if row else (guess or {}).get('logo_file'))
         apply_saved_customer_contact(vals)
         reviewed_var=tk.BooleanVar(value=bool(row['reviewed']) if row else not bool(source))
         entries={};form=ttk.Frame(w,padding=18);form.pack()
         for i,(lab,k) in enumerate(fields):
             ttk.Label(form,text=_(lab)).grid(row=i,column=0,sticky='w',pady=5,padx=(0,12));e=ttk.Entry(form,width=43);e.grid(row=i,column=1,pady=5);e.insert(0,str(vals.get(k,'') or ''));entries[k]=e
-        ttk.Checkbutton(form,text=_('Jag har granskat och godkänt fakturauppgifterna'),variable=reviewed_var).grid(row=len(fields),column=0,columnspan=2,sticky='w',pady=(8,4))
+            if enrich_original and k in ORIGINAL_INVOICE_PROTECTED_FIELDS:e.configure(state='readonly')
+        review_row=len(fields)
+        if enrich_original:
+            ttk.Label(form,text=_('Reskontrans fakturanummer, belopp, valuta och betalda belopp är låsta. P1/P2-historiken behålls.'),wraplength=520).grid(row=review_row,column=0,columnspan=2,sticky='w',pady=(9,2))
+            review_row+=1
+        ttk.Checkbutton(form,text=_('Jag har granskat och godkänt fakturauppgifterna'),variable=reviewed_var).grid(row=review_row,column=0,columnspan=2,sticky='w',pady=(8,4))
+        saved=False
         def save():
+            nonlocal saved
             v={k:e.get().strip() for k,e in entries.items()}
+            if enrich_original and normalize_invoice_number(v['invoice_no'])!=normalize_invoice_number(row['invoice_no']):
+                messagebox.showerror(_('Originalfakturan matchar inte'),_('Fakturanumret kan inte ändras när en reskontrafaktura kompletteras.'),parent=w);return
             if not v['customer'] or not v['invoice_no'] or not dparse(v['due_date']):messagebox.showerror(_('Kontrollera uppgifter'),_('Kund, fakturanummer och giltigt förfallodatum krävs.'),parent=w);return
             if not is_valid_currency(v['currency']):messagebox.showerror(_('Ogiltig valuta'),_('Ange en valuta med tre bokstäver, till exempel SEK, EUR eller USD.'),parent=w);return
             try:v['email']=normalize_email_addresses(v['email'])
@@ -2623,9 +2716,11 @@ class ReminderApp(tk.Tk):
                 return
             refresh_json_journal(parent=w)
             logger.info('Invoice saved/edited: source_type=%s fields=customer,invoice_no,due_date,amount,currency,paid,email,note',Path(vals['source']).suffix.lower() if vals['source'] else 'manual')
+            saved=True
             w.destroy();self.refresh()
-        ttk.Button(form,text=_('Spara'),command=save,style='Accent.TButton').grid(row=len(fields)+1,column=1,sticky='e',pady=(12,0))
+        ttk.Button(form,text=_('Spara'),command=save,style='Accent.TButton').grid(row=review_row+1,column=1,sticky='e',pady=(12,0))
         w.wait_window()
+        return saved
 
     def mark_invoice_paid(self):
         """Settle the selected invoice and suppress future matching PDF imports."""

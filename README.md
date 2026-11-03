@@ -274,6 +274,8 @@ Betalregeln är avsiktligt konservativ:
 
 Efter en lyckad reskontraimport återgår huvudlistan automatiskt till fliken **Aktuella**. Fakturor som just betalmarkerats försvinner därmed från arbetslistan i stället för att ligga kvar som avslutade rader. De raderas inte: posten, beloppen och P1/P2-/e-posthistoriken finns kvar och visas direkt under **Historik / arkiverade / betalda**. Fliken **Alla** visar även både aktiva och historiska poster tillsammans.
 
+**Komplettera med originalfaktura:** högerklicka på en reskontraimporterad faktura och välj **Importera originalfaktura till vald**. Välj originalfakturans PDF, granska de avlästa uppgifterna och spara. PDF:en och dess fakturasektion kopplas till den befintliga raden, och kund, datum, fakturatext, leverantörsmall och logotyp kan kompletteras utan en dubblett. Fakturanumret måste matcha; i samlings-PDF:er krävs en entydig sektion. Reskontrans fakturanummer, belopp, valuta och betalda belopp är låsta i kompletteringsdialogen, och P1/P2-/e-posthistorik samt reskontramarkeringar ändras inte. Det fungerar även för betalda och arkiverade poster utan att skapa en ny påminnelse.
+
 En gång per fredag när appfönstret är synligt visas **Veckans reskontralista**, med möjlighet att välja veckans PDF direkt. Påminnelsen kan stängas av under **Inställningar → Påminn om att importera kundreskontralista varje fredag**. Ingen Fortnox-export eller betaländring sker i bakgrunden utan att du väljer en reskontra-PDF; efter ditt val körs import och betalavstämning automatiskt om listan klarar valideringen.
 
 ## Fakturor, logotyper och OCR
