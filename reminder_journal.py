@@ -509,11 +509,20 @@ def _import_customer_contacts(db, payload):
             emails = normalize_email_addresses(row.get("emails") or "")
         except EmailAddressError as exc:
             raise JournalError(_("JSON-journalen innehåller en ogiltig kundkontakt.")) from exc
+        logo_file = Path(str(row.get("logo_file"))).name if row.get("logo_file") else ""
+        existing = db.execute(
+            "SELECT logo_file FROM customer_contacts WHERE customer_key=?", (key,)
+        ).fetchone()
         db.execute(
             """INSERT OR IGNORE INTO customer_contacts
-            (customer_key,customer_name,emails,updated) VALUES(?,?,?,?)""",
-            (key, name, emails, str(row.get("updated") or "")),
+            (customer_key,customer_name,emails,logo_file,updated) VALUES(?,?,?,?,?)""",
+            (key, name, emails, logo_file, str(row.get("updated") or "")),
         )
+        if existing is not None and not existing["logo_file"] and logo_file:
+            db.execute(
+                "UPDATE customer_contacts SET logo_file=? WHERE customer_key=?",
+                (logo_file, key),
+            )
 
 
 def _import_templates(db, payload):

@@ -102,6 +102,29 @@ class CustomerContactTests(unittest.TestCase):
         values = self.app.apply_saved_customer_contact({"customer": "Testkund AB", "email": "old@example.com"})
         self.assertEqual(values["email"], "new@example.com")
 
+    def test_existing_customer_contacts_gain_logo_without_losing_recipients(self):
+        legacy_db = self.workspace / "legacy-contacts.sqlite3"
+        with closing(sqlite3.connect(legacy_db)) as db:
+            db.execute(
+                """CREATE TABLE customer_contacts (
+                customer_key TEXT PRIMARY KEY,customer_name TEXT NOT NULL,
+                emails TEXT NOT NULL DEFAULT '',updated TEXT NOT NULL)"""
+            )
+            db.execute(
+                "INSERT INTO customer_contacts VALUES('testkund ab','Testkund AB','saved@example.com','2026-10-01')"
+            )
+            db.commit()
+        self.app.DB_PATH = legacy_db
+
+        self.app.init_db()
+        self.app.init_db()
+
+        with self.app.connect() as db:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(customer_contacts)")}
+            row = db.execute("SELECT emails,logo_file FROM customer_contacts").fetchone()
+        self.assertIn("logo_file", columns)
+        self.assertEqual(tuple(row), ("saved@example.com", ""))
+
     def test_invalid_invoice_email_rolls_back_invoice_and_contact(self):
         with self.assertRaises(EmailAddressError):
             self.app.save_invoice_record(self.record(email="invalid-address"))
@@ -110,12 +133,13 @@ class CustomerContactTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM customer_contacts").fetchone()[0], 0)
 
     def test_customer_contacts_are_included_in_json_and_restored_without_overwriting_local_edits(self):
-        self.assertIsNone(self.app.save_invoice_record(self.record(
-            email="first@example.com, second@example.com"
-        )))
+        record = self.record(email="first@example.com, second@example.com")
+        record["logo_file"] = "customer.svg"
+        self.assertIsNone(self.app.save_invoice_record(record))
         self.assertTrue(self.app.refresh_json_journal())
         payload = json.loads(self.app.JOURNAL_PATH.read_text(encoding="utf-8"))
         self.assertEqual(payload["customer_contacts"][0]["emails"], "first@example.com, second@example.com")
+        self.assertEqual(payload["customer_contacts"][0]["logo_file"], "customer.svg")
 
         source_db = self.app.DB_PATH
         source_json = self.app.JOURNAL_PATH
@@ -125,11 +149,12 @@ class CustomerContactTests(unittest.TestCase):
         self.app.init_db()
         import_journal(target_db, target_json, source_json)
         with self.app.connect() as db:
-            db.execute("UPDATE customer_contacts SET emails='local@example.com'")
+            self.assertEqual(db.execute("SELECT logo_file FROM customer_contacts").fetchone()[0], "customer.svg")
+            db.execute("UPDATE customer_contacts SET emails='local@example.com',logo_file='local.svg'")
         import_journal(target_db, target_json, source_json)
         with closing(sqlite3.connect(target_db)) as db:
-            rows = db.execute("SELECT customer_name,emails FROM customer_contacts").fetchall()
-        self.assertEqual(rows, [("Testkund AB", "local@example.com")])
+            rows = db.execute("SELECT customer_name,emails,logo_file FROM customer_contacts").fetchall()
+        self.assertEqual(rows, [("Testkund AB", "local@example.com", "local.svg")])
         self.assertTrue(source_db.is_file())
 
     def test_mailto_contains_all_recipients_subject_and_body(self):

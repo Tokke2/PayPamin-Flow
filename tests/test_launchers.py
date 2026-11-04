@@ -67,7 +67,7 @@ class ConsoleFreeLauncherTests(unittest.TestCase):
             home = Path(temporary_directory)
             with patch.object(Path, "home", return_value=home), patch.dict(sys.modules, {"paypamin_flow": None}):
                 self.assertEqual(launcher["run"](), 1)
-            log_path = home / ".paminnelseapp" / "startup.log"
+            log_path = home / ".paminnelseapp" / "logs" / "startup.log"
             self.assertTrue(log_path.is_file())
             self.assertIn("paypamin_flow", log_path.read_text(encoding="utf-8"))
         self.assertEqual(len(messages), 1)

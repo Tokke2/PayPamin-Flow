@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 EMAIL_PATTERN = re.compile(r"^[^\s@,]+@[^\s@,]+\.[^\s@,]+$")
 
@@ -51,9 +52,13 @@ def ensure_customer_contact_schema(db: sqlite3.Connection) -> None:
         customer_key TEXT PRIMARY KEY,
         customer_name TEXT NOT NULL,
         emails TEXT NOT NULL DEFAULT '',
+        logo_file TEXT NOT NULL DEFAULT '',
         updated TEXT NOT NULL
         )"""
     )
+    columns = {row[1] for row in db.execute("PRAGMA table_info(customer_contacts)").fetchall()}
+    if "logo_file" not in columns:
+        db.execute("ALTER TABLE customer_contacts ADD COLUMN logo_file TEXT NOT NULL DEFAULT ''")
 
 
 def get_customer_contact(db: sqlite3.Connection, customer):
@@ -65,16 +70,21 @@ def get_customer_contact(db: sqlite3.Connection, customer):
     ).fetchone()
 
 
-def save_customer_contact(db: sqlite3.Connection, customer, emails):
-    """Validate and save one customer's complete recipient list."""
+def save_customer_contact(db: sqlite3.Connection, customer, emails, logo_file=None):
+    """Save recipients and reuse the latest non-empty customer SVG choice."""
     name = " ".join(str(customer or "").split())
     key = normalize_customer_key(name)
     if not key:
         raise ValueError("Customer name is required")
     normalized = normalize_email_addresses(emails)
+    existing = get_customer_contact(db, name)
+    inherited_logo = ""
+    if existing is not None and "logo_file" in existing.keys():
+        inherited_logo = str(existing["logo_file"] or "")
+    selected_logo = Path(str(logo_file)).name if logo_file else inherited_logo
     db.execute(
         """INSERT OR REPLACE INTO customer_contacts
-        (customer_key,customer_name,emails,updated) VALUES(?,?,?,?)""",
-        (key, name, normalized, datetime.now().isoformat(timespec="seconds")),
+        (customer_key,customer_name,emails,logo_file,updated) VALUES(?,?,?,?,?)""",
+        (key, name, normalized, selected_logo, datetime.now().isoformat(timespec="seconds")),
     )
     return normalized

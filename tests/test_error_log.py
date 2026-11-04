@@ -124,13 +124,51 @@ class ConsolidatedErrorLogTests(unittest.TestCase):
                 "Traceback (most recent call last):\nRuntimeError: synthetic launcher failure"
             )
 
-        app_dir = home / ".paminnelseapp"
+        app_dir = home / ".paminnelseapp" / "logs"
         consolidated = (app_dir / "errors.log").read_text(encoding="utf-8")
         self.assertIn("SOURCE: startup.log", consolidated)
         self.assertIn("RuntimeError: synthetic launcher failure", consolidated)
         message = show_error.call_args.args[0]
         self.assertIn("startup.log", message)
         self.assertIn("errors.log", message)
+
+
+class LogFolderTests(unittest.TestCase):
+    def test_known_legacy_logs_move_to_own_subfolder_without_overwriting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            app_dir = workspace / ".paminnelseapp"
+            log_dir = app_dir / "logs"
+            log_dir.mkdir(parents=True)
+            legacy = {
+                "app.log": "old active app log\n",
+                "app.log.1": "old rotated app log\n",
+                "errors.log": "old consolidated errors\n",
+                "startup.log": "old startup failure\n",
+                "update.log": "old update failure\n",
+            }
+            for name, content in legacy.items():
+                (app_dir / name).write_text(content, encoding="utf-8")
+            (log_dir / "app.log").write_text("current app log\n", encoding="utf-8")
+            journal = app_dir / "reminder_journal.json"
+            journal.write_text("keep outside logs", encoding="utf-8")
+
+            app = load_headless_app(workspace)
+            try:
+                self.assertEqual(app.LOG_DIR, log_dir)
+                self.assertEqual(app.LOG_PATH, log_dir / "app.log")
+                self.assertEqual(app.ERROR_LOG_PATH, log_dir / "errors.log")
+                self.assertTrue((log_dir / "app.log").read_text(encoding="utf-8").startswith("current app log\n"))
+                self.assertEqual((log_dir / "legacy-app.log").read_text(encoding="utf-8"), legacy["app.log"])
+                for name in ("app.log.1", "errors.log", "startup.log", "update.log"):
+                    self.assertEqual((log_dir / name).read_text(encoding="utf-8"), legacy[name])
+                for name in legacy:
+                    self.assertFalse((app_dir / name).exists())
+                self.assertEqual(journal.read_text(encoding="utf-8"), "keep outside logs")
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
 
 
 class ConsolidatedErrorLogUiTests(unittest.TestCase):

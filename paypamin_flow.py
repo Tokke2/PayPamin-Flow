@@ -113,14 +113,44 @@ SVG_DIR.mkdir(parents=True,exist_ok=True)
 IMPORT_DIR = DATA_FOLDER / "import"
 IMPORT_DIR.mkdir(parents=True,exist_ok=True)
 ICON_DIR = RESOURCE_DIR / "assets"
-LOG_PATH = APP_DIR / "app.log"
-ERROR_LOG_PATH = APP_DIR / ERROR_LOG_NAME
+LOG_DIR = APP_DIR / "logs"
+LOG_DIR.mkdir(parents=True,exist_ok=True)
+
+
+def _relocate_legacy_logs():
+    """Move only known app logs into their own folder without overwriting."""
+    moved=[];errors=[]
+    try:candidates=sorted(APP_DIR.iterdir())
+    except OSError:return moved,['.']
+    for source in candidates:
+        name=source.name
+        known=name in {'app.log','errors.log','startup.log','update.log'} or re.fullmatch(r'(?:app|update)\.log\.\d+',name)
+        if not known or source.is_symlink() or not source.is_file():continue
+        destination=LOG_DIR/name
+        if destination.exists() or destination.is_symlink():
+            destination=LOG_DIR/f'legacy-{name}'
+            index=2
+            while destination.exists() or destination.is_symlink():
+                destination=LOG_DIR/f'legacy-{index}-{name}';index+=1
+        try:
+            source.rename(destination);moved.append((name,destination.name))
+        except OSError:errors.append(name)
+    return moved,errors
+
+
+_legacy_log_moves,_legacy_log_errors=_relocate_legacy_logs()
+LOG_PATH = LOG_DIR / "app.log"
+ERROR_LOG_PATH = LOG_DIR / ERROR_LOG_NAME
 logger = logging.getLogger(APP_SLUG)
 logger.setLevel(logging.INFO)
 if not logger.handlers:
     log_handler=RotatingFileHandler(LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8')
     log_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logger.addHandler(log_handler)
+for _source_name,_destination_name in _legacy_log_moves:
+    logger.info('Legacy log moved into logs folder: %s -> %s',_source_name,_destination_name)
+for _source_name in _legacy_log_errors:
+    logger.warning('Legacy log could not be moved into logs folder: %s',_source_name)
 
 
 def _ledger_log_json(payload):
@@ -455,11 +485,16 @@ def match_saved_identifier_zones(path,page_indexes,profiles):
 
 
 def apply_saved_customer_contact(values):
-    """Apply the latest saved customer recipients to an invoice dialog."""
+    """Apply saved recipients and an unset invoice logo for the same customer."""
     customer=str(values.get('customer') or '').strip()
     if not customer:return values
     with connect() as db:contact=get_customer_contact(db,customer)
-    if contact is not None:values['email']=contact['emails']
+    if contact is not None:
+        values['email']=contact['emails']
+        saved_logo=str(contact['logo_file'] or '') if 'logo_file' in contact.keys() else ''
+        if saved_logo and values.get('logo_file') is None:
+            values['logo_file']=saved_logo
+            logger.info('Reused logo from previous customer invoice: customer=%s logo=%s',customer,saved_logo)
     return values
 
 
@@ -643,9 +678,19 @@ def find_duplicate_invoice(invoice_no='',source_hash='',exclude_id=None,db=None)
 def save_invoice_record(values,row_id=None):
     """Save an invoice and its reusable customer contact in one transaction."""
     values=dict(values)
-    values['email']=normalize_email_addresses(values.get('email',''))
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
+        if row_id is None:
+            contact=get_customer_contact(db,values.get('customer',''))
+            if contact is not None:
+                reused=[]
+                if not str(values.get('email') or '').strip() and contact['emails']:
+                    values['email']=contact['emails'];reused.append('email')
+                saved_logo=str(contact['logo_file'] or '') if 'logo_file' in contact.keys() else ''
+                if saved_logo and values.get('logo_file') is None:
+                    values['logo_file']=saved_logo;reused.append('logo')
+                if reused:logger.info('Reused customer details while saving new invoice: customer=%s fields=%s',values.get('customer',''),','.join(reused))
+        values['email']=normalize_email_addresses(values.get('email',''))
         duplicate=find_duplicate_invoice(values['invoice_no'],values.get('source_hash',''),row_id,db)
         if duplicate is None:
             params=(
@@ -663,7 +708,7 @@ def save_invoice_record(values,row_id=None):
                 db.execute('''UPDATE invoices SET customer=?,invoice_no=?,invoice_date=?,due_date=?,
                     template_vendor=?,amount=?,currency=?,paid=?,email=?,source=?,source_hash=?,note=?,reviewed=?,logo_file=?
                     WHERE id=?''',params+(row_id,))
-            save_customer_contact(db,values['customer'],values['email'])
+            save_customer_contact(db,values['customer'],values['email'],values.get('logo_file'))
     return duplicate
 
 
@@ -1465,7 +1510,7 @@ class ReminderApp(tk.Tk):
         def install():
             try:
                 result_queue.put(('progress',manual,release,'download'))
-                plan=stage_update(release,log_path=APP_DIR/'update.log')
+                plan=stage_update(release,log_path=LOG_DIR/'update.log')
                 result_queue.put(('progress',manual,release,'install'))
                 installed=install_update(plan)
                 result_queue.put(('progress',manual,release,'restart'))
@@ -1959,6 +2004,11 @@ class ReminderApp(tk.Tk):
             with connect() as db:
                 mapped=db.execute('SELECT logo_file FROM vendor_logos WHERE lower(vendor)=lower(?)',(vendor,)).fetchone()
             if mapped is not None:return self.logo_file_path(mapped['logo_file'])
+        customer=str(row['customer'] or '').strip() if 'customer' in row.keys() else ''
+        if customer:
+            with connect() as db:contact=get_customer_contact(db,customer)
+            saved_logo=str(contact['logo_file'] or '') if contact is not None and 'logo_file' in contact.keys() else ''
+            if saved_logo:return self.logo_file_path(saved_logo)
         return self.selected_logo_path(),self.logo_var.get() or _('(Ingen logotyp)')
 
     def open_svg_folder(self):
@@ -1969,7 +2019,7 @@ class ReminderApp(tk.Tk):
     def open_log(self):
         logger.info('User opened consolidated error log')
         try:
-            report=refresh_error_log(APP_DIR)
+            report=refresh_error_log(LOG_DIR)
             open_path(report.path)
         except Exception:
             logger.exception('Could not open consolidated error log')
@@ -1985,7 +2035,7 @@ class ReminderApp(tk.Tk):
     def _run_scheduled_error_log_refresh(self):
         """Keep the consolidated local view current without touching source logs."""
         if self._quitting:return
-        try:refresh_error_log(APP_DIR)
+        try:refresh_error_log(LOG_DIR)
         except Exception:logger.exception('Consolidated error log refresh failed')
         if not self._quitting:self.after(ERROR_LOG_REFRESH_INTERVAL_MS,self._run_scheduled_error_log_refresh)
 
@@ -3404,7 +3454,7 @@ def main():
         logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
         log_activity('application','started','completed',version=APP_VERSION,platform=sys.platform,commit=APP_RELEASE_COMMIT)
         try:
-            report=refresh_error_log(APP_DIR)
+            report=refresh_error_log(LOG_DIR)
             logger.info('Consolidated error log refreshed: errors=%d sources=%d',report.error_count,report.source_count)
         except Exception:logger.exception('Consolidated error log refresh failed')
         window=ReminderApp()

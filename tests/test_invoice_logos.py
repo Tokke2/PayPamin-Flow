@@ -72,6 +72,58 @@ class InvoiceLogoTests(unittest.TestCase):
         self.assertEqual(saved["customer"], "Redigerad kund AB")
         self.assertEqual(saved["logo_file"], "invoice.svg")
 
+    def test_previous_customer_logo_and_email_are_reused_for_new_invoice(self):
+        first = self.record("invoice.svg")
+        first["email"] = "economy@example.com"
+        self.assertIsNone(self.app.save_invoice_record(first))
+        following = self.record(None)
+        following.update(
+            customer="  logotypkund   ab ", invoice_no="LOGO-1002",
+            source_hash="unique-logo-test-source-2", email="",
+        )
+
+        values = self.app.apply_saved_customer_contact(following)
+
+        self.assertEqual(values["logo_file"], "invoice.svg")
+        self.assertEqual(values["email"], "economy@example.com")
+        self.assertIsNone(self.app.save_invoice_record(values))
+        with self.app.connect() as db:
+            saved = db.execute("SELECT logo_file,email FROM invoices WHERE invoice_no='LOGO-1002'").fetchone()
+            contact = db.execute("SELECT logo_file FROM customer_contacts WHERE customer_key='logotypkund ab'").fetchone()
+        self.assertEqual(tuple(saved), ("invoice.svg", "economy@example.com"))
+        self.assertEqual(contact["logo_file"], "invoice.svg")
+
+    def test_new_invoice_save_reuses_contact_without_dialog_prefill(self):
+        first = self.record("invoice.svg")
+        first["email"] = "saved@example.com"
+        self.assertIsNone(self.app.save_invoice_record(first))
+        following = self.record(None)
+        following.update(invoice_no="LOGO-MANUAL", source_hash="manual-new-source", email="")
+
+        self.assertIsNone(self.app.save_invoice_record(following))
+
+        with self.app.connect() as db:
+            saved = db.execute("SELECT logo_file,email FROM invoices WHERE invoice_no='LOGO-MANUAL'").fetchone()
+        self.assertEqual(tuple(saved), ("invoice.svg", "saved@example.com"))
+
+    def test_customer_logo_precedes_global_fallback_for_legacy_invoice(self):
+        self.assertIsNone(self.app.save_invoice_record(self.record("invoice.svg")))
+
+        path, name = self.owner.invoice_logo({
+            "logo_file": None, "template_vendor": "", "customer": "Logotypkund AB",
+        })
+
+        self.assertEqual(path, str((self.app.SVG_DIR / "invoice.svg").resolve()))
+        self.assertEqual(name, "invoice.svg")
+
+    def test_customer_logo_does_not_override_explicit_invoice_choice(self):
+        self.assertIsNone(self.app.save_invoice_record(self.record("invoice.svg")))
+        for choice in ("vendor.svg", ""):
+            following = self.record(choice)
+            following.update(invoice_no="LOGO-NEW", source_hash="unique-new-source")
+            values = self.app.apply_saved_customer_contact(following)
+            self.assertEqual(values["logo_file"], choice)
+
     def test_explicit_invoice_logo_wins_over_template_and_global(self):
         self.map_vendor_logo()
         path, name = self.owner.invoice_logo({"logo_file": "invoice.svg", "template_vendor": "Supplier AB"})

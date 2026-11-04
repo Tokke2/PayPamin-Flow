@@ -18,7 +18,7 @@ APP_NAME = "PayPamin Flow"
 
 def _write_startup_log(details: str) -> Path | None:
     """Write import/start failures before the application logger exists."""
-    path = Path.home() / ".paminnelseapp" / "startup.log"
+    path = Path.home() / ".paminnelseapp" / "logs" / "startup.log"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:

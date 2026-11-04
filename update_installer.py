@@ -290,7 +290,7 @@ def stage_update(
             source_path=source_path,
             target_path=(target_path or Path(__file__).resolve().parent).resolve(),
             work_dir=work_dir,
-            log_path=log_path or Path.home() / ".paminnelseapp" / "update.log",
+            log_path=log_path or Path.home() / ".paminnelseapp" / "logs" / "update.log",
         )
         _log(plan, f"Validated Python update {release.version}")
         return plan
