@@ -177,6 +177,53 @@ class CustomerContactTests(unittest.TestCase):
         self.assertIn("Tadega AB", body)
         self.assertNotIn("attachment", query)
 
+    def test_subject_includes_supplier_company_for_p1_and_p2(self):
+        row = self.record(invoice_no="6471", email="first@example.com")
+        row["template_vendor"] = "Laxå Glasmästeri"
+
+        p1 = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
+        p2 = self.app.build_reminder_email_content(row, "P2", ["first@example.com"])
+
+        self.assertEqual(p1["subject"], "Faktura 6471 – betalningspåminnelse - Laxå Glasmästeri")
+        self.assertEqual(p2["subject"], "SV: Faktura 6471 – betalningspåminnelse - Laxå Glasmästeri")
+        self.app.set_language("en")
+        english = self.app.build_reminder_email_content(row, "P2", ["first@example.com"])
+        self.assertEqual(english["subject"], "Re: Invoice 6471 – payment reminder - Laxå Glasmästeri")
+
+    def test_email_subject_uses_snapshot_company_after_later_vendor_change(self):
+        row = self.record(invoice_no="6471", email="first@example.com")
+        row["template_vendor"] = "Laxå Glasmästeri"
+        row["sent_count"] = 0
+        row["p1_date"] = "2026-10-01"
+        row["p1_snapshot"] = self.app.capture_p1_snapshot(row, 150.0, "2026-10-01")
+        row["template_vendor"] = "Annat Företag AB"
+
+        content = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
+
+        self.assertEqual(content["subject"], "Faktura 6471 – betalningspåminnelse - Laxå Glasmästeri")
+        self.assertNotIn("Annat Företag", content["subject"])
+
+    def test_email_subject_uses_only_unique_logo_supplier_fallback(self):
+        row = self.record(invoice_no="6471", email="first@example.com")
+        row["logo_file"] = "laxa.svg"
+        with self.app.connect() as db:
+            db.execute(
+                "INSERT INTO vendor_logos(vendor,logo_file) VALUES(?,?)",
+                ("Laxå Glasmästeri", "laxa.svg"),
+            )
+
+        content = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
+        self.assertEqual(content["subject"], "Faktura 6471 – betalningspåminnelse - Laxå Glasmästeri")
+        self.assertNotIn("Testkund", content["subject"])
+
+        with self.app.connect() as db:
+            db.execute(
+                "INSERT INTO vendor_logos(vendor,logo_file) VALUES(?,?)",
+                ("Annans Glasmästeri", "laxa.svg"),
+            )
+        ambiguous = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
+        self.assertEqual(ambiguous["subject"], "Faktura 6471 – betalningspåminnelse")
+
     def test_p2_has_reply_subject_custom_text_and_the_same_bcc(self):
         row = self.record(email="first@example.com")
         parsed = urlsplit(self.app.build_reminder_mailto(row, "P2", ["first@example.com"]))

@@ -838,6 +838,24 @@ def money(x,currency='SEK'):
 REMINDER_BCC = 'rl@tadega.com'
 
 
+def reminder_email_company(row):
+    """Return the supplier linked to the reminder, never the customer or a guess."""
+    vendor=str(row.get('template_vendor') or '').strip()
+    if vendor:return vendor
+    logo_file=str(row.get('logo_file') or '').strip()
+    if not logo_file:return ''
+    try:
+        with connect() as db:
+            rows=db.execute('SELECT vendor FROM vendor_logos WHERE logo_file=?',(Path(logo_file).name,)).fetchall()
+    except sqlite3.Error:
+        logger.exception('Could not resolve supplier name for reminder email subject: logo=%s',logo_file)
+        return ''
+    companies={str(item['vendor'] or '').strip() for item in rows if str(item['vendor'] or '').strip()}
+    if len(companies)==1:return next(iter(companies))
+    if companies:logger.warning('Reminder email supplier logo is ambiguous: logo=%s matches=%d',logo_file,len(companies))
+    return ''
+
+
 def build_reminder_email_content(row,level,recipients):
     """Build editable preview content with a fixed BCC; never send automatically."""
     addresses=parse_email_addresses(','.join(recipients))
@@ -870,6 +888,8 @@ def build_reminder_email_content(row,level,recipients):
         'deadline':deadline,
     }
     subject=_('Faktura {invoice_no} – betalningspåminnelse',invoice_no=invoice_no)
+    company=reminder_email_company(email_row)
+    if company:subject+=f' - {company}'
     if followup:subject=('Re: ' if get_language()=='en' else 'SV: ')+subject
     if level=='P2':
         body=_(
