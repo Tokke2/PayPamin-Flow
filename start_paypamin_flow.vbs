@@ -1,5 +1,5 @@
 ' Windows launcher for PayPamin Flow: starts pythonw.exe with no console window.
-' Copyright © 2026 Rickard Länkvist.
+' Copyright © 2026 Rickard Längkvist.
 Option Explicit
 Dim fso, sh, appDir, scriptPath, env, paths, p, pythonwPath, cmd
 Set fso = CreateObject("Scripting.FileSystemObject")

@@ -16,4 +16,4 @@ Thanks for considering a contribution to PayPamin Flow.
 7. Keep currency on the invoice, preserve SEK as the backward-compatible default and never introduce implicit currency conversion. Cover formatting, parser suggestions and database migrations with synthetic tests.
 8. Keep release asset names in `app_info.py`, `packaging/package_release.py` and the updater consistent. Test update downloads with synthetic packages and checksums; never run replacement helpers against a real development or production installation.
 
-PayPamin Flow is created by Rickard Länkvist. Copyright © 2026 Rickard Länkvist.
+PayPamin Flow is created by Rickard Längkvist. Copyright © 2026 Rickard Längkvist.

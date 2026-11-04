@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # PayPamin Flow launcher for Linux and other Unix-like systems.
-# Copyright © 2026 Rickard Länkvist.
+# Copyright © 2026 Rickard Längkvist.
 set -eu
 APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -n "${PAYPAMIN_PYTHON:-}" ]; then

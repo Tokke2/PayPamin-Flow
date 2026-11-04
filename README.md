@@ -2,8 +2,8 @@
 
 Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser Fortnox-fakturor och kundreskontralistor från PDF, skapar betalningspåminnelser som PDF och håller reda på nästa steg. Fakturor och kunduppgifter behandlas lokalt; appen ansluter inte till Fortnox och skickar inte e-post eller Kronofogden-ärenden automatiskt.
 
-- **Skapare och upphovsman:** Rickard Länkvist
-- **Copyright:** © 2026 Rickard Länkvist
+- **Skapare och upphovsman:** Rickard Längkvist
+- **Copyright:** © 2026 Rickard Längkvist
 
 > **Projektstatus:** tidig prototyp. Avläsning och mallar måste kontrolleras mot riktiga fakturor innan appen används skarpt.
 
@@ -331,6 +331,6 @@ Parser-, importbevaknings-, autostart-, ikon-, språk-, valuta-, databas-, säke
 
 ## Copyright och licens
 
-**Copyright © 2026 Rickard Länkvist. Skapare: Rickard Länkvist.** Se `NOTICE`.
+**Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.** Se `NOTICE`.
 
 Ingen separat användarlicens är vald. Normalt upphovsrättsskydd gäller, och rätt att återanvända eller distribuera koden ges inte automatiskt.

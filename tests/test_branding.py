@@ -20,7 +20,7 @@ ASSETS = ROOT / "assets"
 class BrandingTests(unittest.TestCase):
     def test_product_identity(self):
         self.assertEqual(APP_NAME, "PayPamin Flow")
-        self.assertEqual(APP_AUTHOR, "Rickard Länkvist")
+        self.assertEqual(APP_AUTHOR, "Rickard Längkvist")
         self.assertIn(APP_AUTHOR, APP_COPYRIGHT)
         self.assertIn("Copyright ©", APP_COPYRIGHT)
 
@@ -55,8 +55,10 @@ class BrandingTests(unittest.TestCase):
     def test_png_icons_retain_creator_and_copyright_metadata(self):
         from PIL import Image
 
-        for filename in ("paypamin_flow.png", "paypamin_flow_16.png", "paypamin_flow_512.png"):
-            with self.subTest(icon=filename), Image.open(ASSETS / filename) as icon:
+        icons = sorted(ASSETS.rglob("*.png"))
+        self.assertEqual(len(icons), 69)
+        for path in icons:
+            with self.subTest(icon=path.relative_to(ASSETS)), Image.open(path) as icon:
                 self.assertEqual(icon.info.get("Title"), APP_NAME)
                 self.assertEqual(icon.info.get("Author"), APP_AUTHOR)
                 self.assertEqual(icon.info.get("Copyright"), APP_COPYRIGHT)

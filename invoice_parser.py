@@ -3,7 +3,7 @@
 This module deliberately has no Tkinter dependency so parsing can be tested and
 reused on headless Windows, macOS and Linux systems.
 
-Copyright © 2026 Rickard Länkvist.
+Copyright © 2026 Rickard Längkvist.
 """
 from __future__ import annotations
 

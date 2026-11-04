@@ -2,6 +2,7 @@
 
 ## Unreleased — application version remains 0.6.0
 
+- Corrected the creator and copyright name to **Rickard Längkvist** throughout application information, source notices, documentation, SVG metadata and all PNG assets. The product name and icon artwork are unchanged.
 - Made the Swedish and English P1/P2 email texts firmer: the invoice is stated as overdue, full payment must be received by the fixed final payment date, and P2 explains that the matter may be escalated without any further reminder. The standard email subject and body contain no interest information. Existing reminder fees, historical snapshots, editable previews and manual sending are preserved.
 - Added the supplier company name to P1/P2 email subjects, for example `Faktura 6471 – betalningspåminnelse - Laxå Glasmästeri`, while retaining `SV:`/`Re:` for follow-ups. The name comes from the reminder's supplier snapshot so later vendor edits do not rewrite its identity; a unique vendor-to-logo association is used when the vendor field is empty. Customer names and guessed SVG filenames are never substituted, and ambiguous logo associations add no guessed suffix.
 - Added calendar-day log archiving under `logs/arkiv/YYYY-MM-DD/`. After unresolved errors are captured, technical log files whose last write is from yesterday or earlier move into the dated archive; today's files remain active. Rotation now happens before the first record on a new day and at 5 MB with unique numeric names instead of deleting older rotations. Existing archives are never overwritten, collisions receive a `legacy-` prefix and symlinks are not followed.
@@ -117,7 +118,7 @@
 ## 0.2.0 — 2026-10-23
 
 - Changed the product name to **PayPamin Flow** throughout the UI, launchers, documentation and native package metadata.
-- Added creator and copyright attribution for **Rickard Länkvist**, including an in-app About dialog and a `NOTICE` file.
+- Added creator and copyright attribution for **Rickard Längkvist**, including an in-app About dialog and a `NOTICE` file.
 - Added one custom application icon in SVG, PNG, ICO and ICNS formats for windows, dialogs and native desktop packages.
 - Added per-user login autostart for Windows, macOS and Linux, enabled by default and configurable in Settings.
 - Added macOS and Linux launchers, cross-platform file opening, portable UI fonts and writable data paths for frozen apps.

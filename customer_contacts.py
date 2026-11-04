@@ -1,6 +1,6 @@
 """Reusable customer email contacts for PayPamin Flow.
 
-Copyright © 2026 Rickard Länkvist.
+Copyright © 2026 Rickard Längkvist.
 """
 from __future__ import annotations
 

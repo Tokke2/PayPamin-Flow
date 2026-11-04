@@ -4,7 +4,7 @@
 Kräver Python 3.10+. PDF-textavläsning: pip install pymupdf.
 OCR för skannade PDF: se README.
 
-Copyright © 2026 Rickard Länkvist. Skapare: Rickard Länkvist.
+Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.
 """
 from __future__ import annotations
 import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib, tempfile, json
