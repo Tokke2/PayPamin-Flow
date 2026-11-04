@@ -1,12 +1,13 @@
 import tempfile
 import unittest
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import error_log
 import paypamin_flow_launcher
-from error_log import refresh_error_log
+from error_log import refresh_error_log, resolve_errors
 from test_database import load_headless_app
 
 
@@ -87,8 +88,8 @@ class ConsolidatedErrorLogTests(unittest.TestCase):
         self.assertIn("Rolled back Python update", consolidated)
         self.assertNotIn("Validated Python update", consolidated)
 
-    def test_refresh_excludes_itself_and_removes_stale_entries(self):
-        (self.log_dir / "errors.log").write_text("ERROR stale synthetic entry\n", encoding="utf-8")
+    def test_refresh_preserves_unresolved_entries_without_duplicating_them(self):
+        (self.log_dir / "errors.log").write_text("ERROR unresolved synthetic entry\n", encoding="utf-8")
         (self.log_dir / "app.log").write_text(
             "2026-10-30 10:00:00,000 INFO Healthy operation\n", encoding="utf-8"
         )
@@ -96,10 +97,68 @@ class ConsolidatedErrorLogTests(unittest.TestCase):
         report = refresh_error_log(self.log_dir)
         consolidated = report.path.read_text(encoding="utf-8")
 
-        self.assertEqual(report.error_count, 0)
-        self.assertIn("No errors found", consolidated)
-        self.assertNotIn("stale synthetic entry", consolidated)
+        self.assertEqual(report.error_count, 1)
+        self.assertIn("unresolved synthetic entry", consolidated)
         self.assertNotIn("Healthy operation", consolidated)
+        refreshed = refresh_error_log(self.log_dir)
+        self.assertEqual(refreshed.error_count, 1)
+        self.assertEqual(refreshed.path.read_text(encoding="utf-8").count("unresolved synthetic entry"), 1)
+
+    def test_unresolved_error_survives_source_archiving(self):
+        source = self.log_dir / "app.log"
+        source.write_text(
+            "2026-10-30 10:02:00,000 ERROR Failure that remains unresolved\n", encoding="utf-8"
+        )
+        self.assertEqual(refresh_error_log(self.log_dir).error_count, 1)
+        archive = self.log_dir / "arkiv" / "2026-10-30"
+        archive.mkdir(parents=True)
+        source.rename(archive / "app.log")
+
+        report = refresh_error_log(self.log_dir)
+        consolidated = report.path.read_text(encoding="utf-8")
+
+        self.assertEqual(report.error_count, 1)
+        self.assertEqual(report.source_count, 0)
+        self.assertIn("Failure that remains unresolved", consolidated)
+
+    def test_resolved_errors_archive_and_do_not_return_from_unchanged_source(self):
+        source = self.log_dir / "app.log"
+        original = "2026-10-30 10:02:00,000 ERROR Resolved synthetic failure\n"
+        source.write_text(original, encoding="utf-8")
+        refresh_error_log(self.log_dir)
+
+        resolved = resolve_errors(
+            self.log_dir, today=date(2026, 11, 3),
+            now=datetime(2026, 11, 3, 8, 30, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(resolved.resolved_count, 1)
+        self.assertIn("Resolved synthetic failure", resolved.archive_path.read_text(encoding="utf-8"))
+        self.assertEqual(resolved.archive_path.parent, self.log_dir / "arkiv" / "resolved" / "2026-11-03")
+        self.assertIn("No unresolved errors", resolved.path.read_text(encoding="utf-8"))
+        self.assertTrue((self.log_dir / "resolved-errors.json").is_file())
+        self.assertEqual(refresh_error_log(self.log_dir).error_count, 0)
+
+        source.write_text(original + "2026-11-03 09:00:00,000 ERROR New distinct failure\n", encoding="utf-8")
+        refreshed = refresh_error_log(self.log_dir)
+        consolidated = refreshed.path.read_text(encoding="utf-8")
+        self.assertEqual(refreshed.error_count, 1)
+        self.assertIn("New distinct failure", consolidated)
+        self.assertNotIn("Resolved synthetic failure", consolidated)
+
+    def test_failed_resolved_archive_preserves_active_error_and_state(self):
+        (self.log_dir / "app.log").write_text(
+            "2026-10-30 10:02:00,000 ERROR Keep after archive failure\n", encoding="utf-8"
+        )
+        refresh_error_log(self.log_dir)
+        before = (self.log_dir / "errors.log").read_text(encoding="utf-8")
+
+        with patch.object(error_log.shutil, "copyfileobj", side_effect=OSError("synthetic archive failure")):
+            with self.assertRaisesRegex(OSError, "synthetic archive failure"):
+                resolve_errors(self.log_dir)
+
+        self.assertEqual((self.log_dir / "errors.log").read_text(encoding="utf-8"), before)
+        self.assertFalse((self.log_dir / "resolved-errors.json").exists())
 
     def test_failed_atomic_replace_preserves_previous_consolidated_log(self):
         output = self.log_dir / "errors.log"
@@ -195,6 +254,33 @@ class ConsolidatedErrorLogUiTests(unittest.TestCase):
         self.assertIn("Synthetic UI failure", consolidated)
         self.assertIn("SOURCE: app.log", consolidated)
 
+    def test_resolve_error_log_archives_after_confirmation(self):
+        self.app.logger.error("Synthetic error awaiting resolution")
+
+        with patch.object(self.app.messagebox, "askyesno", return_value=True, create=True) as confirm, patch.object(
+            self.app.messagebox, "showinfo", create=True
+        ) as info:
+            self.app.ReminderApp.resolve_error_log(SimpleNamespace())
+
+        confirm.assert_called_once()
+        info.assert_called_once()
+        self.assertNotIn("Synthetic error awaiting resolution", self.app.ERROR_LOG_PATH.read_text(encoding="utf-8"))
+        archived = list((self.app.LOG_DIR / "arkiv" / "resolved").glob("*/*.log"))
+        self.assertEqual(len(archived), 1)
+        self.assertIn("Synthetic error awaiting resolution", archived[0].read_text(encoding="utf-8"))
+
+    def test_cancelled_error_resolution_keeps_unresolved_error(self):
+        self.app.logger.error("Synthetic error must remain")
+
+        with patch.object(self.app.messagebox, "askyesno", return_value=False, create=True), patch.object(
+            self.app.messagebox, "showinfo", create=True
+        ) as info:
+            self.app.ReminderApp.resolve_error_log(SimpleNamespace())
+
+        info.assert_not_called()
+        self.assertIn("Synthetic error must remain", self.app.ERROR_LOG_PATH.read_text(encoding="utf-8"))
+        self.assertFalse((self.app.LOG_DIR / "resolved-errors.json").exists())
+
     def test_open_technical_log_opens_complete_app_log_with_info_records(self):
         self.app.logger.info("Synthetic customer ledger row detail")
 
@@ -219,7 +305,7 @@ class ConsolidatedErrorLogUiTests(unittest.TestCase):
         self.assertEqual(scheduled, [
             (self.app.ERROR_LOG_REFRESH_INTERVAL_MS, "next-error-log-refresh")
         ])
-        self.assertIn("Consolidated error log refresh failed", self.app.LOG_PATH.read_text(encoding="utf-8"))
+        self.assertIn("Consolidated error log refresh or daily archive failed", self.app.LOG_PATH.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

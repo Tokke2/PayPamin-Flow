@@ -31,7 +31,8 @@ from cache_cleaner import clean_cache
 from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from console_free import configure_console_free_subprocesses
-from error_log import ERROR_LOG_NAME, refresh_error_log
+from error_log import ERROR_LOG_NAME, refresh_error_log, resolve_errors
+from log_archive import DailySizeRotatingFileHandler, archive_old_logs
 from customer_contacts import (
     EmailAddressError, ensure_customer_contact_schema, get_customer_contact,
     normalize_email_addresses, parse_email_addresses, save_customer_contact,
@@ -144,13 +145,31 @@ ERROR_LOG_PATH = LOG_DIR / ERROR_LOG_NAME
 logger = logging.getLogger(APP_SLUG)
 logger.setLevel(logging.INFO)
 if not logger.handlers:
-    log_handler=RotatingFileHandler(LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8')
+    log_handler=DailySizeRotatingFileHandler(LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8')
     log_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logger.addHandler(log_handler)
 for _source_name,_destination_name in _legacy_log_moves:
     logger.info('Legacy log moved into logs folder: %s -> %s',_source_name,_destination_name)
 for _source_name in _legacy_log_errors:
     logger.warning('Legacy log could not be moved into logs folder: %s',_source_name)
+
+
+def _archive_previous_day_logs():
+    """Roll an idle log at midnight, then archive files from earlier days."""
+    for handler in logger.handlers:
+        if isinstance(handler,DailySizeRotatingFileHandler):
+            handler.rollover_for_new_day()
+    return archive_old_logs(LOG_DIR)
+
+
+def _refresh_and_archive_logs():
+    """Capture unresolved errors before their technical sources are archived."""
+    report=refresh_error_log(LOG_DIR)
+    archive=_archive_previous_day_logs()
+    if archive.archived or archive.collisions or archive.errors:
+        log=logger.warning if archive.errors else logger.info
+        log('Daily log archive: archived=%d collisions=%d errors=%d',archive.archived,archive.collisions,archive.errors)
+    return report
 
 
 def _ledger_log_json(payload):
@@ -1729,6 +1748,7 @@ class ReminderApp(tk.Tk):
         menu.add_cascade(label=_('Arkiv'),menu=file_menu)
         help_menu=tk.Menu(menu,tearoff=0)
         help_menu.add_command(label=_('Visa samlad fellogg'),command=self.open_log)
+        help_menu.add_command(label=_('Markera fellogg som åtgärdad'),command=self.resolve_error_log)
         help_menu.add_command(label=_('Visa teknisk logg'),command=self.open_technical_log)
         help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
@@ -2019,12 +2039,30 @@ class ReminderApp(tk.Tk):
     def open_log(self):
         logger.info('User opened consolidated error log')
         try:
-            report=refresh_error_log(LOG_DIR)
+            report=_refresh_and_archive_logs()
             open_path(report.path)
         except Exception:
             logger.exception('Could not open consolidated error log')
             try:open_path(LOG_PATH)
             except Exception:logger.exception('Could not open diagnostic log')
+
+    def resolve_error_log(self):
+        """Resolve the reviewed error view without altering technical sources."""
+        logger.info('User requested consolidated error log resolution')
+        try:
+            report=_refresh_and_archive_logs()
+            if not report.error_count:
+                messagebox.showinfo(APP_NAME,_('Det finns inga olösta fel i felloggen.'),parent=self)
+                return
+            if not messagebox.askyesno(APP_NAME,_('Markera alla fel i felloggen som åtgärdade?\n\nEn kopia sparas i loggarkivet. De tekniska källoggarna ändras inte.'),parent=self):
+                logger.info('Consolidated error log resolution cancelled')
+                return
+            resolved=resolve_errors(LOG_DIR)
+            logger.info('Consolidated errors marked resolved: count=%d archive=%s',resolved.resolved_count,resolved.archive_path)
+            messagebox.showinfo(APP_NAME,_('Felloggen markerades som åtgärdad. {count} fel sparades i loggarkivet.',count=resolved.resolved_count),parent=self)
+        except Exception:
+            logger.exception('Could not resolve consolidated error log')
+            messagebox.showerror(APP_NAME,_('Felloggen kunde inte markeras som åtgärdad. Se den tekniska loggen.'),parent=self)
 
     def open_technical_log(self):
         """Open the complete local log, including successful PDF diagnostics."""
@@ -2035,8 +2073,8 @@ class ReminderApp(tk.Tk):
     def _run_scheduled_error_log_refresh(self):
         """Keep the consolidated local view current without touching source logs."""
         if self._quitting:return
-        try:refresh_error_log(LOG_DIR)
-        except Exception:logger.exception('Consolidated error log refresh failed')
+        try:_refresh_and_archive_logs()
+        except Exception:logger.exception('Consolidated error log refresh or daily archive failed')
         if not self._quitting:self.after(ERROR_LOG_REFRESH_INTERVAL_MS,self._run_scheduled_error_log_refresh)
 
     def clear_cache_now(self):
@@ -3454,7 +3492,7 @@ def main():
         logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
         log_activity('application','started','completed',version=APP_VERSION,platform=sys.platform,commit=APP_RELEASE_COMMIT)
         try:
-            report=refresh_error_log(LOG_DIR)
+            report=_refresh_and_archive_logs()
             logger.info('Consolidated error log refreshed: errors=%d sources=%d',report.error_count,report.source_count)
         except Exception:logger.exception('Consolidated error log refresh failed')
         window=ReminderApp()
