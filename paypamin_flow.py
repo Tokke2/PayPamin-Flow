@@ -893,13 +893,13 @@ def build_reminder_email_content(row,level,recipients):
     if followup:subject=('Re: ' if get_language()=='en' else 'SV: ')+subject
     if level=='P2':
         body=_(
-            'Hej!\n\nTrots tidigare påminnelse saknar vi fortfarande betalning för faktura {invoice_no}, som förföll {due_date}. Detta är andra påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\nPåminnelseavgifter för P1 och P2: {fees}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nOm betalningen inte kommer in kan ärendet lämnas vidare. Påminnelsen skickas som PDF. Ange fakturanumret vid betalning. Om betalning redan är gjord kan du bortse från detta mejl.\n\nVänliga hälsningar\nTadega AB',
+            'Hej!\n\nTrots tidigare påminnelse är faktura {invoice_no}, som förföll {due_date}, fortfarande obetald. Detta är andra påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\nPåminnelseavgifter för P1 och P2: {fees}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nBetalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Om betalningen inte har kommit in efter sista betalningsdag kan ärendet lämnas vidare utan ytterligare påminnelse. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.\n\nVänliga hälsningar\nTadega AB',
             invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
             fees=values['fees'],total=values['total'],deadline=deadline,
         )
     else:
         body=_(
-            'Hej!\n\nVi saknar betalning för faktura {invoice_no}, som förföll {due_date}. Detta är första påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\nPåminnelseavgift: {fee}\nAtt betala: {total}\nBetalningsfrist: {deadline}\n\nPåminnelsen skickas som PDF. Ange fakturanumret vid betalning. Om betalning redan är gjord kan du bortse från detta mejl.\n\nVänliga hälsningar\nTadega AB',
+            'Hej!\n\nFaktura {invoice_no} förföll {due_date} och är fortfarande obetald. Detta är första påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\nPåminnelseavgift: {fee}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nBetalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.\n\nVänliga hälsningar\nTadega AB',
             invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
             fee=values['fee'],total=values['total'],deadline=deadline,
         )

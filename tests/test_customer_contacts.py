@@ -224,6 +224,40 @@ class CustomerContactTests(unittest.TestCase):
         ambiguous = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
         self.assertEqual(ambiguous["subject"], "Faktura 6471 – betalningspåminnelse")
 
+    def test_firm_email_texts_require_full_payment_by_deadline_without_interest(self):
+        row = self.record(email="first@example.com")
+        swedish = [
+            self.app.build_reminder_email_content(row, level, ["first@example.com"])
+            for level in ("P1", "P2")
+        ]
+
+        for content in swedish:
+            body = content["body"]
+            self.assertIn("förföll 2000-01-01", body)
+            self.assertIn("Sista betalningsdag:", body)
+            self.assertIn("Betalningen av hela beloppet ska vara oss tillhanda senast ", body)
+            self.assertIn("Ange fakturanumret som referens", body)
+            self.assertNotIn("bortse från", body)
+            self.assertNotIn("ränta", (content["subject"] + body).casefold())
+        self.assertNotIn("lämnas vidare", swedish[0]["body"])
+        self.assertIn("lämnas vidare utan ytterligare påminnelse", swedish[1]["body"])
+
+        self.app.set_language("en")
+        english = [
+            self.app.build_reminder_email_content(row, level, ["first@example.com"])
+            for level in ("P1", "P2")
+        ]
+        for content in english:
+            body = content["body"]
+            self.assertIn("due on 2000-01-01", body)
+            self.assertIn("Final payment date:", body)
+            self.assertIn("Full payment must reach us by ", body)
+            self.assertIn("invoice number as the payment reference", body)
+            self.assertNotIn("disregard", body.casefold())
+            self.assertNotIn("interest", (content["subject"] + body).casefold())
+        self.assertNotIn("escalated", english[0]["body"])
+        self.assertIn("escalated without any further reminder", english[1]["body"])
+
     def test_p2_has_reply_subject_custom_text_and_the_same_bcc(self):
         row = self.record(email="first@example.com")
         parsed = urlsplit(self.app.build_reminder_mailto(row, "P2", ["first@example.com"]))
