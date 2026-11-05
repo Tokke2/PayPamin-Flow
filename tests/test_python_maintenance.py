@@ -46,7 +46,10 @@ class PythonMaintenanceTests(unittest.TestCase):
         self.assertIn("only-if-needed", args)
         self.assertNotIn("--user", args)
         self.assertNotIn("venv", " ".join(args).lower())
-        self.assertEqual(calls[0][1]["creationflags"], 0)
+        self.assertEqual(
+            calls[0][1]["creationflags"],
+            getattr(maintenance.subprocess, "CREATE_NO_WINDOW", 0),
+        )
 
     def test_addon_requirements_match_requirements_file(self):
         requirements_path = Path(__file__).resolve().parents[1] / "requirements.txt"
@@ -137,8 +140,9 @@ class AddonSchedulerTests(unittest.TestCase):
     def test_scheduler_claims_one_catch_up_per_week(self):
         fake = self.fake_app()
         moment = datetime(2026, 11, 3, 9, 0)
-        self.run_scheduler(fake, moment, marker="2026-10-26")
-        self.run_scheduler(fake, moment, marker="2026-10-26")
+        with patch.object(self.app.sys, "platform", "linux"):
+            self.run_scheduler(fake, moment, marker="2026-10-26")
+            self.run_scheduler(fake, moment, marker="2026-10-26")
         fake.update_python_addons.assert_called_once_with()
         self.assertEqual(fake._python_addon_maintenance_attempted_week, "2026-11-02")
 
