@@ -2568,7 +2568,8 @@ class ReminderApp(tk.Tk):
             if not automatic or imported or failed:
                 title=_('Automatisk import klar') if automatic else _('Skanning klar')
                 messagebox.showinfo(title,_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nBetalda som hoppades över: {paid}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,paid=paid_skipped,skipped=skipped,failed=failed),parent=self)
-            show_due_reminder_dialog(parent=self)
+            if not automatic or imported:
+                show_due_reminder_dialog(parent=self)
         finally:
             self._import_scan_running=False
 

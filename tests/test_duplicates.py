@@ -155,7 +155,9 @@ class DuplicateInvoiceTests(unittest.TestCase):
             patch.object(self.app.messagebox, "showinfo", create=True) as info,
         ):
             self.app.ReminderApp.scan_import_folder(fake)
-        self.assertIn("Dubbletter som inte importerades: 1", info.call_args.args[1])
+        # The first popup is the import summary. A manual scan may then show
+        # the separately tested due-reminder dialog for an existing invoice.
+        self.assertIn("Dubbletter som inte importerades: 1", info.call_args_list[0].args[1])
         self.assertEqual(self.invoice_count(), 1)
 
     def test_automatic_duplicate_batch_does_not_show_extra_summary(self):
