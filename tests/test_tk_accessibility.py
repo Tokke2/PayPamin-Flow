@@ -55,6 +55,8 @@ class RealTkAccessibilityTests(unittest.TestCase):
         self.root = tk.Tk()
         self.root.geometry("1000x800")
         self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
         self.root.update()
 
     def tearDown(self):
