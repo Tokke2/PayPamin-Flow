@@ -16,7 +16,8 @@ class AutostartTests(unittest.TestCase):
         command = autostart.launch_command()
         self.assertGreaterEqual(len(command), 2)
         self.assertTrue(command[0])
-        self.assertTrue(command[1].endswith("paypamin_flow_launcher.py"))
+        expected_launcher = "start_paypamin_flow.vbs" if sys.platform.startswith("win") else "paypamin_flow_launcher.py"
+        self.assertTrue(command[1].endswith(expected_launcher))
         self.assertTrue(Path(command[1]).is_file())
         self.assertNotIn(".pyw", command[1])
         self.assertEqual(command[2], MINIMIZED_START_ARG)
@@ -49,24 +50,30 @@ class AutostartTests(unittest.TestCase):
                 self.assertFalse(path.exists())
                 self.assertFalse(autostart.is_autostart_enabled())
 
-    def test_windows_source_autostart_uses_pythonw_without_pyw(self):
+    def test_windows_source_autostart_uses_the_console_free_runtime_guard(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             source = temp / "source"
             source.mkdir()
-            launcher = source / "paypamin_flow_launcher.py"
+            launcher = source / "start_paypamin_flow.vbs"
             launcher.write_text("", encoding="utf-8")
             python = temp / "python.exe"
-            pythonw = temp / "pythonw.exe"
             python.write_bytes(b"")
-            pythonw.write_bytes(b"")
-            with mock.patch.object(autostart.sys, "platform", "win32"), \
+            wscript = temp / "Windows" / "System32" / "wscript.exe"
+            wscript.parent.mkdir(parents=True)
+            wscript.write_bytes(b"")
+            with mock.patch.dict(os.environ, {"SystemRoot": str(temp / "Windows")}), \
+                    mock.patch.object(autostart.sys, "platform", "win32"), \
                     mock.patch.object(autostart.sys, "executable", str(python)), \
                     mock.patch.object(autostart, "SOURCE_DIR", source):
                 command = autostart.launch_command()
-                self.assertEqual(command, [str(pythonw.resolve()), str(launcher), MINIMIZED_START_ARG])
+                self.assertEqual(command, [str(wscript), str(launcher), MINIMIZED_START_ARG])
                 self.assertFalse(any(part.endswith(".pyw") for part in command))
-                pythonw.unlink()
+                launcher.unlink()
+                with self.assertRaises(autostart.AutostartError):
+                    autostart.launch_command()
+                launcher.write_text("", encoding="utf-8")
+                wscript.unlink()
                 with self.assertRaises(autostart.AutostartError):
                     autostart.launch_command()
 

@@ -50,6 +50,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "update_checker.py",
     "update_installer.py",
     "requirements.txt",
+    "start_paypamin_flow.vbs",
     "assets/paypamin_flow.png",
     "assets/paypamin_flow.ico",
     "assets/paypamin_flow.icns",

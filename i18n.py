@@ -611,6 +611,7 @@ _ENGLISH = {
     "Det går inte att hitta appens programfil.": "The application executable could not be found.",
     "Det går inte att hitta Python-installationen.": "The Python installation could not be found.",
     "Konsolfri start kräver pythonw.exe. Installera Python från python.org.": "Console-free launch requires pythonw.exe. Install Python from python.org.",
+    "Konsolfri start kräver wscript.exe.": "Console-free launch requires wscript.exe.",
     "Windows PowerShell krävs för den ikonmärkta autostartgenvägen.": "Windows PowerShell is required for the icon-branded autostart shortcut.",
     "Programikonen saknas: {path}": "The application icon is missing: {path}",
     "Windows-genvägen för autostart kunde inte skapas.": "The Windows autostart shortcut could not be created.",

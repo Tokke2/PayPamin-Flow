@@ -37,11 +37,13 @@ def launch_command() -> list[str]:
     executable = Path(sys.executable).resolve()
     script = SOURCE_DIR / "paypamin_flow_launcher.py"
     if sys.platform.startswith("win"):
-        # Never fall back to python.exe: that would open a console at login.
-        pythonw = executable.with_name("pythonw.exe")
-        if not pythonw.is_file():
-            raise AutostartError(_("Konsolfri start kräver pythonw.exe. Installera Python från python.org."))
-        executable = pythonw
+        # Route login starts through the same console-free runtime guard as
+        # manual starts. sync_autostart() refreshes existing shortcuts, so an
+        # app update also migrates shortcuts that used pythonw.exe directly.
+        script = SOURCE_DIR / "start_paypamin_flow.vbs"
+        executable = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "wscript.exe"
+        if not executable.is_file():
+            raise AutostartError(_("Konsolfri start kräver wscript.exe."))
     if not script.is_file():
         raise AutostartError(_("Startfilen saknas: {script}", script=script))
     return [str(executable), str(script), MINIMIZED_START_ARG]
