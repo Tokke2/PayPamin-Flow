@@ -34,6 +34,14 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser Fortnox-
 - PDF sparas lokalt och öppnas i datorns standardprogram. **Öppna exportmapp** i knappraden eller under **Arkiv** öppnar mappen med skapade påminnelser i datorns filhanterare. Den samlade felloggen öppnas via **Visa samlad fellogg** eller **Hjälp → Visa samlad fellogg**.
 - **Automatiskt påminnelsearkiv i kundmappar:** vid appstart och därefter regelbundet flyttas igenkända P1/P2-PDF:er från och med dagen efter sitt ursprungliga påminnelsedatum från `export/` till `export/arkiv/<kund>/`. Kundmappen bestäms från fakturans sparade P1/P2-data, inte genom att gissa ett delat filnamn; en fil utan entydig kundkoppling lämnas kvar och loggas. Även filer i det tidigare platta `export/arkiv/` flyttas till rätt kundmapp när kopplingen finns. Fakturor och påminnelsehistorik ändras inte, arkiverad P1/P2 kan fortfarande öppnas och redigeras och befintliga arkivfiler skrivs aldrig över.
 
+## Tangentbord och tillgänglighet
+
+- **Tab / Shift+Tab** flyttar fokus i den visuella ordningen. Knappar, fält, flikar, fakturalistan, textytor och PDF-ytan har tydlig fokusmarkering; dialoger har en egen fokusordning.
+- **F1** öppnar **Kortkommandon och tillgänglighet**. **F10** eller **Alt+A** öppnar Arkiv-menyn och **Alt+H** öppnar Hjälp-menyn, som sedan används med piltangenter och Enter.
+- Huvudgenvägar: **Ctrl/Cmd+F** sök, **Ctrl/Cmd+N** manuell faktura, **Ctrl/Cmd+O** faktura-PDF, **Ctrl/Cmd+E** eller **F2** redigera vald, **F5** skanna importmappen, **Ctrl/Cmd+Enter** öppna original-PDF, **Ctrl+Tab / Ctrl+Shift+Tab** växla fakturaflik och **Shift+F10** öppna vald fakturas meny.
+- **Ctrl/Cmd +**, **Ctrl/Cmd −** och **Ctrl/Cmd 0** ökar, minskar eller återställer textstorleken. Samma val finns i **Inställningar → Textstorlek** och i hjälpfönstret. Skalning 80–200 % sparas i den lokala inställningen och JSON-journalen och påverkar menyer, knappar, formulär, flikar, listor och textytor i öppna och nya fönster.
+- Textstorleken ändrar endast appens gränssnitt. Fakturadata, skapade P1/P2-PDF:er och e-posthistorik ändras inte. Textkontrasten och den skriftliga statusen är bevarade även med färgade fakturarader; funktionsknappar och menyer använder fortsatt text utan funktionsikoner.
+
 ## Python-only – ingen EXE eller native-app
 
 PayPamin Flow distribueras som **Python-källkod**, inte som EXE, macOS-app eller native Linux-binär. Samma releasepaket används på alla tre plattformarna:

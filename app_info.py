@@ -24,6 +24,7 @@ RELEASE_ASSET_NAMES = {
 }
 PYTHON_PACKAGE_REQUIRED_FILES = (
     "activity_log.py",
+    "accessibility.py",
     "app_backup.py",
     "app_info.py",
     "autostart.py",

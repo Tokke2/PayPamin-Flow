@@ -100,6 +100,18 @@ from python_maintenance import (
     read_maintenance_week,
     write_maintenance_week,
 )
+from accessibility import (
+    AccessibleStyle,
+    FONT_SCALE_CHOICES,
+    FONT_SCALE_SETTING,
+    font_scale_label,
+    font_scale_storage,
+    focus_first,
+    normalize_font_scale,
+    prepare_focus_tree,
+    scaled_number,
+    stepped_font_scale,
+)
 
 IMPORT_WATCH_INTERVAL_MS = 5000
 LEDGER_REMINDER_INTERVAL_MS = 15 * 60 * 1000
@@ -426,7 +438,7 @@ def init_db():
         for column in ('org_number','bankgiro_number'):
             if column not in vendor_logo_columns:
                 db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','auto_import':'1','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv'}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','auto_import':'1','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
 
@@ -1368,9 +1380,15 @@ class ReminderApp(tk.Tk):
             return
         for child in children:self._instrument_action_tree(child)
 
-    def _finalize_window_actions(self,window):
+    def _finalize_window_actions(self,window,main_window=False):
         self._apply_action_icons(window)
         self._instrument_action_tree(window)
+        try:focus_window=window.winfo_toplevel()
+        except (AttributeError,tk.TclError):focus_window=window
+        self._install_accessibility_shortcuts(focus_window,main_window=main_window)
+        prepare_focus_tree(focus_window)
+        try:focus_window.after_idle(lambda:focus_first(focus_window))
+        except (AttributeError,tk.TclError):focus_first(focus_window)
 
     def _apply_menu_icons(self,menu):
         """Keep menu commands and cascades text-only without changing actions."""
@@ -1708,7 +1726,7 @@ class ReminderApp(tk.Tk):
         win=self._new_toplevel(_('Förbereder appen'));win.resizable(False,False)
         win.protocol('WM_DELETE_WINDOW',lambda:None)
         box=ttk.Frame(win,padding=22);box.pack()
-        ttk.Label(box,text=_('Installerar saknade Python-tillägg'),font=(self.font_family,11,'bold')).pack(anchor='w')
+        ttk.Label(box,text=_('Installerar saknade Python-tillägg'),style='Heading.TLabel').pack(anchor='w')
         ttk.Label(box,text=_('Detta behövs för PDF och systemfält. Installationen sker i bakgrunden.')).pack(anchor='w',pady=(7,10))
         bar=ttk.Progressbar(box,mode='indeterminate',length=330);bar.pack(fill='x');bar.start(12)
         status=ttk.Label(box,text=_('Ansluter till Python-pakettjänsten…'),style='Sub.TLabel');status.pack(anchor='w',pady=(8,0))
@@ -1792,20 +1810,166 @@ class ReminderApp(tk.Tk):
     def _style(self):
         s=ttk.Style(self); s.theme_use('clam')
         self.font_family=tkfont.nametofont('TkDefaultFont').cget('family')
-        s.configure('TFrame',background='#f3f5f8'); s.configure('TLabel',background='#f3f5f8',foreground='#1f2a3d',font=(self.font_family,10))
-        s.configure('Title.TLabel',font=(self.font_family,19,'bold'),foreground='#263a62')
-        s.configure('Sub.TLabel',font=(self.font_family,9),foreground='#667085')
-        s.configure('TButton',font=(self.font_family,9),padding=(10,7))
-        s.configure('Accent.TButton',background='#304b79',foreground='white',font=(self.font_family,9,'bold'))
-        s.map('Accent.TButton',background=[('active','#263d64')])
-        s.configure('Treeview',font=(self.font_family,9),rowheight=30,background='white',fieldbackground='white')
-        s.configure('Treeview.Heading',font=(self.font_family,9,'bold'),background='#e8edf4',foreground='#344054')
-        s.configure('TNotebook',background='#f3f5f8',borderwidth=0)
-        s.configure('TNotebook.Tab',font=(self.font_family,9),padding=(10,6))
+        self.ui_font_scale=normalize_font_scale(setting(FONT_SCALE_SETTING))
+        self._accessibility_style=AccessibleStyle(s,tkfont,self.font_family)
+        self._accessibility_style.apply(self.ui_font_scale)
+
+    def set_font_scale(self,value,persist=True):
+        """Apply a bounded text zoom immediately without rebuilding open dialogs."""
+        self.ui_font_scale=normalize_font_scale(value)
+        if persist:
+            set_setting(FONT_SCALE_SETTING,font_scale_storage(self.ui_font_scale))
+            refresh_json_journal(parent=self)
+        style=getattr(self,'_accessibility_style',None)
+        if style is not None:style.apply(self.ui_font_scale)
+        tree=getattr(self,'tree',None)
+        if tree is not None:
+            for column,width in getattr(self,'_invoice_column_widths',{}).items():
+                try:tree.column(column,width=scaled_number(width,self.ui_font_scale))
+                except tk.TclError:pass
+        scale_var=getattr(self,'_font_scale_var',None)
+        if scale_var is not None:
+            try:scale_var.set(font_scale_label(self.ui_font_scale))
+            except tk.TclError:pass
+        help_label=getattr(self,'_keyboard_help_scale_label',None)
+        if help_label is not None:
+            try:help_label.configure(text=_('Textstorlek: {scale}. Alla kontroller nås med Tab och har synlig fokusmarkering.',scale=font_scale_label(self.ui_font_scale)))
+            except tk.TclError:pass
+        for window in [self]+[child for child in self.winfo_children() if child.winfo_class()=='Toplevel']:
+            prepare_focus_tree(window)
+        logger.info('UI text scale changed: scale=%s',font_scale_storage(self.ui_font_scale))
+        return self.ui_font_scale
+
+    def change_font_scale(self,direction):
+        self.set_font_scale(stepped_font_scale(getattr(self,'ui_font_scale',1.0),direction))
+        return 'break'
+
+    def reset_font_scale(self):
+        self.set_font_scale(1.0)
+        return 'break'
+
+    def _shortcut_modifier(self):
+        return 'Command' if sys.platform=='darwin' else 'Control'
+
+    @staticmethod
+    def _shortcut_callback(callback):
+        def run(_event=None):
+            callback()
+            return 'break'
+        return run
+
+    def _install_accessibility_shortcuts(self,window,main_window=False):
+        """Install idempotent keyboard access on the root and every dialog."""
+        if getattr(window,'_accessibility_shortcuts_bound',False):return
+        bind=lambda sequence,callback:window.bind(sequence,self._shortcut_callback(callback),add='+')
+        modifier=self._shortcut_modifier()
+        for sequence in ('<F1>',):bind(sequence,self.show_keyboard_help)
+        for suffix in ('plus','equal','KP_Add'):
+            bind(f'<{modifier}-{suffix}>',lambda:self.change_font_scale(1))
+        for suffix in ('minus','KP_Subtract'):
+            bind(f'<{modifier}-{suffix}>',lambda:self.change_font_scale(-1))
+        bind(f'<{modifier}-0>',self.reset_font_scale)
+        if main_window:
+            bind(f'<{modifier}-f>',self.focus_invoice_search)
+            bind(f'<{modifier}-n>',self.add_invoice)
+            bind(f'<{modifier}-o>',self.import_invoice)
+            bind(f'<{modifier}-e>',self.edit_invoice)
+            bind(f'<{modifier}-comma>',self.settings)
+            bind('<F2>',self.edit_invoice)
+            bind('<F5>',self.scan_import_folder)
+            bind('<F10>',self.show_file_menu)
+            bind('<Alt-a>',self.show_file_menu)
+            bind('<Alt-h>',self.show_help_menu)
+            bind('<Control-Tab>',lambda:self.cycle_invoice_filter(1))
+            bind('<Control-Shift-Tab>',lambda:self.cycle_invoice_filter(-1))
+            bind(f'<{modifier}-Return>',self.open_selected_invoice_pdf)
+        window._accessibility_shortcuts_bound=True
+
+    def _open_keyboard_menu(self,menu):
+        try:menu.unpost()
+        except tk.TclError:pass
+        menu.tk_popup(self.winfo_rootx()+12,self.winfo_rooty()+30)
+        try:menu.grab_release()
+        except tk.TclError:pass
+        return 'break'
+
+    def show_file_menu(self):
+        return self._open_keyboard_menu(self.file_menu)
+
+    def show_help_menu(self):
+        return self._open_keyboard_menu(self.help_menu)
+
+    def focus_invoice_search(self):
+        search=getattr(self,'invoice_search',None)
+        if search is not None:
+            search.focus_set()
+            try:search.selection_range(0,'end')
+            except tk.TclError:pass
+        return 'break'
+
+    def cycle_invoice_filter(self,direction):
+        tabs=self.view_tabs.tabs()
+        if not tabs:return 'break'
+        try:index=tabs.index(self.view_tabs.select())
+        except ValueError:index=0
+        self.view_tabs.select(tabs[(index+direction)%len(tabs)])
+        return 'break'
+
+    def show_keyboard_help(self):
+        """Explain all keyboard access and offer visible text-size controls."""
+        existing=getattr(self,'_keyboard_help_window',None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():existing.deiconify();existing.lift();existing.focus_force();return existing
+            except tk.TclError:pass
+        previous_grab=self.grab_current() or None
+        w=self._new_toplevel(_('Kortkommandon och tillgänglighet'));w.resizable(False,False);w.configure(bg='#f3f5f8')
+        self._keyboard_help_window=w
+        def close_help():
+            w.destroy()
+            if previous_grab is not None:
+                try:
+                    if previous_grab.winfo_exists():previous_grab.grab_set()
+                except (tk.TclError,AttributeError):pass
+        w.protocol('WM_DELETE_WINDOW',close_help)
+        form=ttk.Frame(w,padding=22);form.pack(fill='both',expand=True)
+        ttk.Label(form,text=_('Kortkommandon och tillgänglighet'),style='Title.TLabel').pack(anchor='w',pady=(0,10))
+        modifier='Cmd' if sys.platform=='darwin' else 'Ctrl'
+        rows=[
+            (_('Flytta fokus framåt / bakåt'),'Tab / Shift+Tab'),
+            (_('Sök kund eller faktura'),f'{modifier}+F'),
+            (_('Lägg till faktura manuellt'),f'{modifier}+N'),
+            (_('Lägg till faktura-PDF'),f'{modifier}+O'),
+            (_('Redigera vald faktura'),f'{modifier}+E / F2'),
+            (_('Skanna importmappen'),'F5'),
+            (_('Öppna original-PDF för vald faktura'),f'{modifier}+Enter'),
+            (_('Växla fakturaflik'),'Ctrl+Tab / Ctrl+Shift+Tab'),
+            (_('Öppna fakturans högerklicksmeny'),'Shift+F10'),
+            (_('Öppna inställningar'),f'{modifier}+,'),
+            (_('Öppna Arkiv-menyn'),'F10 / Alt+A'),
+            (_('Öppna Hjälp-menyn'),'Alt+H'),
+            (_('Visa den här hjälpen'),'F1'),
+            (_('Öka eller minska textstorlek'),f'{modifier} + / {modifier} −'),
+            (_('Återställ textstorlek'),f'{modifier}+0'),
+        ]
+        for label,key in rows:
+            row=ttk.Frame(form);row.pack(fill='x',pady=2)
+            ttk.Label(row,text=label).pack(side='left',anchor='w')
+            ttk.Label(row,text=key,style='BodyBold.TLabel').pack(side='right',anchor='e',padx=(20,0))
+        self._keyboard_help_scale_label=ttk.Label(form,text=_('Textstorlek: {scale}. Alla kontroller nås med Tab och har synlig fokusmarkering.',scale=font_scale_label(self.ui_font_scale)),style='Sub.TLabel',wraplength=560)
+        self._keyboard_help_scale_label.pack(anchor='w',pady=(14,8))
+        zoom=ttk.Frame(form);zoom.pack(fill='x',pady=(0,10))
+        ttk.Button(zoom,text=_('Minska text'),command=lambda:self.change_font_scale(-1)).pack(side='left')
+        ttk.Button(zoom,text=_('Normal textstorlek'),command=self.reset_font_scale).pack(side='left',padx=7)
+        ttk.Button(zoom,text=_('Öka text'),command=lambda:self.change_font_scale(1)).pack(side='left')
+        ttk.Button(form,text=_('Stäng'),command=close_help,style='Accent.TButton').pack(anchor='e',pady=(8,0))
+        if previous_grab is not None:w.grab_set()
+        return w
 
     def _build_menu(self):
         menu=tk.Menu(self)
         file_menu=tk.Menu(menu,tearoff=0)
+        self.file_menu=file_menu
         file_menu.add_command(label=_('Säkerhetskopiera inställningar och påminnelser'),command=self.create_backup)
         file_menu.add_command(label=_('Återställ säkerhetskopia'),command=self.restore_backup)
         file_menu.add_command(label=_('Importera JSON-journal'),command=self.import_journal)
@@ -1817,10 +1981,12 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Avsluta helt'),command=self.quit_app)
         menu.add_cascade(label=_('Arkiv'),menu=file_menu)
         help_menu=tk.Menu(menu,tearoff=0)
+        self.help_menu=help_menu
         help_menu.add_command(label=_('Visa samlad fellogg'),command=self.open_log)
         help_menu.add_command(label=_('Markera fellogg som åtgärdad'),command=self.resolve_error_log)
         help_menu.add_command(label=_('Visa teknisk logg'),command=self.open_technical_log)
         help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
+        help_menu.add_command(label=_('Kortkommandon och tillgänglighet'),command=self.show_keyboard_help,accelerator='F1')
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
         menu.add_cascade(label=_('Hjälp'),menu=help_menu)
         self._apply_menu_icons(file_menu);self._apply_menu_icons(help_menu);self._apply_menu_icons(menu)
@@ -1860,6 +2026,7 @@ class ReminderApp(tk.Tk):
         self.view_tabs.bind('<<NotebookTabChanged>>',self.on_filter_select)
         self.invoice_search_var=tk.StringVar()
         search=ttk.Entry(controls,textvariable=self.invoice_search_var,width=24)
+        self.invoice_search=search
         search.pack(side='right')
         ttk.Label(controls,text=_('Sök kund/faktura:')).pack(side='right',padx=(8,6))
         self.invoice_search_var.trace_add('write',self.on_invoice_search)
@@ -1878,12 +2045,15 @@ class ReminderApp(tk.Tk):
         configure_invoice_row_colors(self.tree)
         labels={'invoice_no':_('Fakturanr'),'customer':_('Kund'),'due_date':_('Förfallodatum'),'amount':_('Fakturabelopp'),'remaining':_('Kvar att betala'),'p1_date':_('P1 skapades'),'p2_send_date':_('P2-datum'),'email_status':_('E-post (senaste)'),'stage':_('Status / nästa steg'),'fee':_('Påminnelseavgift')}
         widths={'invoice_no':110,'customer':170,'due_date':105,'amount':115,'remaining':120,'p1_date':105,'p2_send_date':125,'email_status':190,'stage':180,'fee':120}
+        self._invoice_column_widths=widths.copy()
         for c in cols:
             self.tree.heading(c,text=labels[c],command=lambda column=c:self.sort_invoice_column(column))
-            self.tree.column(c,width=widths[c],anchor='w')
+            self.tree.column(c,width=scaled_number(widths[c],self.ui_font_scale),anchor='w')
         self.tree.pack(side='top',fill='both',expand=True); sb=ttk.Scrollbar(wrap,orient='vertical',command=self.tree.yview);sb.pack(side='right',fill='y');xsb=ttk.Scrollbar(wrap,orient='horizontal',command=self.tree.xview);xsb.pack(side='bottom',fill='x');self.tree.configure(yscrollcommand=sb.set,xscrollcommand=xsb.set)
         self.tree.bind('<<TreeviewSelect>>',lambda e:self.show_detail())
         self.tree.bind('<Delete>',lambda e:self.delete_invoice())
+        self.tree.bind('<Shift-F10>',self.show_selected_row_context_menu)
+        self.tree.bind('<App>',self.show_selected_row_context_menu)
         self.tree.bind('<Button-3>',self.show_row_context_menu)
         self.tree.bind('<Button-2>',self.show_row_context_menu)
         self.row_menu=tk.Menu(self,tearoff=0)
@@ -1909,8 +2079,7 @@ class ReminderApp(tk.Tk):
         ttk.Label(foot,text=_('Startvärden: P1 +5 dagar · P2 +5 dagar · Kronofogden-granskning +5 dagar · avgift 150 i fakturans valuta · ränta 23%'),style='Sub.TLabel').pack(side='left')
         ttk.Button(foot,text=_('Ta bort vald'),command=self.delete_invoice).pack(side='right')
         ttk.Label(self,text=_('{copyright} · Skapare: {author}',copyright=APP_COPYRIGHT,author=APP_AUTHOR),padding=(24,0,24,9),style='Sub.TLabel').pack(fill='x')
-        self._apply_action_icons(self)
-        self._instrument_action_tree(self)
+        self._finalize_window_actions(self,main_window=True)
 
     def refresh(self):
         for i in self.tree.get_children():self.tree.delete(i)
@@ -2028,6 +2197,24 @@ class ReminderApp(tk.Tk):
         log_activity('ui','invoice_context_menu_opened','completed',invoice_id=int(item))
         try:self.row_menu.tk_popup(event.x_root,event.y_root)
         finally:self.row_menu.grab_release()
+
+    def show_selected_row_context_menu(self,event=None):
+        """Keyboard equivalent of right-click for the selected invoice row."""
+        item=self.tree.focus() or (self.tree.selection()[0] if self.tree.selection() else '')
+        if not item or not self.tree.exists(item):return 'break'
+        self.tree.selection_set(item);self.tree.focus(item);self.show_detail()
+        try:
+            bounds=self.tree.bbox(item)
+            if bounds:
+                x,y,width,height=bounds
+                x_root=self.tree.winfo_rootx()+x;y_root=self.tree.winfo_rooty()+y+height
+            else:
+                self.tree.see(item)
+                x_root=self.tree.winfo_rootx()+20;y_root=self.tree.winfo_rooty()+30
+            self.row_menu.tk_popup(x_root,y_root)
+        finally:self.row_menu.grab_release()
+        log_activity('ui','invoice_context_menu_opened','completed',invoice_id=int(item))
+        return 'break'
 
     def dismiss_row_context_menu(self):
         """Do not leave a second active menu grab above a modal preview."""
@@ -2358,15 +2545,15 @@ class ReminderApp(tk.Tk):
         field_labels={key:label for label,key in fields.items()}
         field_var=tk.StringVar(value=_('Belopp (ATT BETALA)'))
         ttk.Combobox(nav,textvariable=field_var,state='readonly',values=list(fields),width=24).pack(side='left')
-        canvas=tk.Canvas(left,width=620,height=650,bg='#dfe3ea',highlightthickness=0);canvas.pack(fill='both',expand=True,pady=5)
+        canvas=tk.Canvas(left,width=620,height=650,bg='#dfe3ea',highlightthickness=2,highlightcolor='#005a9c',takefocus=1);canvas.pack(fill='both',expand=True,pady=5)
         right=ttk.Frame(body,width=235,padding=(10,4));right.pack(side='right',fill='y');right.pack_propagate(False)
-        ttk.Label(right,text=_('Avlästa värden'),font=(self.font_family,11,'bold')).pack(anchor='w',pady=(0,8))
+        ttk.Label(right,text=_('Avlästa värden'),style='Heading.TLabel').pack(anchor='w',pady=(0,8))
         logo_files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
         mapped_logo=initial_profile.get('logo_file') if initial_profile else ''
         logo_choices=[_('(Välj logotyp för mallen)'),_('(Ingen logotyp)')]+logo_files
         initial_logo=mapped_logo if mapped_logo in logo_files else logo_choices[0]
         preview_logo_var=tk.StringVar(value=initial_logo)
-        ttk.Label(right,text=_('Logotyp som matchar fakturan'),font=(self.font_family,9,'bold')).pack(anchor='w',pady=(3,0))
+        ttk.Label(right,text=_('Logotyp som matchar fakturan'),style='BodyBold.TLabel').pack(anchor='w',pady=(3,0))
         logo_combo=ttk.Combobox(right,textvariable=preview_logo_var,state='readonly',values=logo_choices,width=27)
         logo_combo.pack(fill='x',pady=(2,2))
         ttk.Label(right,text=_('Logotypen kopplas till vald leverantör/mall ovan.'),wraplength=210,style='Sub.TLabel').pack(anchor='w',pady=(0,2))
@@ -2405,7 +2592,7 @@ class ReminderApp(tk.Tk):
             field_var.set(label);status.set(_('Markera värdet för: {label}',label=label))
         for label,key in fields.items():
             row=ttk.Frame(right);row.pack(fill='x',pady=(4,0))
-            ttk.Label(row,text=label,font=(self.font_family,9,'bold')).pack(side='left',anchor='w')
+            ttk.Label(row,text=label,style='BodyBold.TLabel').pack(side='left',anchor='w')
             ttk.Button(row,text=_('Markera'),command=lambda name=label:activate_field(name)).pack(side='right')
             # Identifier values already have editable fields at the top; avoid a duplicate row here.
             if key in ('org_number','bankgiro_number'):continue
@@ -2651,7 +2838,7 @@ class ReminderApp(tk.Tk):
         summary=_('Lista per {date} · {source}\nNya fakturor: {new} · Befintliga: {existing} · Betalmarkerade: {paid} · Uppdaterade betalbelopp: {updated}\nBuild: {commit}',date=report.list_date,source=source_name,new=result.imported,existing=result.existing,paid=result.marked_paid,updated=result.payment_updates,commit=commit)
         ttk.Label(form,text=summary,style='Sub.TLabel',justify='left',wraplength=840).pack(anchor='w',pady=(0,12))
         body=ttk.Frame(form);body.pack(fill='both',expand=True)
-        text=tk.Text(body,wrap='word',font=(self.font_family,10),background='white',foreground='#1f2a3d',relief='solid',borderwidth=1,padx=12,pady=12)
+        text=tk.Text(body,wrap='word',font='TkTextFont',background='white',foreground='#1f2a3d',relief='solid',borderwidth=1,padx=12,pady=12,highlightthickness=2)
         scroll=ttk.Scrollbar(body,orient='vertical',command=text.yview)
         text.configure(yscrollcommand=scroll.set)
         text.pack(side='left',fill='both',expand=True);scroll.pack(side='right',fill='y')
@@ -3525,6 +3712,11 @@ class ReminderApp(tk.Tk):
         automatic_cache_var=tk.BooleanVar(value=setting('cache_auto')=='1')
         ttk.Checkbutton(form,text=_('Rensa appcache automatiskt en gång per dygn samt vid avslut'),variable=automatic_cache_var).grid(row=len(fields)+10,column=0,columnspan=3,sticky='w',pady=(10,3))
         ttk.Label(form,text=_('Under dagen endast cache äldre än 24 timmar; vid avslut all identifierad appcache.\nFakturor och importmappen rörs inte.'),style='Sub.TLabel').grid(row=len(fields)+11,column=0,columnspan=3,sticky='w')
+        self._font_scale_var=tk.StringVar(value=font_scale_label(self.ui_font_scale))
+        ttk.Label(form,text=_('Textstorlek')).grid(row=len(fields)+12,column=0,sticky='w',padx=(0,14),pady=(12,3))
+        font_scale_combo=ttk.Combobox(form,textvariable=self._font_scale_var,state='readonly',values=[font_scale_label(choice) for choice in FONT_SCALE_CHOICES],width=15)
+        font_scale_combo.grid(row=len(fields)+12,column=1,sticky='w',pady=(12,3))
+        ttk.Label(form,text=_('Textstorleken kan också ändras med Ctrl/Cmd +, Ctrl/Cmd − och Ctrl/Cmd 0.'),style='Sub.TLabel').grid(row=len(fields)+13,column=0,columnspan=3,sticky='w')
         def save():
             try:
                 for k,e in entries.items():
@@ -3547,13 +3739,16 @@ class ReminderApp(tk.Tk):
             set_setting('ledger_friday_reminder','1' if ledger_reminder_var.get() else '0')
             set_setting('cache_auto','1' if automatic_cache_var.get() else '0')
             set_setting('language',new_language)
+            new_font_scale=normalize_font_scale(self._font_scale_var.get())
+            set_setting(FONT_SCALE_SETTING,font_scale_storage(new_font_scale))
+            self.set_font_scale(new_font_scale,persist=False)
             set_language(new_language)
             refresh_json_journal(parent=w)
             logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language)
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()
-        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+12,column=1,sticky='e',pady=(15,0))
+        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+14,column=1,sticky='e',pady=(15,0))
 
 def main():
     try:
