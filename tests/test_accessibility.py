@@ -43,10 +43,11 @@ class FakeStyle:
 
 
 class FakeWidget:
-    def __init__(self, widget_class, *, x=0, y=0, children=(), mapped=True, state="normal"):
+    def __init__(self, widget_class, *, x=0, y=0, height=1, children=(), mapped=True, state="normal"):
         self.widget_class = widget_class
         self.x = x
         self.y = y
+        self.height = height
         self.children = list(children)
         self.mapped = mapped
         self.options = {"state": state, "takefocus": ""}
@@ -67,6 +68,9 @@ class FakeWidget:
 
     def winfo_rooty(self):
         return self.y
+
+    def winfo_height(self):
+        return self.height
 
     def winfo_exists(self):
         return True
@@ -173,8 +177,8 @@ class AccessibilityTests(unittest.TestCase):
 
     def test_focus_tree_uses_visual_order_and_classic_focus_outline(self):
         root = FakeWidget("Tk")
-        later = FakeWidget("TButton", x=300, y=20)
-        first = FakeWidget("TEntry", x=20, y=20)
+        later = FakeWidget("TButton", x=300, y=10, height=30)
+        first = FakeWidget("TEntry", x=20, y=20, height=10)
         text = FakeWidget("Text", x=20, y=100)
         root.children = [later, first, text]
         for child in root.children:

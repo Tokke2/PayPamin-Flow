@@ -514,12 +514,47 @@ class ScrollableForm:
             pass
 
 
-def _visual_key(item):
+def _visual_geometry(item):
     index, widget = item
     try:
-        return int(widget.winfo_rooty()), int(widget.winfo_rootx()), index
+        top = int(widget.winfo_rooty())
     except Exception:
-        return 0, 0, index
+        top = 0
+    try:
+        left = int(widget.winfo_rootx())
+    except Exception:
+        left = 0
+    try:
+        height = max(1, int(widget.winfo_height()))
+    except Exception:
+        height = 1
+    return {"index": index, "widget": widget, "top": top, "bottom": top + height, "left": left}
+
+
+def _visual_order(focusable):
+    """Sort controls by visual rows, tolerating different heights in one row."""
+    items = sorted(
+        (_visual_geometry(item) for item in enumerate(focusable)),
+        key=lambda item: (item["top"], item["left"], item["index"]),
+    )
+    rows = []
+    for item in items:
+        overlapping = []
+        for row in rows:
+            overlap = min(item["bottom"], row["bottom"]) - max(item["top"], row["top"])
+            if overlap > 0:
+                overlapping.append((overlap, row))
+        if overlapping:
+            row = max(overlapping, key=lambda candidate: candidate[0])[1]
+            row["items"].append(item)
+            row["top"] = min(row["top"], item["top"])
+            row["bottom"] = max(row["bottom"], item["bottom"])
+        else:
+            rows.append({"top": item["top"], "bottom": item["bottom"], "items": [item]})
+    ordered = []
+    for row in sorted(rows, key=lambda value: (value["top"], min(item["left"] for item in value["items"]))):
+        ordered.extend(sorted(row["items"], key=lambda item: (item["left"], item["index"])))
+    return [item["widget"] for item in ordered]
 
 
 def _usable_focus_widget(widget) -> bool:
@@ -697,7 +732,7 @@ def prepare_focus_tree(root, high_contrast=None):
             visit(child)
 
     visit(root)
-    order = [widget for _index, widget in sorted(enumerate(focusable), key=_visual_key)]
+    order = _visual_order(focusable)
     try:
         root._accessibility_focus_order = order
     except Exception:

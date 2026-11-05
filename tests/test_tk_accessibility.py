@@ -82,7 +82,7 @@ class RealTkAccessibilityTests(unittest.TestCase):
         move_focus(first)
         self.assertIs(self.root.focus_get(), second)
         self.assertEqual(text.cget("highlightcolor"), FOCUS)
-        self.assertEqual(text.cget("highlightthickness"), "2")
+        self.assertEqual(int(text.cget("highlightthickness")), 2)
 
     def test_real_two_hundred_percent_form_fits_and_reveals_last_field(self):
         style = AccessibleStyle(ttk.Style(self.root), tkfont)
