@@ -87,10 +87,16 @@ class InvoiceRowColorTests(unittest.TestCase):
         tree = FakeTree()
         self.app.configure_invoice_row_colors(tree)
         self.assertEqual(tree.tags, {
-            tag: {"background": background}
+            tag: {"background": background, "foreground": "#1F2A3D"}
             for tag, background in self.app.INVOICE_ROW_COLORS.items()
         })
         self.assertEqual(set(tree.tags), {"status-not-due", "status-p1", "status-p2"})
+
+        self.app.configure_invoice_row_colors(tree, high_contrast=True)
+        self.assertEqual(tree.tags, {
+            tag: {"background": "#000000", "foreground": "#FFFFFF"}
+            for tag in self.app.INVOICE_ROW_COLORS
+        })
 
     def save_invoice(self, invoice_no, due_date):
         values = {

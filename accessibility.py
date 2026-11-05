@@ -8,6 +8,9 @@ these helpers make every action reachable and visible from the keyboard.
 from __future__ import annotations
 
 import math
+import os
+import subprocess
+import sys
 
 FONT_SCALE_SETTING = "ui_font_scale"
 FONT_SCALE_MIN = 0.8
@@ -26,6 +29,25 @@ SELECTED_BACKGROUND = "#C7DDF5"
 SELECTED_TEXT = "#102A43"
 FIELD_BACKGROUND = "#FFFFFF"
 CLASSIC_FOCUS_BACKGROUND = "#B8C4D2"
+CANVAS_BACKGROUND = "#DFE3EA"
+
+# A deliberate, platform-independent high-contrast palette.  It is used when
+# the operating system reports that high contrast is enabled; normal app
+# colors remain unchanged otherwise.
+HIGH_CONTRAST_BACKGROUND = "#000000"
+HIGH_CONTRAST_TEXT = "#FFFFFF"
+HIGH_CONTRAST_MUTED_TEXT = "#FFFFFF"
+HIGH_CONTRAST_TITLE_TEXT = "#FFFFFF"
+HIGH_CONTRAST_ACCENT = "#000080"
+HIGH_CONTRAST_ACCENT_ACTIVE = "#000000"
+HIGH_CONTRAST_FOCUS = "#FFFF00"
+HIGH_CONTRAST_FOCUS_BACKGROUND = "#000000"
+HIGH_CONTRAST_SELECTED_BACKGROUND = "#000080"
+HIGH_CONTRAST_SELECTED_TEXT = "#FFFFFF"
+HIGH_CONTRAST_FIELD_BACKGROUND = "#000000"
+HIGH_CONTRAST_CLASSIC_FOCUS_BACKGROUND = "#808080"
+HIGH_CONTRAST_CANVAS_BACKGROUND = "#000000"
+SYSTEM_CONTRAST_POLL_INTERVAL_MS = 5000
 
 NAMED_FONTS = (
     "TkDefaultFont",
@@ -111,6 +133,124 @@ def contrast_ratio(first: str, second: str) -> float:
     return (light + 0.05) / (dark + 0.05)
 
 
+def contrast_palette(high_contrast=False):
+    """Return one complete UI palette, including classic Tk widget colors."""
+    if high_contrast:
+        return {
+            "background": HIGH_CONTRAST_BACKGROUND,
+            "text": HIGH_CONTRAST_TEXT,
+            "muted_text": HIGH_CONTRAST_MUTED_TEXT,
+            "title_text": HIGH_CONTRAST_TITLE_TEXT,
+            "accent": HIGH_CONTRAST_ACCENT,
+            "accent_active": HIGH_CONTRAST_ACCENT_ACTIVE,
+            "focus": HIGH_CONTRAST_FOCUS,
+            "focus_background": HIGH_CONTRAST_FOCUS_BACKGROUND,
+            "selected_background": HIGH_CONTRAST_SELECTED_BACKGROUND,
+            "selected_text": HIGH_CONTRAST_SELECTED_TEXT,
+            "field_background": HIGH_CONTRAST_FIELD_BACKGROUND,
+            "classic_focus_background": HIGH_CONTRAST_CLASSIC_FOCUS_BACKGROUND,
+            "canvas_background": HIGH_CONTRAST_CANVAS_BACKGROUND,
+            "heading_background": HIGH_CONTRAST_BACKGROUND,
+            "heading_text": HIGH_CONTRAST_TEXT,
+            "trough_background": HIGH_CONTRAST_BACKGROUND,
+        }
+    return {
+        "background": BACKGROUND,
+        "text": TEXT,
+        "muted_text": MUTED_TEXT,
+        "title_text": TITLE_TEXT,
+        "accent": ACCENT,
+        "accent_active": ACCENT_ACTIVE,
+        "focus": FOCUS,
+        "focus_background": FOCUS_BACKGROUND,
+        "selected_background": SELECTED_BACKGROUND,
+        "selected_text": SELECTED_TEXT,
+        "field_background": FIELD_BACKGROUND,
+        "classic_focus_background": CLASSIC_FOCUS_BACKGROUND,
+        "canvas_background": CANVAS_BACKGROUND,
+        "heading_background": "#E8EDF4",
+        "heading_text": "#344054",
+        "trough_background": "#E8EDF4",
+    }
+
+
+def _setting_output(command, runner=None):
+    """Read a desktop setting without a shell or a persistent subprocess."""
+    try:
+        result = (runner or subprocess.run)(
+            command, capture_output=True, text=True, timeout=1, check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+    return str(getattr(result, "stdout", "") or "").strip()
+
+
+def _enabled_setting(value):
+    return str(value).strip().strip("'\"").casefold() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _windows_high_contrast():
+    """Query Windows itself; no registry or third-party package is required."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class HIGHCONTRASTW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("dwFlags", wintypes.DWORD),
+                ("lpszDefaultScheme", wintypes.LPWSTR),
+            ]
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        info = HIGHCONTRASTW()
+        info.cbSize = ctypes.sizeof(info)
+        # SPI_GETHIGHCONTRAST and HCF_HIGHCONTRASTON from the Windows SDK.
+        if not user32.SystemParametersInfoW(0x0042, info.cbSize, ctypes.byref(info), 0):
+            return False
+        return bool(info.dwFlags & 0x0001)
+    except Exception:
+        return False
+
+
+def system_high_contrast(platform=None, environ=None, runner=None):
+    """Return whether the current desktop requests high-contrast UI.
+
+    The optional arguments make platform detection deterministic in tests.  A
+    failed or unavailable desktop query deliberately falls back to the normal
+    palette rather than preventing the app from starting.
+    """
+    platform = str(platform or sys.platform).casefold()
+    environ = os.environ if environ is None else environ
+    if platform.startswith("win"):
+        return _windows_high_contrast()
+    if platform == "darwin":
+        if runner is None:
+            try:
+                from AppKit import NSWorkspace
+                return bool(NSWorkspace.sharedWorkspace().accessibilityDisplayShouldIncreaseContrast())
+            except Exception:
+                pass
+        output = _setting_output(
+            ["/usr/bin/defaults", "read", "NSGlobalDomain", "accessibilityDisplayShouldIncreaseContrast"],
+            runner,
+        )
+        return _enabled_setting(output)
+    theme = str(environ.get("GTK_THEME", "") or "")
+    if "highcontrast" in theme.casefold().replace(" ", ""):
+        return True
+    output = _setting_output(
+        ["gsettings", "get", "org.gnome.desktop.a11y.interface", "high-contrast"], runner,
+    )
+    if _enabled_setting(output):
+        return True
+    # Some GTK desktops expose the choice as a theme rather than the a11y key.
+    theme_output = _setting_output(
+        ["gsettings", "get", "org.gnome.desktop.interface", "gtk-theme"], runner,
+    )
+    return "highcontrast" in theme_output.casefold().replace(" ", "")
+
+
 class AccessibleStyle:
     """Own fixed base sizes so repeated zoom operations never compound."""
 
@@ -133,8 +273,10 @@ class AccessibleStyle:
         else:
             self.font_family = "TkDefaultFont"
 
-    def apply(self, scale):
+    def apply(self, scale, high_contrast=False):
         scale = normalize_font_scale(scale)
+        self.high_contrast = bool(high_contrast)
+        palette = contrast_palette(self.high_contrast)
         for name, font in self.fonts.items():
             try:
                 font.configure(size=scaled_number(self.base_sizes[name], scale))
@@ -146,54 +288,55 @@ class AccessibleStyle:
             else (self.font_family, size(points), weight)
         )
         configure = self.style.configure
-        configure("TFrame", background=BACKGROUND)
-        configure("TLabel", background=BACKGROUND, foreground=TEXT, font=font(10))
-        configure("Title.TLabel", background=BACKGROUND, foreground=TITLE_TEXT, font=font(19, "bold"))
-        configure("Heading.TLabel", background=BACKGROUND, foreground=TEXT, font=font(11, "bold"))
-        configure("BodyBold.TLabel", background=BACKGROUND, foreground=TEXT, font=font(9, "bold"))
-        configure("Sub.TLabel", background=BACKGROUND, foreground=MUTED_TEXT, font=font(9))
+        configure("TFrame", background=palette["background"])
+        configure("TLabel", background=palette["background"], foreground=palette["text"], font=font(10))
+        configure("Title.TLabel", background=palette["background"], foreground=palette["title_text"], font=font(19, "bold"))
+        configure("Heading.TLabel", background=palette["background"], foreground=palette["text"], font=font(11, "bold"))
+        configure("BodyBold.TLabel", background=palette["background"], foreground=palette["text"], font=font(9, "bold"))
+        configure("Sub.TLabel", background=palette["background"], foreground=palette["muted_text"], font=font(9))
         configure(
             "TButton", font=font(9), padding=(size(10), size(7)),
-            foreground=TEXT, background=FIELD_BACKGROUND,
-            focusthickness=max(2, size(2)), focuscolor=FOCUS,
+            foreground=palette["text"], background=palette["field_background"],
+            focusthickness=max(2, size(2)), focuscolor=palette["focus"],
         )
         configure(
-            "Accent.TButton", background=ACCENT, foreground="#FFFFFF",
+            "Accent.TButton", background=palette["accent"], foreground="#FFFFFF",
             font=font(9, "bold"), padding=(size(10), size(7)),
-            focusthickness=max(2, size(2)), focuscolor=FOCUS,
+            focusthickness=max(2, size(2)), focuscolor=palette["focus"],
         )
-        for name in ("TEntry", "TCombobox"):
+        for name in ("TEntry", "TCombobox", "TSpinbox"):
             configure(
-                name, font=font(10), foreground=TEXT, fieldbackground=FIELD_BACKGROUND,
-                background=FIELD_BACKGROUND, borderwidth=1,
-                focusthickness=max(2, size(2)), focuscolor=FOCUS,
+                name, font=font(10), foreground=palette["text"], fieldbackground=palette["field_background"],
+                background=palette["field_background"], borderwidth=1,
+                focusthickness=max(2, size(2)), focuscolor=palette["focus"],
             )
-        configure("TCheckbutton", background=BACKGROUND, foreground=TEXT, font=font(10), focuscolor=FOCUS)
-        configure("TRadiobutton", background=BACKGROUND, foreground=TEXT, font=font(10), focuscolor=FOCUS)
+        configure("TCheckbutton", background=palette["background"], foreground=palette["text"], font=font(10), focuscolor=palette["focus"])
+        configure("TRadiobutton", background=palette["background"], foreground=palette["text"], font=font(10), focuscolor=palette["focus"])
         configure(
-            "Treeview", font=font(9), rowheight=size(30), background=FIELD_BACKGROUND,
-            fieldbackground=FIELD_BACKGROUND, foreground=TEXT, borderwidth=1,
-            focusthickness=max(2, size(2)), focuscolor=FOCUS,
+            "Treeview", font=font(9), rowheight=size(30), background=palette["field_background"],
+            fieldbackground=palette["field_background"], foreground=palette["text"], borderwidth=1,
+            focusthickness=max(2, size(2)), focuscolor=palette["focus"],
         )
         configure(
-            "Treeview.Heading", font=font(9, "bold"), background="#E8EDF4",
-            foreground="#344054", focusthickness=max(2, size(2)), focuscolor=FOCUS,
+            "Treeview.Heading", font=font(9, "bold"), background=palette["heading_background"],
+            foreground=palette["heading_text"], focusthickness=max(2, size(2)), focuscolor=palette["focus"],
         )
-        configure("TNotebook", background=BACKGROUND, borderwidth=0, focuscolor=FOCUS)
-        configure("TNotebook.Tab", font=font(9), padding=(size(10), size(6)), focuscolor=FOCUS)
-        configure("TProgressbar", background=ACCENT, troughcolor="#E8EDF4")
+        configure("TNotebook", background=palette["background"], borderwidth=0, focuscolor=palette["focus"])
+        configure("TNotebook.Tab", font=font(9), padding=(size(10), size(6)), focuscolor=palette["focus"])
+        configure("TProgressbar", background=palette["accent"], troughcolor=palette["trough_background"])
+        configure("TScrollbar", background=palette["field_background"], troughcolor=palette["background"], arrowcolor=palette["text"])
 
         focus_map = {
-            "focuscolor": [("focus", FOCUS)],
-            "bordercolor": [("focus", FOCUS)],
-            "lightcolor": [("focus", FOCUS)],
-            "darkcolor": [("focus", FOCUS)],
+            "focuscolor": [("focus", palette["focus"])],
+            "bordercolor": [("focus", palette["focus"])],
+            "lightcolor": [("focus", palette["focus"])],
+            "darkcolor": [("focus", palette["focus"])],
         }
-        for name in ("TButton", "Accent.TButton", "TEntry", "TCombobox", "TCheckbutton", "TRadiobutton", "Treeview"):
+        for name in ("TButton", "Accent.TButton", "TEntry", "TCombobox", "TSpinbox", "TCheckbutton", "TRadiobutton", "Treeview"):
             self.style.map(name, **focus_map)
-        self.style.map("Accent.TButton", background=[("active", ACCENT_ACTIVE), ("pressed", ACCENT_ACTIVE), ("focus", ACCENT_ACTIVE)])
-        self.style.map("Treeview", background=[("selected", SELECTED_BACKGROUND)], foreground=[("selected", SELECTED_TEXT)])
-        self.style.map("TNotebook.Tab", background=[("focus", FOCUS_BACKGROUND), ("selected", FIELD_BACKGROUND)], foreground=[("focus", TEXT)])
+        self.style.map("Accent.TButton", background=[("active", palette["accent_active"]), ("pressed", palette["accent_active"]), ("focus", palette["accent_active"])])
+        self.style.map("Treeview", background=[("selected", palette["selected_background"])], foreground=[("selected", palette["selected_text"])])
+        self.style.map("TNotebook.Tab", background=[("focus", palette["focus_background"]), ("selected", palette["field_background"])], foreground=[("focus", palette["text"]), ("selected", palette["text"])])
         return scale
 
 
@@ -209,6 +352,166 @@ def _children(widget):
         return tuple(widget.winfo_children())
     except Exception:
         return ()
+
+
+def _configure_if_supported(widget, **options):
+    for key, value in options.items():
+        try:
+            widget.configure(**{key: value})
+        except Exception:
+            # Classic Tk widgets expose different options across platforms.
+            continue
+
+
+def apply_widget_contrast(root, high_contrast=False):
+    """Apply the same palette to classic Tk widgets and open menus.
+
+    ttk widgets are styled by AccessibleStyle.  This companion handles the
+    classic Label/Text/Canvas/Menu widgets that otherwise keep hard-coded
+    colors when the desktop contrast mode changes.
+    """
+    palette = contrast_palette(high_contrast)
+
+    def visit(widget):
+        widget_class = _widget_class(widget)
+        if widget is not root and widget_class in {"Tk", "Toplevel"}:
+            return
+        if widget_class in {"Tk", "Toplevel", "Frame", "Label", "Button", "Checkbutton", "Radiobutton", "Menubutton"}:
+            _configure_if_supported(
+                widget, background=palette["background"], foreground=palette["text"],
+                activebackground=palette["focus_background"], activeforeground=palette["text"],
+            )
+        elif widget_class in {"Entry", "Spinbox", "Listbox", "Text"}:
+            _configure_if_supported(
+                widget, background=palette["field_background"], foreground=palette["text"],
+                insertbackground=palette["text"], selectbackground=palette["selected_background"],
+                selectforeground=palette["selected_text"], highlightcolor=palette["focus"],
+                highlightbackground=palette["classic_focus_background"],
+            )
+        elif widget_class == "Canvas":
+            _configure_if_supported(
+                widget, background=palette["canvas_background"], highlightcolor=palette["focus"],
+                highlightbackground=palette["classic_focus_background"],
+            )
+        elif widget_class == "Menu":
+            _configure_if_supported(
+                widget, background=palette["field_background"], foreground=palette["text"],
+                activebackground=palette["selected_background"], activeforeground=palette["selected_text"],
+                selectcolor=palette["selected_text"], disabledforeground=palette["muted_text"],
+            )
+        for child in _children(widget):
+            visit(child)
+
+    visit(root)
+    try:
+        root._accessibility_high_contrast = bool(high_contrast)
+    except Exception:
+        pass
+    return palette
+
+
+def fit_window_to_screen(window, margin=24, min_width=360, min_height=240):
+    """Make a dialog resizable and keep its requested geometry on-screen.
+
+    ScrollableForm provides overflow for long forms.  This helper handles the
+    window itself, including small screens and 200% text, without changing the
+    main window's geometry or any application data.
+    """
+    try:
+        window.resizable(True, True)
+        window.update_idletasks()
+        screen_width = max(1, int(window.winfo_screenwidth()))
+        screen_height = max(1, int(window.winfo_screenheight()))
+        max_width = max(240, screen_width - 2 * int(margin))
+        max_height = max(200, screen_height - 2 * int(margin))
+        width = min(max(int(min_width), int(window.winfo_reqwidth())), max_width)
+        height = min(max(int(min_height), int(window.winfo_reqheight())), max_height)
+        minimum_width = min(int(min_width), max_width)
+        minimum_height = min(int(min_height), max_height)
+        window.minsize(minimum_width, minimum_height)
+        try:
+            x, y = int(window.winfo_x()), int(window.winfo_y())
+        except Exception:
+            x = y = 0
+        if x <= 0 and y <= 0:
+            x = max(0, (screen_width - width) // 2)
+            y = max(0, (screen_height - height) // 2)
+        x = min(max(0, x), max(0, screen_width - width))
+        y = min(max(0, y), max(0, screen_height - height))
+        window.geometry(f"{width}x{height}+{x}+{y}")
+        return width, height
+    except Exception:
+        return None
+
+
+class ScrollableForm:
+    """A two-direction scrolling surface for a dialog's ordinary ttk form.
+
+    The canvas itself is deliberately not in the Tab ring.  Form controls keep
+    their normal keyboard behavior, while prepare_focus_tree reveals a focused
+    control even when it is below or beside the visible viewport.
+    """
+
+    def __init__(self, window, tk_module, ttk_module, padding=20):
+        self.window = window
+        self.tk = tk_module
+        self.ttk = ttk_module
+        self.container = ttk_module.Frame(window)
+        self.container.pack(fill="both", expand=True)
+        self.container.rowconfigure(0, weight=1)
+        self.container.columnconfigure(0, weight=1)
+        self.canvas = tk_module.Canvas(
+            self.container, highlightthickness=0, borderwidth=0, takefocus=0,
+        )
+        self.vertical = ttk_module.Scrollbar(self.container, orient="vertical", command=self.canvas.yview)
+        self.horizontal = ttk_module.Scrollbar(self.container, orient="horizontal", command=self.canvas.xview)
+        self.canvas.configure(yscrollcommand=self.vertical.set, xscrollcommand=self.horizontal.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.vertical.grid(row=0, column=1, sticky="ns")
+        self.horizontal.grid(row=1, column=0, sticky="ew")
+        self.horizontal.grid_remove()
+        self.form = ttk_module.Frame(self.canvas, padding=padding)
+        self.item = self.canvas.create_window((0, 0), window=self.form, anchor="nw")
+        self.form._accessibility_scroll_canvas = self.canvas
+        self.canvas._accessibility_scroll_form = self.form
+        self.window._accessibility_scrollable_form = self
+        self._syncing = False
+        self.form.bind("<Configure>", self._content_changed, add="+")
+        self.canvas.bind("<Configure>", self._canvas_changed, add="+")
+        self._content_changed()
+
+    def _content_changed(self, _event=None):
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            bounds = self.canvas.bbox("all")
+            if bounds:
+                self.canvas.configure(scrollregion=bounds)
+            self._sync_horizontal_scrollbar()
+        finally:
+            self._syncing = False
+
+    def _canvas_changed(self, event=None):
+        try:
+            viewport_width = int(getattr(event, "width", 0) or self.canvas.winfo_width())
+            if viewport_width > 1:
+                requested = max(viewport_width, int(self.form.winfo_reqwidth()))
+                self.canvas.itemconfigure(self.item, width=requested)
+        except Exception:
+            pass
+        self._content_changed()
+
+    def _sync_horizontal_scrollbar(self):
+        try:
+            viewport_width = int(self.canvas.winfo_width())
+            required_width = int(self.form.winfo_reqwidth())
+            if viewport_width > 1 and required_width > viewport_width + 1:
+                self.horizontal.grid()
+            else:
+                self.horizontal.grid_remove()
+        except Exception:
+            pass
 
 
 def _visual_key(item):
@@ -239,6 +542,69 @@ def _usable_focus_widget(widget) -> bool:
     return True
 
 
+def _scroll_canvas_for(widget):
+    parent = getattr(widget, "master", None)
+    while parent is not None:
+        canvas = getattr(parent, "_accessibility_scroll_canvas", None)
+        if canvas is not None:
+            return canvas
+        parent = getattr(parent, "master", None)
+    return None
+
+
+def reveal_widget(widget):
+    """Scroll a focused control into its dialog viewport when necessary."""
+    canvas = _scroll_canvas_for(widget)
+    if canvas is None:
+        return
+    try:
+        canvas.update_idletasks()
+        raw_region = canvas.cget("scrollregion")
+        values = raw_region if isinstance(raw_region, (tuple, list)) else str(raw_region).split()
+        region = [float(value) for value in values]
+        if len(region) != 4:
+            return
+        for axis, viewport_size, widget_start, widget_end in (
+            (
+                "x", int(canvas.winfo_width()),
+                canvas.canvasx(widget.winfo_rootx() - canvas.winfo_rootx()),
+                canvas.canvasx(widget.winfo_rootx() - canvas.winfo_rootx() + widget.winfo_width()),
+            ),
+            (
+                "y", int(canvas.winfo_height()),
+                canvas.canvasy(widget.winfo_rooty() - canvas.winfo_rooty()),
+                canvas.canvasy(widget.winfo_rooty() - canvas.winfo_rooty() + widget.winfo_height()),
+            ),
+        ):
+            if viewport_size <= 1:
+                continue
+            region_start, region_end = (region[0], region[2]) if axis == "x" else (region[1], region[3])
+            span = region_end - region_start
+            if span <= viewport_size:
+                continue
+            visible_start = canvas.canvasx(0) if axis == "x" else canvas.canvasy(0)
+            visible_end = visible_start + viewport_size
+            destination = None
+            if widget_start < visible_start:
+                destination = widget_start - 12
+            elif widget_end > visible_end:
+                destination = widget_end - viewport_size + 12
+            if destination is None:
+                continue
+            fraction = (destination - region_start) / span
+            if axis == "x":
+                canvas.xview_moveto(min(1.0, max(0.0, fraction)))
+            else:
+                canvas.yview_moveto(min(1.0, max(0.0, fraction)))
+    except Exception:
+        return
+
+
+def _focus_and_reveal(widget):
+    widget.focus_set()
+    reveal_widget(widget)
+
+
 def move_focus(widget, reverse: bool = False):
     """Move within the current top-level's visual order and keep Tab in the app."""
     try:
@@ -260,7 +626,7 @@ def move_focus(widget, reverse: bool = False):
         if candidate is widget or not _usable_focus_widget(candidate):
             continue
         try:
-            candidate.focus_set()
+            _focus_and_reveal(candidate)
         except Exception:
             continue
         return "break"
@@ -274,7 +640,7 @@ def focus_first(root):
         if not _usable_focus_widget(widget):
             continue
         try:
-            widget.focus_set()
+            _focus_and_reveal(widget)
             return widget
         except Exception:
             continue
@@ -289,13 +655,20 @@ def _insert_text_tab(widget):
     return "break"
 
 
-def prepare_focus_tree(root):
+def prepare_focus_tree(root, high_contrast=None):
     """Apply visible classic-widget focus and logical Tab/Shift-Tab traversal.
 
     The order is based on mapped visual coordinates, so right-packed controls
     and grid dialogs follow what the user sees rather than incidental creation
     order.  Handlers are installed once and always consult the latest order.
     """
+    if high_contrast is None:
+        high_contrast = getattr(root, "_accessibility_high_contrast", False)
+    palette = contrast_palette(high_contrast)
+    try:
+        root._accessibility_high_contrast = bool(high_contrast)
+    except Exception:
+        pass
     focusable = []
 
     def visit(widget):
@@ -304,7 +677,8 @@ def prepare_focus_tree(root):
         # gets its own traversal ring; never leak its controls into the parent.
         if widget is not root and widget_class in {"Tk", "Toplevel"}:
             return
-        if widget_class in FOCUSABLE_CLASSES:
+        is_scroll_surface = widget_class == "Canvas" and getattr(widget, "_accessibility_scroll_form", None) is not None
+        if widget_class in FOCUSABLE_CLASSES and not is_scroll_surface:
             try:
                 widget.configure(takefocus=1)
             except Exception:
@@ -314,8 +688,8 @@ def prepare_focus_tree(root):
             try:
                 widget.configure(
                     highlightthickness=2,
-                    highlightcolor=FOCUS,
-                    highlightbackground=CLASSIC_FOCUS_BACKGROUND,
+                    highlightcolor=palette["focus"],
+                    highlightbackground=palette["classic_focus_background"],
                 )
             except Exception:
                 pass
@@ -342,6 +716,10 @@ def prepare_focus_tree(root):
                 installed = True
             except Exception:
                 continue
+        try:
+            widget.bind("<FocusIn>", lambda _event, current=widget: reveal_widget(current), add="+")
+        except Exception:
+            pass
         if _widget_class(widget) == "Text":
             try:
                 widget.bind("<Control-Tab>", lambda _event, current=widget: _insert_text_tab(current), add="+")

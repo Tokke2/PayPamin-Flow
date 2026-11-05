@@ -104,13 +104,19 @@ from accessibility import (
     AccessibleStyle,
     FONT_SCALE_CHOICES,
     FONT_SCALE_SETTING,
+    SYSTEM_CONTRAST_POLL_INTERVAL_MS,
+    ScrollableForm,
+    apply_widget_contrast,
+    contrast_palette,
+    fit_window_to_screen,
+    focus_first,
     font_scale_label,
     font_scale_storage,
-    focus_first,
     normalize_font_scale,
     prepare_focus_tree,
     scaled_number,
     stepped_font_scale,
+    system_high_contrast,
 )
 
 IMPORT_WATCH_INTERVAL_MS = 5000
@@ -986,10 +992,15 @@ INVOICE_ROW_COLORS = {
 }
 
 
-def configure_invoice_row_colors(tree):
-    """Use pale backgrounds so the existing text and selection stay readable."""
+def configure_invoice_row_colors(tree,high_contrast=False):
+    """Keep status text readable in both normal and system high-contrast mode."""
+    palette=contrast_palette(high_contrast)
     for tag,background in INVOICE_ROW_COLORS.items():
-        tree.tag_configure(tag,background=background)
+        tree.tag_configure(
+            tag,
+            background=palette['field_background'] if high_contrast else background,
+            foreground=palette['text'],
+        )
 
 
 def invoice_row_color_tag(row,stage=None,today=None):
@@ -1151,10 +1162,11 @@ class ReminderApp(tk.Tk):
         self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
         self.invoice_sort_column='due_date';self.invoice_sort_reverse=False
         self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._available_update=None;self._update_helper_process=None;self.update_button=None
-        self.tray=None;self._quitting=False
+        self.tray=None;self._quitting=False;self._contrast_check_running=False
         self._import_monitor=ImportFolderMonitor(IMPORT_DIR);self._import_scan_running=False;self._python_addons_ready=False
         self._python_addon_install_running=False;self._python_addon_updates_running=False;self._python_addon_maintenance_attempted_week=''
         self.build(); self.refresh()
+        self.after(SYSTEM_CONTRAST_POLL_INTERVAL_MS,self._poll_system_contrast)
         self.protocol('WM_DELETE_WINDOW',self.hide_to_tray)
         self.bind('<Unmap>',self._on_main_window_unmap,add='+')
         self.start_tray()
@@ -1386,7 +1398,11 @@ class ReminderApp(tk.Tk):
         try:focus_window=window.winfo_toplevel()
         except (AttributeError,tk.TclError):focus_window=window
         self._install_accessibility_shortcuts(focus_window,main_window=main_window)
-        prepare_focus_tree(focus_window)
+        high_contrast=getattr(self,'_high_contrast',False)
+        apply_widget_contrast(focus_window,high_contrast)
+        prepare_focus_tree(focus_window,high_contrast)
+        for menu in (getattr(self,'main_menu',None),getattr(self,'file_menu',None),getattr(self,'help_menu',None),getattr(self,'row_menu',None)):
+            if menu is not None:apply_widget_contrast(menu,high_contrast)
         try:focus_window.after_idle(lambda:focus_first(focus_window))
         except (AttributeError,tk.TclError):focus_first(focus_window)
 
@@ -1426,13 +1442,18 @@ class ReminderApp(tk.Tk):
         # generic pythonw.exe icon in the taskbar or window switcher.
         self._set_window_icon(window)
         self._finalize_window_actions(window)
+        fit_window_to_screen(window)
 
     def _new_toplevel(self,title):
         window=tk.Toplevel(self)
-        window.title(title);window.transient(self)
+        window.title(title);window.transient(self);window.resizable(True,True)
         self._set_window_icon(window)
         window.after_idle(lambda: self._finalize_toplevel(window))
         return window
+
+    def _dialog_form(self,window,padding=20):
+        """Return a scrollable form so large text never hides dialog actions."""
+        return ScrollableForm(window,tk,ttk,padding=padding).form
 
     def _configure_macos_dock_icon(self):
         if sys.platform!='darwin':return
@@ -1454,8 +1475,8 @@ class ReminderApp(tk.Tk):
             messagebox.showwarning(_('Autostart kunde inte uppdateras'),_('Inställningen för autostart kunde inte sparas.\n\nPlats: {location}\n\n{error}',location=autostart_location(),error=_(str(exc))),parent=self)
 
     def show_about(self):
-        w=self._new_toplevel(_('Om {app_name}',app_name=APP_NAME));w.resizable(False,False);w.configure(bg='#f3f5f8')
-        form=ttk.Frame(w,padding=24);form.pack()
+        w=self._new_toplevel(_('Om {app_name}',app_name=APP_NAME));w.resizable(True,True);w.configure(bg='#f3f5f8')
+        form=self._dialog_form(w,padding=24)
         if self._brand_logo:ttk.Label(form,image=self._brand_logo).pack(pady=(0,10))
         else:
             if self._header_icon:ttk.Label(form,image=self._header_icon).pack(pady=(0,10))
@@ -1646,7 +1667,7 @@ class ReminderApp(tk.Tk):
         messagebox.showerror(_('Uppdateringen kunde inte installeras'),_('{error}\n\nDu kan ladda ner uppdateringen manuellt:\n{url}',error=details,url=release.url),parent=self)
 
     def show_update_available(self,release):
-        w=self._new_toplevel(_('Uppdatering tillgänglig'));w.resizable(False,False);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_('Uppdatering tillgänglig'));w.resizable(True,True);w.configure(bg='#f3f5f8')
         form=ttk.Frame(w,padding=24);form.pack()
         heading=_('Uppdaterat bygge av version {version} är tillgänglig',version=release.version) if release.version==APP_VERSION else _('Version {version} är tillgänglig',version=release.version)
         ttk.Label(form,text=heading,style='Title.TLabel').pack(anchor='w')
@@ -1723,9 +1744,9 @@ class ReminderApp(tk.Tk):
             self._python_addons_ready=True
             return
         self._python_addon_install_running=True
-        win=self._new_toplevel(_('Förbereder appen'));win.resizable(False,False)
+        win=self._new_toplevel(_('Förbereder appen'));win.resizable(True,True)
         win.protocol('WM_DELETE_WINDOW',lambda:None)
-        box=ttk.Frame(win,padding=22);box.pack()
+        box=self._dialog_form(win,padding=22)
         ttk.Label(box,text=_('Installerar saknade Python-tillägg'),style='Heading.TLabel').pack(anchor='w')
         ttk.Label(box,text=_('Detta behövs för PDF och systemfält. Installationen sker i bakgrunden.')).pack(anchor='w',pady=(7,10))
         bar=ttk.Progressbar(box,mode='indeterminate',length=330);bar.pack(fill='x');bar.start(12)
@@ -1811,8 +1832,47 @@ class ReminderApp(tk.Tk):
         s=ttk.Style(self); s.theme_use('clam')
         self.font_family=tkfont.nametofont('TkDefaultFont').cget('family')
         self.ui_font_scale=normalize_font_scale(setting(FONT_SCALE_SETTING))
+        self._high_contrast=system_high_contrast()
         self._accessibility_style=AccessibleStyle(s,tkfont,self.font_family)
-        self._accessibility_style.apply(self.ui_font_scale)
+        self._accessibility_style.apply(self.ui_font_scale,high_contrast=self._high_contrast)
+
+    def _apply_accessibility_palette(self):
+        """Re-style open windows after a desktop high-contrast change."""
+        style=getattr(self,'_accessibility_style',None)
+        high_contrast=getattr(self,'_high_contrast',False)
+        if style is not None:style.apply(getattr(self,'ui_font_scale',1.0),high_contrast=high_contrast)
+        tree=getattr(self,'tree',None)
+        if tree is not None:configure_invoice_row_colors(tree,high_contrast)
+        windows=[self]+[child for child in self.winfo_children() if child.winfo_class()=='Toplevel']
+        for window in windows:
+            apply_widget_contrast(window,high_contrast)
+            prepare_focus_tree(window,high_contrast)
+        for menu in (getattr(self,'main_menu',None),getattr(self,'file_menu',None),getattr(self,'help_menu',None),getattr(self,'row_menu',None)):
+            if menu is not None:apply_widget_contrast(menu,high_contrast)
+
+    def _poll_system_contrast(self):
+        if getattr(self,'_quitting',False) or getattr(self,'_contrast_check_running',False):return
+        self._contrast_check_running=True
+        result_queue=queue.Queue()
+        def check():
+            try:result_queue.put(system_high_contrast())
+            except Exception:result_queue.put(getattr(self,'_high_contrast',False))
+        threading.Thread(target=check,daemon=True).start()
+        def poll():
+            if getattr(self,'_quitting',False):return
+            try:enabled=result_queue.get_nowait()
+            except queue.Empty:
+                try:self.after(100,poll)
+                except tk.TclError:pass
+                return
+            self._contrast_check_running=False
+            if enabled!=getattr(self,'_high_contrast',False):
+                self._high_contrast=enabled
+                self._apply_accessibility_palette()
+                logger.info('System high-contrast mode changed: enabled=%s',enabled)
+            try:self.after(SYSTEM_CONTRAST_POLL_INTERVAL_MS,self._poll_system_contrast)
+            except tk.TclError:pass
+        poll()
 
     def set_font_scale(self,value,persist=True):
         """Apply a bounded text zoom immediately without rebuilding open dialogs."""
@@ -1821,7 +1881,7 @@ class ReminderApp(tk.Tk):
             set_setting(FONT_SCALE_SETTING,font_scale_storage(self.ui_font_scale))
             refresh_json_journal(parent=self)
         style=getattr(self,'_accessibility_style',None)
-        if style is not None:style.apply(self.ui_font_scale)
+        if style is not None:style.apply(self.ui_font_scale,high_contrast=getattr(self,'_high_contrast',False))
         tree=getattr(self,'tree',None)
         if tree is not None:
             for column,width in getattr(self,'_invoice_column_widths',{}).items():
@@ -1835,8 +1895,11 @@ class ReminderApp(tk.Tk):
         if help_label is not None:
             try:help_label.configure(text=_('Textstorlek: {scale}. Alla kontroller nås med Tab och har synlig fokusmarkering.',scale=font_scale_label(self.ui_font_scale)))
             except tk.TclError:pass
+        high_contrast=getattr(self,'_high_contrast',False)
         for window in [self]+[child for child in self.winfo_children() if child.winfo_class()=='Toplevel']:
-            prepare_focus_tree(window)
+            apply_widget_contrast(window,high_contrast)
+            prepare_focus_tree(window,high_contrast)
+            if window is not self:fit_window_to_screen(window)
         logger.info('UI text scale changed: scale=%s',font_scale_storage(self.ui_font_scale))
         return self.ui_font_scale
 
@@ -1923,7 +1986,7 @@ class ReminderApp(tk.Tk):
                 if existing.winfo_exists():existing.deiconify();existing.lift();existing.focus_force();return existing
             except tk.TclError:pass
         previous_grab=self.grab_current() or None
-        w=self._new_toplevel(_('Kortkommandon och tillgänglighet'));w.resizable(False,False);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_('Kortkommandon och tillgänglighet'));w.resizable(True,True);w.configure(bg='#f3f5f8')
         self._keyboard_help_window=w
         def close_help():
             w.destroy()
@@ -1932,7 +1995,7 @@ class ReminderApp(tk.Tk):
                     if previous_grab.winfo_exists():previous_grab.grab_set()
                 except (tk.TclError,AttributeError):pass
         w.protocol('WM_DELETE_WINDOW',close_help)
-        form=ttk.Frame(w,padding=22);form.pack(fill='both',expand=True)
+        form=self._dialog_form(w,padding=22)
         ttk.Label(form,text=_('Kortkommandon och tillgänglighet'),style='Title.TLabel').pack(anchor='w',pady=(0,10))
         modifier='Cmd' if sys.platform=='darwin' else 'Ctrl'
         rows=[
@@ -1968,6 +2031,7 @@ class ReminderApp(tk.Tk):
 
     def _build_menu(self):
         menu=tk.Menu(self)
+        self.main_menu=menu
         file_menu=tk.Menu(menu,tearoff=0)
         self.file_menu=file_menu
         file_menu.add_command(label=_('Säkerhetskopiera inställningar och påminnelser'),command=self.create_backup)
@@ -2042,7 +2106,7 @@ class ReminderApp(tk.Tk):
         wrap=ttk.Frame(self,padding=(22,0,22,12));wrap.pack(fill='both',expand=True)
         cols=('invoice_no','customer','due_date','amount','remaining','p1_date','p2_send_date','email_status','stage','fee')
         self.tree=ttk.Treeview(wrap,columns=cols,show='headings',selectmode='browse')
-        configure_invoice_row_colors(self.tree)
+        configure_invoice_row_colors(self.tree,getattr(self,'_high_contrast',False))
         labels={'invoice_no':_('Fakturanr'),'customer':_('Kund'),'due_date':_('Förfallodatum'),'amount':_('Fakturabelopp'),'remaining':_('Kvar att betala'),'p1_date':_('P1 skapades'),'p2_send_date':_('P2-datum'),'email_status':_('E-post (senaste)'),'stage':_('Status / nästa steg'),'fee':_('Påminnelseavgift')}
         widths={'invoice_no':110,'customer':170,'due_date':105,'amount':115,'remaining':120,'p1_date':105,'p2_send_date':125,'email_status':190,'stage':180,'fee':120}
         self._invoice_column_widths=widths.copy()
@@ -2596,9 +2660,9 @@ class ReminderApp(tk.Tk):
             ttk.Button(row,text=_('Markera'),command=lambda name=label:activate_field(name)).pack(side='right')
             # Identifier values already have editable fields at the top; avoid a duplicate row here.
             if key in ('org_number','bankgiro_number'):continue
-            lab=ttk.Label(right,text=str(guess.get(key,'') or '—'),wraplength=210,foreground='#344054');lab.pack(anchor='w')
+            lab=ttk.Label(right,text=str(guess.get(key,'') or '—'),wraplength=210,style='Sub.TLabel');lab.pack(anchor='w')
             result_labels[key]=lab
-        ttk.Label(right,textvariable=status,wraplength=210,foreground='#475467').pack(anchor='w',pady=8)
+        ttk.Label(right,textvariable=status,wraplength=210,style='Sub.TLabel').pack(anchor='w',pady=8)
         pending={};state={'page':available_pages[0],'scale':1.0,'photo':None,'start':None,'rect':None,'image_w':1,'image_h':1,'closed':False}
         def close_preview():
             if state['closed']:return
@@ -3030,8 +3094,8 @@ class ReminderApp(tk.Tk):
         r=self.selected()
         if not r:return
         values=apply_saved_customer_contact(dict(r))
-        w=self._new_toplevel(_('Redigera kund'));w.grab_set();w.resizable(False,False)
-        form=ttk.Frame(w,padding=20);form.pack()
+        w=self._new_toplevel(_('Redigera kund'));w.grab_set();w.resizable(True,True)
+        form=self._dialog_form(w,padding=20)
         ttk.Label(form,text=_('Kundnamn')).grid(row=0,column=0,sticky='w',padx=(0,12),pady=5)
         customer_entry=ttk.Entry(form,width=52);customer_entry.grid(row=0,column=1,pady=5);customer_entry.insert(0,r['customer'])
         ttk.Label(form,text=_('E-postadresser')).grid(row=1,column=0,sticky='w',padx=(0,12),pady=5)
@@ -3060,7 +3124,7 @@ class ReminderApp(tk.Tk):
         w.wait_window()
 
     def invoice_dialog(self,title,row=None,source='',guess=None,source_hash='',enrich_original=False):
-        w=self._new_toplevel(_(title));w.grab_set();w.resizable(False,False);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_(title));w.grab_set();w.resizable(True,True);w.configure(bg='#f3f5f8')
         fields=[('Kundnamn','customer'),('Fakturanummer','invoice_no'),('Fakturadatum (ÅÅÅÅ-MM-DD)','invoice_date'),('Förfallodatum (ÅÅÅÅ-MM-DD)','due_date'),('Fakturabelopp','amount'),('Valuta (ISO-kod, t.ex. SEK/EUR)','currency'),('Redan betalt','paid'),('E-post','email'),('Fakturatext / Avser','note')]
         enriched=merge_original_invoice_values(row,guess) if enrich_original and row is not None else None
         vals={k:(enriched[k] if enriched is not None else (row[k] if row else (guess or {}).get(k,''))) for _label,k in fields}
@@ -3071,7 +3135,7 @@ class ReminderApp(tk.Tk):
         vals['logo_file']=enriched['logo_file'] if enriched is not None else (row['logo_file'] if row else (guess or {}).get('logo_file'))
         apply_saved_customer_contact(vals)
         reviewed_var=tk.BooleanVar(value=bool(row['reviewed']) if row else not bool(source))
-        entries={};form=ttk.Frame(w,padding=18);form.pack()
+        entries={};form=self._dialog_form(w,padding=18)
         for i,(lab,k) in enumerate(fields):
             ttk.Label(form,text=_(lab)).grid(row=i,column=0,sticky='w',pady=5,padx=(0,12));e=ttk.Entry(form,width=43);e.grid(row=i,column=1,pady=5);e.insert(0,str(vals.get(k,'') or ''));entries[k]=e
             if enrich_original and k in ORIGINAL_INVOICE_PROTECTED_FIELDS:e.configure(state='readonly')
@@ -3247,8 +3311,12 @@ class ReminderApp(tk.Tk):
         subject_var=tk.StringVar(value=content['subject'])
         ttk.Entry(form,textvariable=subject_var,width=90).pack(fill='x',pady=(3,10))
         ttk.Label(form,text=_('Meddelande')).pack(anchor='w')
-        body_text=tk.Text(form,width=90,height=20,wrap='word',undo=True)
-        body_text.insert('1.0',content['body']);body_text.pack(fill='both',expand=True,pady=(3,10))
+        body=ttk.Frame(form);body.pack(fill='both',expand=True,pady=(3,10))
+        body_text=tk.Text(body,width=90,height=20,wrap='word',undo=True)
+        body_scroll=ttk.Scrollbar(body,orient='vertical',command=body_text.yview)
+        body_text.configure(yscrollcommand=body_scroll.set)
+        body_text.insert('1.0',content['body'])
+        body_text.pack(side='left',fill='both',expand=True);body_scroll.pack(side='right',fill='y')
         ttk.Label(form,text=instructions,wraplength=680).pack(anchor='w',pady=(0,12))
         def accept():
             nonlocal result
@@ -3504,8 +3572,8 @@ class ReminderApp(tk.Tk):
         logo_files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
         _current_logo_path,current_logo=self.invoice_logo(r)
         choices=[_('(Ingen logotyp)')]+logo_files
-        w=self._new_toplevel(_('Redigera {level}',level=level));w.grab_set();w.resizable(False,False)
-        form=ttk.Frame(w,padding=20);form.pack()
+        w=self._new_toplevel(_('Redigera {level}',level=level));w.grab_set();w.resizable(True,True)
+        form=self._dialog_form(w,padding=20)
         ttk.Label(form,text=_('Välj ny logotyp för {level}. PDF:en skrivs om med ursprungligt påminnelsedatum.',level=level),wraplength=390).pack(anchor='w',pady=(0,10))
         logo_var=tk.StringVar(value=current_logo if current_logo in logo_files else choices[0])
         combo=ttk.Combobox(form,textvariable=logo_var,state='readonly',values=choices,width=42)
@@ -3685,7 +3753,7 @@ class ReminderApp(tk.Tk):
         story += [Spacer(1,2*mm),HRFlowable(width='100%',thickness=.4,color=colors.HexColor('#999999')),Spacer(1,2*mm),Paragraph(terms,styles['SmallText'])]
         doc.build(story)
     def settings(self):
-        w=self._new_toplevel(_('Inställningar'));w.grab_set();w.resizable(False,False);form=ttk.Frame(w,padding=20);form.pack()
+        w=self._new_toplevel(_('Inställningar'));w.grab_set();w.resizable(True,True);form=self._dialog_form(w,padding=20)
         language_var=tk.StringVar(value=SUPPORTED_LANGUAGES[get_language()])
         ttk.Label(form,text=_('Språk')).grid(row=0,column=0,sticky='w',padx=(0,14),pady=6)
         ttk.Combobox(form,textvariable=language_var,state='readonly',values=list(SUPPORTED_LANGUAGES.values()),width=15).grid(row=0,column=1,sticky='w',pady=6)
@@ -3717,6 +3785,7 @@ class ReminderApp(tk.Tk):
         font_scale_combo=ttk.Combobox(form,textvariable=self._font_scale_var,state='readonly',values=[font_scale_label(choice) for choice in FONT_SCALE_CHOICES],width=15)
         font_scale_combo.grid(row=len(fields)+12,column=1,sticky='w',pady=(12,3))
         ttk.Label(form,text=_('Textstorleken kan också ändras med Ctrl/Cmd +, Ctrl/Cmd − och Ctrl/Cmd 0.'),style='Sub.TLabel').grid(row=len(fields)+13,column=0,columnspan=3,sticky='w')
+        ttk.Label(form,text=_('Högkontrast följer systemets inställning och uppdateras automatiskt.'),style='Sub.TLabel').grid(row=len(fields)+14,column=0,columnspan=3,sticky='w',pady=(8,0))
         def save():
             try:
                 for k,e in entries.items():
@@ -3748,7 +3817,7 @@ class ReminderApp(tk.Tk):
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()
-        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+14,column=1,sticky='e',pady=(15,0))
+        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+15,column=1,sticky='e',pady=(15,0))
 
 def main():
     try:

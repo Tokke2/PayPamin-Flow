@@ -115,6 +115,48 @@ class AccessibilityTests(unittest.TestCase):
             with self.subTest(foreground=foreground):
                 self.assertGreaterEqual(accessibility.contrast_ratio(foreground, accessibility.BACKGROUND), 4.5)
         self.assertGreaterEqual(accessibility.contrast_ratio(accessibility.SELECTED_TEXT, accessibility.SELECTED_BACKGROUND), 4.5)
+        high = accessibility.contrast_palette(True)
+        self.assertGreaterEqual(accessibility.contrast_ratio(high['text'], high['background']), 4.5)
+        self.assertGreaterEqual(accessibility.contrast_ratio(high['focus'], high['background']), 4.5)
+        self.assertGreaterEqual(accessibility.contrast_ratio(high['selected_text'], high['selected_background']), 4.5)
+
+    def test_system_high_contrast_detection_has_safe_platform_fallbacks(self):
+        def runner(command, **_kwargs):
+            output = 'true\n' if 'high-contrast' in command else 'Adwaita\n'
+            return SimpleNamespace(stdout=output)
+
+        self.assertTrue(accessibility.system_high_contrast(platform='linux', environ={}, runner=runner))
+        self.assertTrue(accessibility.system_high_contrast(platform='linux', environ={'GTK_THEME': 'HighContrast'}, runner=runner))
+        self.assertTrue(accessibility.system_high_contrast(platform='darwin', environ={}, runner=lambda *_a, **_k: SimpleNamespace(stdout='1\n')))
+        with patch.object(accessibility, '_windows_high_contrast', return_value=True):
+            self.assertTrue(accessibility.system_high_contrast(platform='win32', environ={}))
+        self.assertFalse(accessibility.system_high_contrast(platform='linux', environ={}, runner=lambda *_a, **_k: SimpleNamespace(stdout='false\n')))
+
+    def test_fit_window_to_screen_enables_resize_and_bounds_geometry(self):
+        window = Mock()
+        window.winfo_screenwidth.return_value = 800
+        window.winfo_screenheight.return_value = 600
+        window.winfo_reqwidth.return_value = 1200
+        window.winfo_reqheight.return_value = 1000
+        window.winfo_x.return_value = 0
+        window.winfo_y.return_value = 0
+        result = accessibility.fit_window_to_screen(window)
+        self.assertEqual(result, (752, 552))
+        window.resizable.assert_called_once_with(True, True)
+        window.minsize.assert_called_once_with(360, 240)
+        geometry = window.geometry.call_args.args[0]
+        self.assertTrue(geometry.startswith('752x552+'))
+
+    def test_high_contrast_is_applied_to_classic_widgets_and_focus(self):
+        root = FakeWidget('Tk')
+        text = FakeWidget('Text')
+        root.children = [text]
+        text.root = root
+        accessibility.apply_widget_contrast(root, True)
+        self.assertEqual(text.options['background'], accessibility.HIGH_CONTRAST_FIELD_BACKGROUND)
+        self.assertEqual(text.options['foreground'], accessibility.HIGH_CONTRAST_TEXT)
+        accessibility.prepare_focus_tree(root, True)
+        self.assertEqual(text.options['highlightcolor'], accessibility.HIGH_CONTRAST_FOCUS)
 
     def test_style_scales_from_fixed_base_sizes_and_maps_focus(self):
         fonts = FakeFontModule()
@@ -228,6 +270,31 @@ class AccessibilityAppIntegrationTests(unittest.TestCase):
         self.app.ReminderApp._install_accessibility_shortcuts(fake, window, main_window=True)
         self.assertEqual(len(window.bindings), binding_count)
 
+    def test_system_contrast_poll_applies_changes_and_reschedules(self):
+        class ImmediateThread:
+            def __init__(self, target, daemon=None):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        scheduled = []
+        fake = SimpleNamespace(
+            _quitting=False,
+            _contrast_check_running=False,
+            _high_contrast=False,
+            _apply_accessibility_palette=Mock(),
+            _poll_system_contrast=Mock(),
+            after=lambda delay, callback: scheduled.append((delay, callback)),
+        )
+        with patch.object(self.app.threading, 'Thread', ImmediateThread), patch.object(
+            self.app, 'system_high_contrast', return_value=True,
+        ):
+            self.app.ReminderApp._poll_system_contrast(fake)
+        self.assertTrue(fake._high_contrast)
+        fake._apply_accessibility_palette.assert_called_once_with()
+        self.assertEqual(scheduled[-1][0], self.app.SYSTEM_CONTRAST_POLL_INTERVAL_MS)
+
     def test_set_font_scale_persists_and_reuses_style(self):
         fake = SimpleNamespace(
             ui_font_scale=1.0,
@@ -239,7 +306,7 @@ class AccessibilityAppIntegrationTests(unittest.TestCase):
         with patch.object(self.app, "set_setting") as save, patch.object(self.app, "refresh_json_journal") as journal:
             result = self.app.ReminderApp.set_font_scale(fake, 1.5)
         self.assertEqual(result, 1.5)
-        fake._accessibility_style.apply.assert_called_once_with(1.5)
+        fake._accessibility_style.apply.assert_called_once_with(1.5, high_contrast=False)
         save.assert_called_once_with(self.app.FONT_SCALE_SETTING, "1.5")
         journal.assert_called_once_with(parent=fake)
 

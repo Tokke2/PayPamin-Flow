@@ -37,6 +37,7 @@ _ENGLISH = {
     "Kortkommandon och tillgänglighet": "Keyboard shortcuts and accessibility",
     "Textstorlek": "Text size",
     "Textstorleken kan också ändras med Ctrl/Cmd +, Ctrl/Cmd − och Ctrl/Cmd 0.": "You can also change text size with Ctrl/Cmd +, Ctrl/Cmd − and Ctrl/Cmd 0.",
+    "Högkontrast följer systemets inställning och uppdateras automatiskt.": "High contrast follows the system setting and updates automatically.",
     "Minska text": "Decrease text",
     "Normal textstorlek": "Normal text size",
     "Öka text": "Increase text",
