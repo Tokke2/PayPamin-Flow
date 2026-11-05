@@ -10,13 +10,11 @@ class WindowsPythonRuntimeLauncherTests(unittest.TestCase):
     def setUpClass(cls):
         cls.launcher = (ROOT / "start_paypamin_flow.vbs").read_text(encoding="utf-8")
 
-    def test_inventory_precedes_every_runtime_change(self):
+    def test_inventory_precedes_missing_runtime_installation(self):
         path_check = self.launcher.index('pythonwPath = FindOnPath("pythonw.exe")')
         known_check = self.launcher.index("knownPythonPath = FindKnownPython()")
-        update = self.launcher.index('" install --update --by-id "')
         install = self.launcher.index('" install default"')
         self.assertLess(path_check, known_check)
-        self.assertLess(known_check, update)
         self.assertLess(known_check, install)
 
     def test_new_runtime_is_installed_only_in_the_missing_python_branch(self):
@@ -28,13 +26,13 @@ class WindowsPythonRuntimeLauncherTests(unittest.TestCase):
         self.assertEqual(self.launcher.count('" install default"'), 1)
         self.assertIn("If Not hasPython Then\n" + '  WriteRuntimeLog "No existing Python runtime found.', self.launcher)
 
-    def test_existing_runtime_update_is_exactly_scoped_to_its_install_id(self):
-        self.assertIn('" install --update --by-id " & Quote(managedId)', self.launcher)
-        self.assertIn("If canUpdateManaged Then", self.launcher)
-        self.assertIn("pythonwPath = managedLauncherPath", self.launcher)
-        self.assertIn("IsSafeInstallId(managedId)", self.launcher)
-        self.assertIn('"--only-managed "', self.launcher)
-        self.assertNotRegex(self.launcher, r"install\s+--update\s*(?:\"|'|$)")
+    def test_existing_runtime_is_never_updated_at_startup(self):
+        self.assertNotIn("install --update", self.launcher)
+        self.assertNotIn("runtimeMaintenanceDue", self.launcher)
+        self.assertNotIn("MarkPythonRuntimeMaintenance", self.launcher)
+        self.assertNotIn("python-runtime-week.txt", self.launcher)
+        self.assertNotIn("Python kunde inte uppdateras", self.launcher)
+        self.assertIn("An existing Python runtime is always reused unchanged", self.launcher)
         self.assertNotIn(" --force", self.launcher)
         self.assertNotIn(" --target", self.launcher)
 
@@ -42,7 +40,7 @@ class WindowsPythonRuntimeLauncherTests(unittest.TestCase):
         guard = 'If Not hasPython And managerPath <> "" And Not managerInventoryOK Then'
         self.assertIn(guard, self.launcher)
         self.assertIn("Det gick inte att kontrollera Python-installationen. Ingen ny Python har installerats.", self.launcher)
-        self.assertIn("If managedCode <> 0 Then", self.launcher)
+        self.assertIn("If anyCode <> 0 Then", self.launcher)
         self.assertIn("managerInventoryOK = False", self.launcher)
         failure_handler = self.launcher.split("Sub FailRuntime(message)", 1)[1]
         self.assertIn("WScript.Quit 1", failure_handler)
@@ -54,30 +52,24 @@ class WindowsPythonRuntimeLauncherTests(unittest.TestCase):
         self.assertIn("If Not pythonAlias Then", self.launcher)
 
     def test_unmanaged_python_is_reused_without_replacement(self):
-        self.assertIn("Weekly Python check: the existing runtime is not confirmed as manager-managed.", self.launcher)
-        self.assertIn("Leaving it unchanged; no new installation was requested.", self.launcher)
+        self.assertIn("An existing Python runtime is always reused unchanged", self.launcher)
+        self.assertIn("Starting PayPamin Flow with existing Python: ", self.launcher)
         self.assertNotRegex(self.launcher, r"(?i)\b(uninstall|remove-python|python\.org/downloads/\d)")
 
-    def test_runtime_update_and_managed_lookup_are_weekly_not_per_start(self):
-        due = self.launcher.index("If runtimeMaintenanceDue Then")
-        update = self.launcher.index('" install --update --by-id "')
-        managed_lookup = self.launcher.index('managedId = ManagerValue(managerPath, "id", True, managedCode)')
-        self.assertIn("If hasPython Then runtimeMaintenanceDue = PythonRuntimeMaintenanceDue()", self.launcher)
-        self.assertIn('Weekday(Date, vbMonday)', self.launcher)
-        self.assertIn('DateAdd("h", 8, MaintenanceMondayDate())', self.launcher)
-        self.assertIn("A failed attempt is also complete for this week", self.launcher)
-        self.assertLess(due, managed_lookup)
-        self.assertLess(due, update)
-        self.assertIn("MarkPythonRuntimeMaintenance", self.launcher)
-
-    def test_windows_addons_upgrade_pre_start_once_per_week(self):
-        self.assertIn("If addonsMaintenanceDue Then", self.launcher)
-        self.assertIn("PythonAddonsMaintenanceDue", self.launcher)
-        self.assertIn("requirements.txt", self.launcher)
-        self.assertIn("-m pip install --upgrade --upgrade-strategy only-if-needed -r", self.launcher)
-        self.assertIn("PythonExecutableFor", self.launcher)
-        self.assertIn("MarkPythonAddonsMaintenance", self.launcher)
+    def test_windows_launcher_does_not_upgrade_addons(self):
+        self.assertNotIn("addonsMaintenanceDue", self.launcher)
+        self.assertNotIn("PythonAddonsMaintenanceDue", self.launcher)
+        self.assertNotIn("MarkPythonAddonsMaintenance", self.launcher)
+        self.assertNotIn("python-addons-week.txt", self.launcher)
+        self.assertNotIn("-m pip install --upgrade", self.launcher)
+        self.assertIn("Add-on upgrades are offered manually inside the app.", self.launcher)
         self.assertNotIn(" -m venv", self.launcher)
+
+    def test_app_exposes_addons_as_a_manual_help_offer(self):
+        source = (ROOT / "paypamin_flow.py").read_text(encoding="utf-8")
+        self.assertIn("help_menu.add_command(label=_('Uppdatera Python-tillägg'),command=self.update_python_addons)", source)
+        self.assertIn("confirmed=messagebox.askyesno(", source)
+        self.assertNotIn("_run_scheduled_python_addon_maintenance", source)
 
     def test_all_helper_commands_are_hidden_and_arguments_are_preserved(self):
         self.assertIn("sh.Run cmd, 0, False", self.launcher)

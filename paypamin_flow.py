@@ -91,14 +91,9 @@ from update_installer import (
     wait_for_update_restart,
 )
 from python_maintenance import (
-    MAINTENANCE_POLL_INTERVAL_MS,
     addon_package_specs,
     install_python_addons,
-    maintenance_due,
-    maintenance_week,
     missing_addon_package_specs,
-    read_maintenance_week,
-    write_maintenance_week,
 )
 from accessibility import (
     AccessibleStyle,
@@ -144,7 +139,6 @@ IMPORT_DIR.mkdir(parents=True,exist_ok=True)
 ICON_DIR = RESOURCE_DIR / "assets"
 LOG_DIR = APP_DIR / "logs"
 LOG_DIR.mkdir(parents=True,exist_ok=True)
-PYTHON_ADDONS_MAINTENANCE_MARKER = APP_DIR / "python-addons-week.txt"
 
 
 def _relocate_legacy_logs():
@@ -1164,17 +1158,15 @@ class ReminderApp(tk.Tk):
         self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._available_update=None;self._update_helper_process=None;self.update_button=None
         self.tray=None;self._quitting=False;self._contrast_check_running=False
         self._import_monitor=ImportFolderMonitor(IMPORT_DIR);self._import_scan_running=False;self._python_addons_ready=False
-        self._python_addon_install_running=False;self._python_addon_updates_running=False;self._python_addon_maintenance_attempted_week=''
+        self._python_addon_install_running=False;self._python_addon_updates_running=False
         self.build(); self.refresh()
         self.after(SYSTEM_CONTRAST_POLL_INTERVAL_MS,self._poll_system_contrast)
         self.protocol('WM_DELETE_WINDOW',self.hide_to_tray)
         self.bind('<Unmap>',self._on_main_window_unmap,add='+')
         self.start_tray()
         self.after(100,self.sync_autostart)
-        # Startup only recovers missing dependencies. Weekly upgrades are separate.
+        # Startup only recovers missing dependencies; upgrades are user-confirmed.
         self.after(250,self.check_python_addons)
-        if not sys.platform.startswith('win'):
-            self.after(1000,self._run_scheduled_python_addon_maintenance)
         self.after(2000,self._run_scheduled_update_check)
         self.after(1500,self._run_scheduled_import_scan)
         self.after(2500,self._run_scheduled_error_log_refresh)
@@ -1774,34 +1766,21 @@ class ReminderApp(tk.Tk):
                 messagebox.showerror(_('Kunde inte installera tillägg'),_('Python-tilläggen kunde inte installeras automatiskt. Kontrollera internetanslutning och pip.\n\n')+details[-1200:],parent=self)
         self.after(350,poll)
 
-    def _run_scheduled_python_addon_maintenance(self):
-        """Run non-Windows add-on upgrades once after Monday 08:00 local time."""
-        try:
-            if self._quitting or sys.platform.startswith('win'):return
-            now=datetime.now();week=maintenance_week(now)
-            if self._python_addon_maintenance_attempted_week==week:return
-            if getattr(self,'_python_addon_install_running',False):return
-            if maintenance_due(now,read_maintenance_week(PYTHON_ADDONS_MAINTENANCE_MARKER)):
-                # Claim the week before starting a thread, including failures,
-                # so an offline Monday cannot cause a retry on every startup.
-                self._python_addon_maintenance_attempted_week=week
-                self.update_python_addons()
-        except Exception:
-            logger.exception('Weekly Python add-on maintenance failed')
-        finally:
-            if not self._quitting:self.after(MAINTENANCE_POLL_INTERVAL_MS,self._run_scheduled_python_addon_maintenance)
-
     def update_python_addons(self):
-        """Upgrade non-Windows requirements in the current environment weekly."""
-        if sys.platform.startswith('win') or getattr(self,'_python_addon_install_running',False):return False
-        now=datetime.now();week=maintenance_week(now)
-        self._python_addon_maintenance_attempted_week=week
-        try:
-            write_maintenance_week(PYTHON_ADDONS_MAINTENANCE_MARKER,week)
-        except Exception as exc:
-            logger.exception('Could not save the weekly Python add-on marker')
-            messagebox.showerror(_('Kunde inte uppdatera Python-tillägg'),_('Veckomarkören för Python-tillägg kunde inte sparas.\n\n{error}',error=exc),parent=self)
+        """Offer an explicit add-on upgrade in the current Python environment."""
+        if getattr(self,'_python_addon_install_running',False):
+            messagebox.showinfo(
+                _('Uppdatera Python-tillägg'),
+                _('Python-tillägg uppdateras eller installeras redan.'),
+                parent=self,
+            )
             return False
+        confirmed=messagebox.askyesno(
+            _('Uppdatera Python-tillägg'),
+            _('Vill du uppdatera appens Python-tillägg i befintlig Python-miljö? Ingen ny Python-runtime eller virtuell miljö installeras. Fakturor och inställningar ändras inte.'),
+            parent=self,
+        )
+        if not confirmed:return False
         self._python_addon_install_running=True
         self._python_addon_updates_running=True
         result_queue=queue.Queue()
@@ -1821,10 +1800,15 @@ class ReminderApp(tk.Tk):
                 self._python_addons_ready=True
                 importlib.invalidate_caches()
                 self.start_tray()
-                logger.info('Weekly Python add-on update completed in the existing environment')
+                logger.info('User-confirmed Python add-on update completed in the existing environment')
+                messagebox.showinfo(
+                    _('Tillägg uppdaterade'),
+                    _('Python-tilläggen har uppdaterats. Starta om appen för att använda de nya versionerna.'),
+                    parent=self,
+                )
             else:
-                logger.error('Weekly Python add-on update failed: %s',details[-1200:])
-                messagebox.showerror(_('Kunde inte uppdatera Python-tillägg'),_('Python-tilläggen kunde inte uppdateras automatiskt. Kontrollera internetanslutning och pip.\n\n')+details[-1200:],parent=self)
+                logger.error('User-confirmed Python add-on update failed: %s',details[-1200:])
+                messagebox.showerror(_('Kunde inte uppdatera Python-tillägg'),_('Python-tilläggen kunde inte uppdateras. Appen fortsätter med befintliga tillägg. Kontrollera internetanslutning och pip.\n\n')+details[-1200:],parent=self)
         self.after(350,poll)
         return True
 
@@ -2050,6 +2034,7 @@ class ReminderApp(tk.Tk):
         help_menu.add_command(label=_('Markera fellogg som åtgärdad'),command=self.resolve_error_log)
         help_menu.add_command(label=_('Visa teknisk logg'),command=self.open_technical_log)
         help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
+        help_menu.add_command(label=_('Uppdatera Python-tillägg'),command=self.update_python_addons)
         help_menu.add_command(label=_('Kortkommandon och tillgänglighet'),command=self.show_keyboard_help,accelerator='F1')
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
         menu.add_cascade(label=_('Hjälp'),menu=help_menu)

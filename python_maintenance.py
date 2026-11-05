@@ -1,8 +1,8 @@
-"""Weekly Python maintenance without creating a separate Python environment.
+"""Python add-on installation without creating a separate environment.
 
-The application owns only its week markers. Runtime updates are performed by
-the Windows launcher before the interpreter is started; add-on updates use the
-current interpreter and never create a venv or a parallel Python installation.
+Existing Python runtimes are never updated by the app or its launcher. Startup
+only recovers missing add-ons; upgrades require an explicit user choice and use
+the current interpreter without creating a venv or parallel Python installation.
 """
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ def write_maintenance_week(path: Path, week: str) -> None:
 
 
 def addon_package_specs() -> tuple[str, ...]:
-    """Return every app-owned requirement for a weekly upgrade check."""
+    """Return every app-owned requirement for a user-confirmed upgrade."""
     return tuple(requirement for _import_name, requirement in PYTHON_ADDONS)
 
 
@@ -103,8 +103,8 @@ def install_python_addons(
 ) -> tuple[bool, str]:
     """Install into the current environment, with the existing user-site fallback.
 
-    ``upgrade`` is intended only for the weekly job. Startup recovery passes
-    ``False`` and supplies only missing packages. No environment is created.
+    ``upgrade`` is intended only for a user-confirmed update. Startup recovery
+    passes ``False`` and supplies only missing packages. No environment is created.
     """
     package_list = tuple(str(package) for package in packages if str(package).strip())
     if not package_list:

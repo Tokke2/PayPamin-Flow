@@ -67,8 +67,8 @@ Använd `py -m pip` i Windows om det är det kommando som pekar på din Python-i
 
 1. Dubbelklicka på **`start_paypamin_flow.vbs`**. Startaren kontrollerar att en startbar Python finns i `PATH`, via Python Install Manager eller på vanliga installationsplatser. Den öppnar inget konsolfönster.
 2. Om Python helt saknas installeras managerens aktuella rekommenderade stabila standardversion automatiskt. Vid behov installeras först den officiella Python Install Manager med WinGet. Installationssteget nås inte när en befintlig Python hittats eller när kontrollen har misslyckats och resultatet därför är osäkert.
-3. Om den Python som appen startar hanteras av **Python Install Manager** kan den uppdateras med sitt exakta installations-ID till senaste tillgängliga uppdatering för just den installationen. En ny huvud-/delversion installeras inte bredvid, och andra Python-installationer på datorn ändras inte.
-4. En befintlig Python som **inte** hanteras av Python Install Manager, till exempel system-Python eller en virtuell miljö, används utan att ersättas eller uppdateras externt. Appen skapar ingen parallellinstallation.
+3. En befintlig Python används alltid oförändrad. Startaren uppdaterar inte Python-runtime och installerar inte en ny version bredvid en befintlig installation.
+4. En befintlig Python som hanteras av Python Install Manager, system-Python eller en virtuell miljö används utan att ersättas eller uppdateras externt. Appen skapar ingen parallellinstallation.
 
 Startaren använder `pythonw.exe` när det finns och den gemensamma `paypamin_flow_launcher.py`. Vid enbart `python.exe` håller Windows Script Host processen dold. Appen lägger dessutom `CREATE_NO_WINDOW` på hjälpprogram som startas för exempelvis PDF/OCR. Windows-autostart använder samma VBS-startare och runtime-kontroll; appens autosynk uppdaterar äldre autostartgenvägar. Den äldre `paypamin_flow.pyw` finns kvar för kompatibilitet men används inte av Windows startkommando eller autostart.
 
@@ -96,13 +96,13 @@ Starta därefter **PayPamin Flow** från programmenyn. Skrivbordsposten har `Ter
 
 På system med externally managed Python kan en virtuell miljö användas. Skapa miljön, installera `requirements.txt` i den och ange dess Python med miljövariabeln `PYTHON` när installationsprogrammet körs. `start_paypamin_flow.sh` kontrollerar den valda tolken respektive `python3`/`python`, men uppdaterar eller ersätter aldrig system-Python och skapar ingen automatisk parallellinstallation.
 
-## Veckovis Python-kontroll och uppdatering
+## Python och valfria tilläggsuppdateringar
 
-- Rutinkontroll och uppdatering av Python-runtime och Python-tillägg sker **högst en gång per vecka**, med måndag **08:00 lokal tid** som måltid. Om appen inte är igång då görs en enda catch-up när det är säkert.
-- På Windows körs både runtime- och tilläggsuppdateringen före appen startas, så att inga låsta Python-/DLL-filer ersätts. Om appen redan är igång måndag 08:00 väntar runtime- och tilläggsuppdateringen till nästa säkra start. Uppdateringen använder den befintliga tolken och `requirements.txt`; ingen egen virtuell miljö skapas.
-- På macOS och Linux körs tilläggsuppdateringen i bakgrunden via appens veckoschema med den befintliga tolken. System-Python uppdateras eller ersätts inte.
-- Vid varje start görs bara den nödvändiga kontrollen att Python och nödvändiga tillägg finns. Saknade tillägg kan återställas direkt så att appen inte slutar fungera; befintliga tillägg uppgraderas inte vid varje start.
-- Veckomarkörer sparas i appdatamappen. Även ett misslyckat uppdateringsförsök räknas som veckans försök och loggas, så att samma uppdatering inte försöks igen vid varje start.
+- En befintlig Python-runtime uppdateras **inte vid appstart** och ersätts inte av PayPamin Flow. Windows-startaren installerar Python endast om ingen fungerande Python hittas.
+- Vid start kontrolleras att nödvändiga Python-tillägg finns. Saknade tillägg kan återställas i bakgrunden utan att befintliga tillägg uppgraderas.
+- Välj **Hjälp → Uppdatera Python-tillägg** för att manuellt uppdatera appens tillägg. Appen frågar först och använder den befintliga Python-miljön; ingen egen virtuell miljö eller parallell Python-runtime skapas. Starta om appen efter en lyckad uppdatering.
+- Automatiska veckouppdateringar av Python-runtime och tillägg körs inte längre. Ett misslyckat manuellt tilläggsförsök lämnar appen med befintliga tillägg och loggas.
+- Den separata funktionen **Uppdatera appen** för PayPamin Flows egna releasefiler är oförändrad.
 
 ## Om appen inte startar
 

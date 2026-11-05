@@ -98,7 +98,15 @@ class PythonMaintenanceTests(unittest.TestCase):
             self.assertEqual(maintenance.missing_addon_package_specs(), ("PyMuPDF>=1.23",))
 
 
-class AddonSchedulerTests(unittest.TestCase):
+class ImmediateThread:
+    def __init__(self, target, daemon):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+class AddonUpdateOfferTests(unittest.TestCase):
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.app = load_headless_app(Path(self.temporary_directory.name))
@@ -114,51 +122,46 @@ class AddonSchedulerTests(unittest.TestCase):
     @staticmethod
     def fake_app():
         return SimpleNamespace(
-            _quitting=False,
-            _python_addon_maintenance_attempted_week="",
             _python_addon_install_running=False,
-            update_python_addons=Mock(),
-            _run_scheduled_python_addon_maintenance="next-maintenance",
+            _python_addon_updates_running=False,
+            _python_addons_ready=False,
             after=Mock(),
+            start_tray=Mock(),
         )
 
-    def run_scheduler(self, fake, moment, marker=""):
-        with patch.object(self.app, "datetime") as current_datetime, patch.object(
-            self.app, "read_maintenance_week", return_value=marker,
-        ):
-            current_datetime.now.return_value = moment
-            self.app.ReminderApp._run_scheduled_python_addon_maintenance(fake)
-
-    def test_scheduler_waits_for_monday_eight_and_reschedules(self):
+    def test_update_is_declined_without_starting_pip(self):
         fake = self.fake_app()
-        self.run_scheduler(fake, datetime(2026, 11, 2, 7, 59))
-        fake.update_python_addons.assert_not_called()
-        fake.after.assert_called_once_with(
-            maintenance.MAINTENANCE_POLL_INTERVAL_MS, "next-maintenance",
-        )
+        with patch.object(self.app.messagebox, "askyesno", return_value=False, create=True), patch.object(
+            self.app.threading, "Thread",
+        ) as thread:
+            self.assertFalse(self.app.ReminderApp.update_python_addons(fake))
+        thread.assert_not_called()
+        self.assertFalse(fake._python_addon_install_running)
 
-    def test_scheduler_claims_one_catch_up_per_week(self):
+    def test_confirmed_update_uses_existing_interpreter_on_windows(self):
         fake = self.fake_app()
-        moment = datetime(2026, 11, 3, 9, 0)
-        with patch.object(self.app.sys, "platform", "linux"):
-            self.run_scheduler(fake, moment, marker="2026-10-26")
-            self.run_scheduler(fake, moment, marker="2026-10-26")
-        fake.update_python_addons.assert_called_once_with()
-        self.assertEqual(fake._python_addon_maintenance_attempted_week, "2026-11-02")
+        fake.after.side_effect = lambda _delay, callback: callback()
+        with patch.object(self.app.messagebox, "askyesno", return_value=True, create=True), patch.object(
+            self.app.messagebox, "showinfo", create=True,
+        ), patch.object(self.app.threading, "Thread", ImmediateThread), patch.object(
+            self.app, "addon_package_specs", return_value=("Pillow>=10.0",),
+        ), patch.object(self.app, "install_python_addons", return_value=(True, "")) as install:
+            with patch.object(self.app.sys, "platform", "win32"):
+                self.assertTrue(self.app.ReminderApp.update_python_addons(fake))
+        install.assert_called_once_with(self.app.sys.executable, ("Pillow>=10.0",), upgrade=True)
+        self.assertTrue(fake._python_addons_ready)
+        self.assertFalse(fake._python_addon_install_running)
+        fake.start_tray.assert_called_once_with()
 
-    def test_scheduler_does_not_overlap_startup_recovery(self):
+    def test_running_recovery_is_not_interrupted_by_manual_update(self):
         fake = self.fake_app()
         fake._python_addon_install_running = True
-        self.run_scheduler(fake, datetime(2026, 11, 3, 9, 0), marker="2026-10-26")
-        fake.update_python_addons.assert_not_called()
-        self.assertEqual(fake._python_addon_maintenance_attempted_week, "")
-
-    def test_windows_scheduler_leaves_pre_start_update_to_the_launcher(self):
-        fake = self.fake_app()
-        with patch.object(self.app.sys, "platform", "win32"):
-            self.run_scheduler(fake, datetime(2026, 11, 3, 9, 0), marker="2026-10-26")
+        with patch.object(self.app.messagebox, "showinfo", create=True) as info, patch.object(
+            self.app.messagebox, "askyesno", create=True,
+        ) as confirm:
             self.assertFalse(self.app.ReminderApp.update_python_addons(fake))
-        fake.update_python_addons.assert_not_called()
+        info.assert_called_once()
+        confirm.assert_not_called()
 
 
 if __name__ == "__main__":
