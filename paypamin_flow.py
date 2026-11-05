@@ -90,6 +90,16 @@ from update_installer import (
     stage_update,
     wait_for_update_restart,
 )
+from python_maintenance import (
+    MAINTENANCE_POLL_INTERVAL_MS,
+    addon_package_specs,
+    install_python_addons,
+    maintenance_due,
+    maintenance_week,
+    missing_addon_package_specs,
+    read_maintenance_week,
+    write_maintenance_week,
+)
 
 IMPORT_WATCH_INTERVAL_MS = 5000
 LEDGER_REMINDER_INTERVAL_MS = 15 * 60 * 1000
@@ -116,6 +126,7 @@ IMPORT_DIR.mkdir(parents=True,exist_ok=True)
 ICON_DIR = RESOURCE_DIR / "assets"
 LOG_DIR = APP_DIR / "logs"
 LOG_DIR.mkdir(parents=True,exist_ok=True)
+PYTHON_ADDONS_MAINTENANCE_MARKER = APP_DIR / "python-addons-week.txt"
 
 
 def _relocate_legacy_logs():
@@ -1130,12 +1141,16 @@ class ReminderApp(tk.Tk):
         self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._available_update=None;self._update_helper_process=None;self.update_button=None
         self.tray=None;self._quitting=False
         self._import_monitor=ImportFolderMonitor(IMPORT_DIR);self._import_scan_running=False;self._python_addons_ready=False
+        self._python_addon_install_running=False;self._python_addon_updates_running=False;self._python_addon_maintenance_attempted_week=''
         self.build(); self.refresh()
         self.protocol('WM_DELETE_WINDOW',self.hide_to_tray)
         self.bind('<Unmap>',self._on_main_window_unmap,add='+')
         self.start_tray()
         self.after(100,self.sync_autostart)
+        # Startup only recovers missing dependencies. Weekly upgrades are separate.
         self.after(250,self.check_python_addons)
+        if not sys.platform.startswith('win'):
+            self.after(1000,self._run_scheduled_python_addon_maintenance)
         self.after(2000,self._run_scheduled_update_check)
         self.after(1500,self._run_scheduled_import_scan)
         self.after(2500,self._run_scheduled_error_log_refresh)
@@ -1683,19 +1698,13 @@ class ReminderApp(tk.Tk):
         self.refresh()
 
     def check_python_addons(self):
-        """Install required PDF packages in the background only when missing; no terminal window."""
-        missing=[]
-        if importlib.util.find_spec('fitz') is None: missing.append('PyMuPDF')
-        if importlib.util.find_spec('reportlab') is None: missing.append('reportlab')
-        if importlib.util.find_spec('pytesseract') is None: missing.append('pytesseract')
-        if importlib.util.find_spec('pdf2image') is None: missing.append('pdf2image')
-        if importlib.util.find_spec('svglib') is None: missing.append('svglib')
-        if importlib.util.find_spec('PIL') is None: missing.append('Pillow')
-        if importlib.util.find_spec('cv2') is None: missing.append('OpenCV')
-        if importlib.util.find_spec('pystray') is None: missing.append('pystray')
+        """Recover missing dependencies at startup without upgrading existing ones."""
+        if getattr(self,'_python_addon_install_running',False):return
+        missing=list(missing_addon_package_specs())
         if not missing:
             self._python_addons_ready=True
             return
+        self._python_addon_install_running=True
         win=self._new_toplevel(_('Förbereder appen'));win.resizable(False,False)
         win.protocol('WM_DELETE_WINDOW',lambda:None)
         box=ttk.Frame(win,padding=22);box.pack()
@@ -1706,29 +1715,16 @@ class ReminderApp(tk.Tk):
         win.update_idletasks()
         result_queue=queue.Queue()
         def install():
-            packages=[]
-            if 'PyMuPDF' in missing:packages.append('PyMuPDF>=1.23')
-            if 'reportlab' in missing:packages.append('reportlab>=4.0')
-            if 'pytesseract' in missing:packages.append('pytesseract')
-            if 'pdf2image' in missing:packages.append('pdf2image')
-            if 'svglib' in missing:packages.append('svglib>=1.5')
-            if 'Pillow' in missing:packages.append('Pillow>=10.0')
-            if 'OpenCV' in missing:packages.append('opencv-python-headless>=4.8')
-            if 'pystray' in missing:packages.append('pystray>=0.19')
-            args=[sys.executable,'-m','pip','install']+packages
-            flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
             try:
-                proc=subprocess.run(args,capture_output=True,text=True,timeout=300,creationflags=flags)
-                if proc.returncode!=0:
-                    # Retry for Python installs where user-site installation is required.
-                    proc=subprocess.run([sys.executable,'-m','pip','install','--user']+packages,capture_output=True,text=True,timeout=300,creationflags=flags)
-                result_queue.put((proc.returncode==0,(proc.stderr or proc.stdout or '').strip()))
-            except Exception as exc:result_queue.put((False,str(exc)))
+                result_queue.put(install_python_addons(sys.executable,missing,upgrade=False))
+            except Exception as exc:
+                result_queue.put((False,str(exc)))
         threading.Thread(target=install,daemon=True).start()
         def poll():
             try:ok,details=result_queue.get_nowait()
             except queue.Empty:
                 self.after(250,poll);return
+            self._python_addon_install_running=False
             bar.stop();win.destroy()
             if ok:
                 self._python_addons_ready=True
@@ -1738,6 +1734,60 @@ class ReminderApp(tk.Tk):
             else:
                 messagebox.showerror(_('Kunde inte installera tillägg'),_('Python-tilläggen kunde inte installeras automatiskt. Kontrollera internetanslutning och pip.\n\n')+details[-1200:],parent=self)
         self.after(350,poll)
+
+    def _run_scheduled_python_addon_maintenance(self):
+        """Run non-Windows add-on upgrades once after Monday 08:00 local time."""
+        try:
+            if self._quitting or sys.platform.startswith('win'):return
+            now=datetime.now();week=maintenance_week(now)
+            if self._python_addon_maintenance_attempted_week==week:return
+            if getattr(self,'_python_addon_install_running',False):return
+            if maintenance_due(now,read_maintenance_week(PYTHON_ADDONS_MAINTENANCE_MARKER)):
+                # Claim the week before starting a thread, including failures,
+                # so an offline Monday cannot cause a retry on every startup.
+                self._python_addon_maintenance_attempted_week=week
+                self.update_python_addons()
+        except Exception:
+            logger.exception('Weekly Python add-on maintenance failed')
+        finally:
+            if not self._quitting:self.after(MAINTENANCE_POLL_INTERVAL_MS,self._run_scheduled_python_addon_maintenance)
+
+    def update_python_addons(self):
+        """Upgrade non-Windows requirements in the current environment weekly."""
+        if sys.platform.startswith('win') or getattr(self,'_python_addon_install_running',False):return False
+        now=datetime.now();week=maintenance_week(now)
+        self._python_addon_maintenance_attempted_week=week
+        try:
+            write_maintenance_week(PYTHON_ADDONS_MAINTENANCE_MARKER,week)
+        except Exception as exc:
+            logger.exception('Could not save the weekly Python add-on marker')
+            messagebox.showerror(_('Kunde inte uppdatera Python-tillägg'),_('Veckomarkören för Python-tillägg kunde inte sparas.\n\n{error}',error=exc),parent=self)
+            return False
+        self._python_addon_install_running=True
+        self._python_addon_updates_running=True
+        result_queue=queue.Queue()
+        def update():
+            try:
+                result_queue.put(install_python_addons(sys.executable,addon_package_specs(),upgrade=True))
+            except Exception as exc:
+                result_queue.put((False,str(exc)))
+        threading.Thread(target=update,daemon=True).start()
+        def poll():
+            try:ok,details=result_queue.get_nowait()
+            except queue.Empty:
+                self.after(250,poll);return
+            self._python_addon_install_running=False
+            self._python_addon_updates_running=False
+            if ok:
+                self._python_addons_ready=True
+                importlib.invalidate_caches()
+                self.start_tray()
+                logger.info('Weekly Python add-on update completed in the existing environment')
+            else:
+                logger.error('Weekly Python add-on update failed: %s',details[-1200:])
+                messagebox.showerror(_('Kunde inte uppdatera Python-tillägg'),_('Python-tilläggen kunde inte uppdateras automatiskt. Kontrollera internetanslutning och pip.\n\n')+details[-1200:],parent=self)
+        self.after(350,poll)
+        return True
 
     def _style(self):
         s=ttk.Style(self); s.theme_use('clam')

@@ -54,10 +54,10 @@ Använd `py -m pip` i Windows om det är det kommando som pekar på din Python-i
 
 ### Windows
 
-1. Dubbelklicka på **`start_paypamin_flow.vbs`**. Startaren kontrollerar först Python i `PATH`, via Python Install Manager och på vanliga installationsplatser. Den öppnar inget konsolfönster.
-2. Om den Python som appen startar hanteras av **Python Install Manager** uppdateras den med sitt exakta installations-ID till senaste tillgängliga uppdatering för just den installationen. Befintliga paket och tillägg bevaras av managern. En ny huvud-/delversion installeras inte bredvid, och andra Python-installationer på datorn ändras inte.
-3. Om Python helt saknas installeras managerens aktuella rekommenderade stabila standardversion automatiskt. Vid behov installeras först den officiella Python Install Manager med WinGet. Installationssteget nås inte när en befintlig Python hittats eller när kontrollen har misslyckats och resultatet därför är osäkert.
-4. En befintlig Python som **inte** hanteras av Python Install Manager, till exempel system-Python eller en virtuell miljö, används utan att ersättas eller uppdateras externt. Appen skapar ingen parallellinstallation. Installera tilläggen enligt ovan om de inte redan finns; appen kan även installera saknade Python-tillägg i bakgrunden.
+1. Dubbelklicka på **`start_paypamin_flow.vbs`**. Startaren kontrollerar att en startbar Python finns i `PATH`, via Python Install Manager eller på vanliga installationsplatser. Den öppnar inget konsolfönster.
+2. Om Python helt saknas installeras managerens aktuella rekommenderade stabila standardversion automatiskt. Vid behov installeras först den officiella Python Install Manager med WinGet. Installationssteget nås inte när en befintlig Python hittats eller när kontrollen har misslyckats och resultatet därför är osäkert.
+3. Om den Python som appen startar hanteras av **Python Install Manager** kan den uppdateras med sitt exakta installations-ID till senaste tillgängliga uppdatering för just den installationen. En ny huvud-/delversion installeras inte bredvid, och andra Python-installationer på datorn ändras inte.
+4. En befintlig Python som **inte** hanteras av Python Install Manager, till exempel system-Python eller en virtuell miljö, används utan att ersättas eller uppdateras externt. Appen skapar ingen parallellinstallation.
 
 Startaren använder `pythonw.exe` när det finns och den gemensamma `paypamin_flow_launcher.py`. Vid enbart `python.exe` håller Windows Script Host processen dold. Appen lägger dessutom `CREATE_NO_WINDOW` på hjälpprogram som startas för exempelvis PDF/OCR. Windows-autostart använder samma VBS-startare och runtime-kontroll; appens autosynk uppdaterar äldre autostartgenvägar. Den äldre `paypamin_flow.pyw` finns kvar för kompatibilitet men används inte av Windows startkommando eller autostart.
 
@@ -84,6 +84,14 @@ python3 -m pip install -r requirements.txt
 Starta därefter **PayPamin Flow** från programmenyn. Skrivbordsposten har `Terminal=false`. Installationen är per användare och kopierar Python-filerna till `~/.local/share/paypamin-flow` som standard. Du kan också köra `./start_paypamin_flow.sh` eller `python3 paypamin_flow_launcher.py` direkt från appmappen.
 
 På system med externally managed Python kan en virtuell miljö användas. Skapa miljön, installera `requirements.txt` i den och ange dess Python med miljövariabeln `PYTHON` när installationsprogrammet körs. `start_paypamin_flow.sh` kontrollerar den valda tolken respektive `python3`/`python`, men uppdaterar eller ersätter aldrig system-Python och skapar ingen automatisk parallellinstallation.
+
+## Veckovis Python-kontroll och uppdatering
+
+- Rutinkontroll och uppdatering av Python-runtime och Python-tillägg sker **högst en gång per vecka**, med måndag **08:00 lokal tid** som måltid. Om appen inte är igång då görs en enda catch-up när det är säkert.
+- På Windows körs både runtime- och tilläggsuppdateringen före appen startas, så att inga låsta Python-/DLL-filer ersätts. Om appen redan är igång måndag 08:00 väntar runtime- och tilläggsuppdateringen till nästa säkra start. Uppdateringen använder den befintliga tolken och `requirements.txt`; ingen egen virtuell miljö skapas.
+- På macOS och Linux körs tilläggsuppdateringen i bakgrunden via appens veckoschema med den befintliga tolken. System-Python uppdateras eller ersätts inte.
+- Vid varje start görs bara den nödvändiga kontrollen att Python och nödvändiga tillägg finns. Saknade tillägg kan återställas direkt så att appen inte slutar fungera; befintliga tillägg uppgraderas inte vid varje start.
+- Veckomarkörer sparas i appdatamappen. Även ett misslyckat uppdateringsförsök räknas som veckans försök och loggas, så att samma uppdatering inte försöks igen vid varje start.
 
 ## Om appen inte startar
 

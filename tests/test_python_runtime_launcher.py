@@ -42,7 +42,8 @@ class WindowsPythonRuntimeLauncherTests(unittest.TestCase):
         guard = 'If Not hasPython And managerPath <> "" And Not managerInventoryOK Then'
         self.assertIn(guard, self.launcher)
         self.assertIn("Det gick inte att kontrollera Python-installationen. Ingen ny Python har installerats.", self.launcher)
-        self.assertIn("If managedCode <> 0 Then\n    managerInventoryOK = False", self.launcher)
+        self.assertIn("If managedCode <> 0 Then", self.launcher)
+        self.assertIn("managerInventoryOK = False", self.launcher)
         failure_handler = self.launcher.split("Sub FailRuntime(message)", 1)[1]
         self.assertIn("WScript.Quit 1", failure_handler)
 
@@ -53,9 +54,30 @@ class WindowsPythonRuntimeLauncherTests(unittest.TestCase):
         self.assertIn("If Not pythonAlias Then", self.launcher)
 
     def test_unmanaged_python_is_reused_without_replacement(self):
-        self.assertIn("Existing Python is not confirmed as the selected manager-managed runtime.", self.launcher)
-        self.assertIn("Leaving it unchanged; no update or new installation was requested.", self.launcher)
+        self.assertIn("Weekly Python check: the existing runtime is not confirmed as manager-managed.", self.launcher)
+        self.assertIn("Leaving it unchanged; no new installation was requested.", self.launcher)
         self.assertNotRegex(self.launcher, r"(?i)\b(uninstall|remove-python|python\.org/downloads/\d)")
+
+    def test_runtime_update_and_managed_lookup_are_weekly_not_per_start(self):
+        due = self.launcher.index("If runtimeMaintenanceDue Then")
+        update = self.launcher.index('" install --update --by-id "')
+        managed_lookup = self.launcher.index('managedId = ManagerValue(managerPath, "id", True, managedCode)')
+        self.assertIn("If hasPython Then runtimeMaintenanceDue = PythonRuntimeMaintenanceDue()", self.launcher)
+        self.assertIn('Weekday(Date, vbMonday)', self.launcher)
+        self.assertIn('DateAdd("h", 8, MaintenanceMondayDate())', self.launcher)
+        self.assertIn("A failed attempt is also complete for this week", self.launcher)
+        self.assertLess(due, managed_lookup)
+        self.assertLess(due, update)
+        self.assertIn("MarkPythonRuntimeMaintenance", self.launcher)
+
+    def test_windows_addons_upgrade_pre_start_once_per_week(self):
+        self.assertIn("If addonsMaintenanceDue Then", self.launcher)
+        self.assertIn("PythonAddonsMaintenanceDue", self.launcher)
+        self.assertIn("requirements.txt", self.launcher)
+        self.assertIn("-m pip install --upgrade --upgrade-strategy only-if-needed -r", self.launcher)
+        self.assertIn("PythonExecutableFor", self.launcher)
+        self.assertIn("MarkPythonAddonsMaintenance", self.launcher)
+        self.assertNotIn(" -m venv", self.launcher)
 
     def test_all_helper_commands_are_hidden_and_arguments_are_preserved(self):
         self.assertIn("sh.Run cmd, 0, False", self.launcher)
