@@ -227,6 +227,55 @@ class WindowCloseTests(unittest.TestCase):
         native_icon.assert_called_once_with(fake)
         self.assertIs(fake.after_idle.call_args_list[1].args[0], fake._maybe_show_ledger_reminder)
 
+    def test_second_start_restores_the_existing_window(self):
+        event = Mock()
+        event.is_set.return_value = True
+        fake = SimpleNamespace(
+            _quitting=False,
+            _single_instance_activation=event,
+            _poll_single_instance_activation=Mock(),
+            show_from_tray=Mock(),
+            after=Mock(),
+        )
+
+        self.app.ReminderApp._poll_single_instance_activation(fake)
+
+        event.clear.assert_called_once_with()
+        fake.show_from_tray.assert_called_once_with()
+        fake.after.assert_called_once_with(200, fake._poll_single_instance_activation)
+
+    def test_update_child_claims_ownership_without_activating_old_app(self):
+        instance = Mock()
+        instance.try_acquire.return_value = True
+        fake = SimpleNamespace(
+            _quitting=False,
+            _single_instance=instance,
+            _poll_single_instance_activation=Mock(),
+            quit_app=Mock(),
+        )
+
+        self.app.ReminderApp._claim_single_instance_after_update(fake, 0.0)
+
+        instance.try_acquire.assert_called_once_with()
+        fake._poll_single_instance_activation.assert_called_once_with()
+        instance.activate_existing.assert_not_called()
+        fake.quit_app.assert_not_called()
+
+    def test_update_handoff_timeout_closes_duplicate_child(self):
+        instance = Mock()
+        instance.try_acquire.return_value = False
+        instance.activate_existing.return_value = True
+        fake = SimpleNamespace(
+            _quitting=False,
+            _single_instance=instance,
+            quit_app=Mock(),
+        )
+        with patch.object(self.app.time, "monotonic", return_value=20.0):
+            self.app.ReminderApp._claim_single_instance_after_update(fake, 0.0)
+
+        instance.activate_existing.assert_called_once_with()
+        fake.quit_app.assert_called_once_with()
+
     def test_tray_update_opens_window_and_starts_manual_check(self):
         events = []
         fake = SimpleNamespace(
@@ -237,6 +286,22 @@ class WindowCloseTests(unittest.TestCase):
         self.app.ReminderApp.update_from_tray(fake)
 
         self.assertEqual(events, ["shown", ("manual", True)])
+
+    def test_duplicate_main_start_returns_before_database_or_window_creation(self):
+        instance = Mock()
+        instance.acquire.return_value = False
+        instance.activated_existing = True
+        with patch.object(self.app, "SingleInstance", return_value=instance), patch.object(
+            self.app, "configure_console_free_subprocesses"
+        ), patch.object(self.app, "configure_windows_app_identity"), patch.object(
+            self.app, "init_db"
+        ) as init_db, patch.object(self.app, "ReminderApp") as window:
+            self.app.main()
+
+        instance.acquire.assert_called_once_with()
+        init_db.assert_not_called()
+        window.assert_not_called()
+        instance.release.assert_called_once_with()
 
     def test_explicit_exit_stops_tray_and_destroys_window(self):
         events = []

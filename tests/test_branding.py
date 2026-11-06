@@ -42,6 +42,15 @@ class BrandingTests(unittest.TestCase):
         self.assertTrue((ASSETS / "paypamin_flow.ico").read_bytes().startswith(b"\x00\x00\x01\x00"))
         self.assertTrue((ASSETS / "paypamin_flow.icns").read_bytes().startswith(b"icns"))
 
+    def test_windows_icon_contains_every_taskbar_and_tray_size(self):
+        from PIL import Image
+
+        with Image.open(ASSETS / "paypamin_flow.ico") as icon:
+            self.assertEqual(
+                set(icon.ico.sizes()),
+                {(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)},
+            )
+
     def test_svg_icon_has_accessible_product_title(self):
         root = ET.parse(ASSETS / "paypamin_flow.svg").getroot()
         title = root.find("{http://www.w3.org/2000/svg}title")
@@ -353,8 +362,32 @@ class WindowsBrandingTests(unittest.TestCase):
                     call(9000, 0x0080, 0, 1001),
                     call(9000, 0x0080, 1, 1002),
                 ])
-                self.assertEqual(get_ancestor.call_args_list, [call(4242, 2), call(4242, 2)])
+                self.assertEqual(get_ancestor.call_args_list, [call(4242, 2), call(4242, 3), call(4242, 2), call(4242, 3)])
                 self.assertEqual(len(app._WINDOWS_NATIVE_ICONS), 2)
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
+
+    def test_native_icons_are_sent_to_distinct_root_and_owner_windows(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            load_image = Mock(side_effect=[1001, 1002])
+            send_message = Mock(return_value=0)
+            get_metrics = Mock(side_effect=lambda index: 16 if index in (49, 50) else 32)
+            get_ancestor = Mock(side_effect=[9000, 9001])
+            fake_ctypes = self.native_ctypes(load_image, send_message, get_metrics, get_ancestor)
+            window = Mock()
+            window.winfo_id.return_value = 4242
+            try:
+                with patch.object(app.sys, "platform", "win32"), patch.dict(
+                    sys.modules, {"ctypes": fake_ctypes}
+                ), patch.object(app, "ICON_DIR", ASSETS):
+                    self.assertTrue(app.configure_windows_window_icon(window))
+                self.assertEqual(send_message.call_args_list, [
+                    call(9000, 0x0080, 0, 1001), call(9000, 0x0080, 1, 1002),
+                    call(9001, 0x0080, 0, 1001), call(9001, 0x0080, 1, 1002),
+                ])
             finally:
                 for handler in app.logger.handlers[:]:
                     app.logger.removeHandler(handler)

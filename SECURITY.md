@@ -6,7 +6,9 @@ For a bug report, use synthetic or thoroughly anonymized examples. The app is a 
 
 Technical diagnostics, consolidated errors, startup failures and update diagnostics are stored locally under `~/.paminnelseapp/logs/`. Known legacy logs are moved there without overwriting existing files. Dated technical archives and archived copies of resolved errors remain under `logs/arkiv/` and retain the same sensitivity. Logs can contain customer, invoice, amount and file-path information and must be reviewed and redacted before sharing.
 
-Autostart entries are created only for the current OS user and can be disabled in Settings. They launch the same local application and do not add a network service.
+Autostart entries are created only for the current OS user and can be disabled in Settings. They launch the same local application and do not add a remote network service.
+
+Single-instance activation listens only on `127.0.0.1` with a random local port and a per-instance secret token. It accepts only a window-activation command, carries no invoice data and is not exposed to other machines. The per-user lock and activation state are stored under `~/.paminnelseapp/` and are released when the app exits.
 
 ## Automatic updates
 

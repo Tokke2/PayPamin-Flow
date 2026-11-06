@@ -46,6 +46,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "python_maintenance.py",
     "reminder_archive.py",
     "reminder_journal.py",
+    "single_instance.py",
     "supplier_matching.py",
     "tray.py",
     "ui_icons.py",

@@ -83,7 +83,7 @@ def create_icon():
     gradient = Image.new("RGBA", image.size)
     draw = ImageDraw.Draw(gradient)
     for y in range(CANVAS):
-        color = mix((23, 32, 72), (37, 99, 170), y / (CANVAS - 1))
+        color = mix((16, 28, 61), (31, 102, 193), y / (CANVAS - 1))
         draw.line((0, y, CANVAS, y), fill=(*color, 255))
     background_mask = Image.new("L", image.size)
     ImageDraw.Draw(background_mask).rounded_rectangle(
@@ -104,6 +104,15 @@ def create_icon():
     rounded_line(ImageDraw.Draw(flow), flow_points, fill=(133, 225, 224, 38), width=22)
     image = Image.alpha_composite(image, flow)
 
+    # A subtle light rim keeps the product tile recognisable on dark taskbars.
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        (*point(24, 24), *point(488, 488)),
+        radius=108 * SCALE,
+        outline=(255, 255, 255, 46),
+        width=8 * SCALE,
+    )
+
     doc_points = scaled(document_points())
     shadow_mask = Image.new("L", image.size)
     ImageDraw.Draw(shadow_mask).polygon([(x, y + 14 * SCALE) for x, y in doc_points], fill=78)
@@ -117,14 +126,14 @@ def create_icon():
     draw.polygon(scaled([(316, 64), (316, 112), (332, 132), (384, 132)]), fill="#D8E7F5")
 
     # Geometric P: recognisable as PayPamin even without the wordmark.
-    rounded_line(draw, [(174, 148), (174, 288)], fill="#2450A4", width=24)
+    rounded_line(draw, [(174, 148), (174, 288)], fill="#173F8F", width=24)
     bowl = [(174, 148), (238, 148)]
     bowl += cubic(bowl[-1], (272, 148), (286, 160), (286, 182), 20)
     bowl += cubic(bowl[-1], (286, 204), (272, 216), (238, 216), 20)
     bowl.append((174, 216))
-    rounded_line(draw, bowl, fill="#2450A4", width=24)
-    rounded_line(draw, [(174, 326), (278, 326)], fill="#A2B8D2", width=15)
-    rounded_line(draw, [(174, 360), (238, 360)], fill="#A2B8D2", width=15)
+    rounded_line(draw, bowl, fill="#173F8F", width=24)
+    rounded_line(draw, [(174, 326), (278, 326)], fill="#7C9CBF", width=15)
+    rounded_line(draw, [(174, 360), (238, 360)], fill="#7C9CBF", width=15)
 
     # Paid/reminder completion badge.
     draw.ellipse((*point(268, 264), *point(444, 440)), fill="#FFFFFF")
@@ -134,7 +143,7 @@ def create_icon():
     badge_draw = ImageDraw.Draw(badge)
     for y in range(276 * SCALE, 429 * SCALE):
         amount = (y / SCALE - 276) / 152
-        badge_draw.line((0, y, CANVAS, y), fill=(*mix((41, 211, 183), (14, 145, 139), amount), 255))
+        badge_draw.line((0, y, CANVAS, y), fill=(*mix((52, 211, 153), (15, 159, 149), amount), 255))
     image.paste(badge, (0, 0), badge_mask)
     draw = ImageDraw.Draw(image)
     rounded_line(draw, [(312, 350), (342, 380), (400, 318)], fill="#FFFFFF", width=18)

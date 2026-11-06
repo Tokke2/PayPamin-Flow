@@ -5,12 +5,12 @@
   <metadata>Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.</metadata>
   <defs>
     <linearGradient id="background" x1="70" y1="40" x2="440" y2="480" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#172048"/>
-      <stop offset="1" stop-color="#2563AA"/>
+      <stop offset="0" stop-color="#101C3D"/>
+      <stop offset="1" stop-color="#1F66C1"/>
     </linearGradient>
     <linearGradient id="completion" x1="300" y1="286" x2="414" y2="424" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#29D3B7"/>
-      <stop offset="1" stop-color="#0E918B"/>
+      <stop offset="0" stop-color="#34D399"/>
+      <stop offset="1" stop-color="#0F9F95"/>
     </linearGradient>
     <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(426 66) rotate(135) scale(240)">
       <stop offset="0" stop-color="#46DCD2" stop-opacity="0.22"/>
@@ -23,12 +23,13 @@
   <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#background)"/>
   <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#glow)"/>
   <path d="M48 388C140 462 272 454 360 394C416 358 448 320 466 274" fill="none" stroke="#85E1E0" stroke-opacity="0.15" stroke-width="22" stroke-linecap="round"/>
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="none" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="8"/>
   <g filter="url(#shadow)">
     <path d="M148 64H316L384 132V388C384 410 370 424 346 424H148C128 424 112 410 112 388V104C112 80 128 64 148 64Z" fill="#FFFFFF"/>
     <path d="M316 64V112L332 132H384L316 64Z" fill="#D8E7F5"/>
   </g>
-  <path d="M174 288V148H238C272 148 286 160 286 182C286 204 272 216 238 216H174" fill="none" stroke="#2450A4" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M174 326H278M174 360H238" fill="none" stroke="#A2B8D2" stroke-width="15" stroke-linecap="round"/>
+  <path d="M174 288V148H238C272 148 286 160 286 182C286 204 272 216 238 216H174" fill="none" stroke="#173F8F" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M174 326H278M174 360H238" fill="none" stroke="#7C9CBF" stroke-width="15" stroke-linecap="round"/>
   <circle cx="356" cy="352" r="88" fill="#FFFFFF"/>
   <circle cx="356" cy="352" r="76" fill="url(#completion)"/>
   <path d="M312 350L342 380L400 318" fill="none" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>

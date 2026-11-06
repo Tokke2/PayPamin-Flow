@@ -129,9 +129,16 @@ När du stänger eller minimerar huvudfönstret döljs det i systemfältet. Appe
 
 Om skrivbordsmiljön inte har ett fungerande systemfält lämnas fönstret synligt och appen erbjuder ett tydligt val att avsluta i stället för att gömmas oåtkomlig. På Linux kan skrivbordets AppIndicator-/systemfältsstöd behöva aktiveras.
 
-På Windows använder appen en egen app-identitet för aktivitetsfältets PayPamin Flow-ikon. Huvudfönstret och alla sekundära fönster får dessutom både stor och liten PayPamin Flow-ikon direkt via det **yttersta Windows-rotfönstret**, som aktivitetsfältet, Alt+Tab och Aktivitetshanterarens appvy använder. Ikonen appliceras både under fönsteruppbyggnaden och igen efter att fönstret har mappats; huvudfönstret får den även på nytt när det återställs från systemfältet. Systemfältsikonen kan placeras under **^ / Dolda ikoner** av Windows; dra den till det synliga fältet om du vill ha den framme hela tiden. Start- och ikonfel loggas i `%USERPROFILE%\.paminnelseapp\logs\app.log`.
+På Windows använder appen en egen app-identitet för aktivitetsfältets PayPamin Flow-ikon. Huvudfönstret och alla sekundära fönster får dessutom både stor och liten PayPamin Flow-ikon direkt via det **yttersta Windows-rot- och ägarfönstret**, som aktivitetsfältet, Alt+Tab och Aktivitetshanterarens appvy använder. Ikonen appliceras både under fönsteruppbyggnaden och igen efter att fönstret har mappats; huvudfönstret får den även på nytt när det återställs från systemfältet. Systemfältsikonen kan placeras under **^ / Dolda ikoner** av Windows; dra den till det synliga fältet om du vill ha den framme hela tiden. Start- och ikonfel loggas i `%USERPROFILE%\.paminnelseapp\logs\app.log`.
 
 **Begränsning i Windows:** Aktivitetshanterarens **Detaljer**-flik och vissa bakgrundsprocessvyer kan fortfarande visa Python-ikonen. Windows hämtar då den inbäddade ikonen från `pythonw.exe`, inte från appfönstret. Att ersätta just den processikonen skulle kräva en native EXE med egen ikonresurs, vilket inte ingår i PayPamin Flows Python-only-distribution.
+
+## En aktiv appinstans
+
+- PayPamin Flow använder en per-användarlåsning på Windows, macOS och Linux. Ett nytt startförsök startar inte en andra appinstans.
+- I stället aktiveras den befintliga appen via en lokal, token-skyddad kanal och huvudfönstret visas, lyfts och får fokus även om det ligger dolt i systemfältet.
+- Aktiveringskanalen lyssnar endast på `127.0.0.1` med en slumpad port och en hemlig token per instans. Den är inte exponerad mot nätverket och används inte för fakturadata eller extern kommunikation.
+- Uppdateringsomstarten överlämnar instansägandet från den gamla till den nya processen efter den vanliga UI-bekräftelsen. Fullständigt avslut frigör låsningen; en kraschad process frigör den via operativsystemet.
 
 ## Smart cache-rensning och betalda fakturor
 
@@ -227,7 +234,7 @@ Stäng av eller aktivera via **Inställningar → Starta PayPamin Flow automatis
 
 ## Logotyp och appikon
 
-Huvudikonen föreställer ett vitt fakturadokument med blått **P-märke** och en turkos **bock** på mörkblå bakgrund. Den är ritad för att vara tydlig även i små storlekar och används i stället för Pythons ikon. Samma motiv används för huvudfönster, sekundära fönster, systemfält, aktivitetsfält, Aktivitetshanterarens appvy, macOS Dock, Linux och Windows-autostartgenväg.
+Huvudikonen föreställer ett vitt fakturadokument med blått **P-märke** och en grönturkos **bock** på mörkblå bakgrund med en diskret ljus kant. Den är ritad för att vara tydlig även i små storlekar och används i stället för Pythons ikon. Samma motiv används för huvudfönster, sekundära fönster, systemfält, aktivitetsfält, Aktivitetshanterarens appvy, macOS Dock, Linux och Windows-autostartgenväg.
 
 Den horisontella logotypen kombinerar symbolen med PayPamin Flow-ordmärket och används i sidhuvudet och Om-fönstret. Arkiv-/Hjälpmenyer, högerklicksmeny, verktygsrader och dialogknappar använder **endast text**, utan funktionsikoner. Textetiketterna, snabbkommandona och funktionerna är oförändrade.
 

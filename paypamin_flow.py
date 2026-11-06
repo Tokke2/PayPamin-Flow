@@ -7,7 +7,7 @@ OCR för skannade PDF: se README.
 Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.
 """
 from __future__ import annotations
-import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib, tempfile, json
+import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib, tempfile, json, time
 from logging.handlers import RotatingFileHandler
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -81,6 +81,8 @@ from update_checker import (
     update_change_kind,
 )
 from update_installer import (
+    UPDATE_READY_FILE_ENV,
+    UPDATE_READY_TOKEN_ENV,
     UpdateInstallError,
     cleanup_update,
     install_update,
@@ -90,6 +92,7 @@ from update_installer import (
     stage_update,
     wait_for_update_restart,
 )
+from single_instance import SingleInstance
 from python_maintenance import (
     addon_package_specs,
     install_python_addons,
@@ -348,11 +351,13 @@ def configure_windows_window_icon(window):
         large=icon_handle(get_metrics(11),get_metrics(12))
         source_hwnd=int(window.winfo_id())
         # Tk's winfo_id() can be an inner child HWND. The taskbar, Alt-Tab
-        # and Task Manager app view read WM_SETICON from the top-level HWND.
-        hwnd=int(get_ancestor(source_hwnd,2) or source_hwnd)  # GA_ROOT
-        send_message(hwnd,0x0080,0,small)
-        send_message(hwnd,0x0080,1,large)
-        logger.info('Windows product icon applied: source_hwnd=%s root_hwnd=%s',source_hwnd,hwnd)
+        # and Task Manager app view read WM_SETICON from root/owner HWNDs.
+        root_hwnd=int(get_ancestor(source_hwnd,2) or source_hwnd)  # GA_ROOT
+        owner_hwnd=int(get_ancestor(source_hwnd,3) or root_hwnd)  # GA_ROOTOWNER
+        for hwnd in dict.fromkeys((root_hwnd,owner_hwnd)):
+            send_message(hwnd,0x0080,0,small)
+            send_message(hwnd,0x0080,1,large)
+        logger.info('Windows product icon applied: source_hwnd=%s root_hwnd=%s owner_hwnd=%s',source_hwnd,root_hwnd,owner_hwnd)
         return True
     except Exception as exc:
         logger.warning('Native Windows window icon could not be configured: %s',exc)
@@ -1213,6 +1218,34 @@ class ReminderApp(tk.Tk):
             self.after_idle(lambda:configure_windows_window_icon(self))
         self.after_idle(self._maybe_show_ledger_reminder)
         log_activity('tray','open_window','completed')
+
+    def _poll_single_instance_activation(self):
+        """Open this window when a later start activates the existing app."""
+        if self._quitting:return
+        event=getattr(self,'_single_instance_activation',None)
+        if event is not None and event.is_set():
+            event.clear()
+            logger.info('Existing PayPamin Flow window activated by a later start')
+            self.show_from_tray()
+        self.after(200,self._poll_single_instance_activation)
+
+    def _claim_single_instance_after_update(self,started):
+        """Take over instance ownership after the old update process exits."""
+        if self._quitting:return
+        instance=getattr(self,'_single_instance',None)
+        if instance is None:
+            self._poll_single_instance_activation();return
+        try:
+            if instance.try_acquire():
+                logger.info('Updated app acquired single-instance ownership')
+                self._poll_single_instance_activation();return
+        except Exception:
+            logger.exception('Updated app could not acquire single-instance ownership')
+        if time.monotonic()-started>=10:
+            # Never leave two GUI instances if the old process did not hand over.
+            instance.activate_existing()
+            self.quit_app();return
+        self.after(100,lambda:self._claim_single_instance_after_update(started))
 
     def update_from_tray(self):
         """Open a visible manual update check from the system-tray menu."""
@@ -3805,9 +3838,21 @@ class ReminderApp(tk.Tk):
         ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+15,column=1,sticky='e',pady=(15,0))
 
 def main():
+    instance=None
     try:
         configure_console_free_subprocesses()
         configure_windows_app_identity()
+        activation_requested=threading.Event()
+        instance=SingleInstance(APP_DIR,on_activate=activation_requested.set)
+        # An updated child must confirm its UI before the old app exits. It
+        # claims ownership immediately afterwards instead of activating the old app.
+        update_handoff=bool(os.environ.get(UPDATE_READY_FILE_ENV) and os.environ.get(UPDATE_READY_TOKEN_ENV))
+        if not update_handoff and not instance.acquire():
+            if instance.activated_existing:
+                logger.info('A later start activated the existing PayPamin Flow instance')
+            else:
+                logger.warning('PayPamin Flow is already running but could not be activated; no duplicate was started')
+            return
         init_db()
         logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
         log_activity('application','started','completed',version=APP_VERSION,platform=sys.platform,commit=APP_RELEASE_COMMIT)
@@ -3816,6 +3861,14 @@ def main():
             logger.info('Consolidated error log refreshed: errors=%d sources=%d',report.error_count,report.source_count)
         except Exception:logger.exception('Consolidated error log refresh failed')
         window=ReminderApp()
+        window._single_instance=instance
+        window._single_instance_activation=activation_requested
+        if update_handoff:
+            claim_instance=getattr(window,'_claim_single_instance_after_update',None)
+            if claim_instance is not None:claim_instance(time.monotonic())
+        else:
+            poll_activation=getattr(window,'_poll_single_instance_activation',None)
+            if poll_activation is not None:poll_activation()
         after_idle=getattr(window,'after_idle',None)
         if after_idle is not None:after_idle(mark_update_ready)
         else:mark_update_ready()
@@ -3832,6 +3885,8 @@ def main():
         logger.exception('Application UI could not start')
         try:messagebox.showerror(APP_NAME,_('Appen kunde inte starta. Kontrollera att Python installerats med Tkinter.\n\n{error}',error=e))
         except Exception:print(f'{APP_NAME}: {e}',file=sys.stderr)
+    finally:
+        if instance is not None:instance.release()
 
 
 if __name__=='__main__':
