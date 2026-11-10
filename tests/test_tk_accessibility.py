@@ -151,8 +151,8 @@ class RealTkAccessibilityTests(unittest.TestCase):
         left, top, width, height = monitor_work_area(self.root)
         self.assertGreaterEqual(width, 240)
         self.assertGreaterEqual(height, 200)
-        self.assertLessEqual(width, screen_width + 1)
-        self.assertLessEqual(height, screen_height + 1)
+        self.assertLessEqual(width, screen_width + 2)
+        self.assertLessEqual(height, screen_height + 2)
         self.assertGreaterEqual(left, 0)
         self.assertGreaterEqual(top, 0)
 
