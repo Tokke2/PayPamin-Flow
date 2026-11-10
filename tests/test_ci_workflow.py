@@ -34,7 +34,13 @@ def _push_trigger_block(text):
 
 
 class WorkflowGuardTests(unittest.TestCase):
+    """Skipped in the release package, which ships no ``.github`` folder."""
+
     def setUp(self):
+        if not WORKFLOW.exists():
+            self.skipTest("workflow file is not part of the release package")
+        if not CONTRIBUTING.exists():
+            self.skipTest("CONTRIBUTING.md is not part of the release package")
         self.workflow = WORKFLOW.read_text(encoding="utf-8")
 
     def test_session_branches_are_tested_on_push_not_only_in_pull_requests(self):

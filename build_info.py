@@ -1,11 +1,5 @@
-"""Identity and file fingerprint of the release that supplied this app build.
+"""Official release identity for same-version commit and file checks."""
 
-Release packaging stamps the numeric GitHub release ID, full source commit and
-a fingerprint of every shipped file except this self-referential metadata file.
-All values are intentionally empty in a source checkout and are separate from
-the user-facing app version.
-"""
-
-APP_RELEASE_ID = ""
-APP_RELEASE_COMMIT = ""
-APP_PACKAGE_FINGERPRINT = ""
+APP_RELEASE_ID = "440160436"
+APP_RELEASE_COMMIT = "1003e9a60fe0b184786d22feed0b2b4e9c42440d"
+APP_PACKAGE_FINGERPRINT = "fd65efb56888964b8a3c9c60892c94e7de8baf47da9978d0f0551390e7332e9f"
