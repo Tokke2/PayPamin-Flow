@@ -55,7 +55,10 @@ class ApplicationStartupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = load_headless_app(Path(temporary_directory))
             events = []
-            fake_window = SimpleNamespace(mainloop=lambda: events.append("mainloop"))
+            fake_window = SimpleNamespace(
+                start_minimized=lambda: events.append("minimized"),
+                mainloop=lambda: events.append("mainloop"),
+            )
             try:
                 with patch.object(
                     app, "configure_console_free_subprocesses", side_effect=lambda: events.append("console-free")
@@ -69,13 +72,16 @@ class ApplicationStartupTests(unittest.TestCase):
                 for handler in app.logger.handlers[:]:
                     app.logger.removeHandler(handler)
                     handler.close()
-            self.assertEqual(events, ["console-free", "windows-identity", "database", "mainloop"])
+            self.assertEqual(
+                events, ["console-free", "windows-identity", "database", "minimized", "mainloop"]
+            )
 
     def test_minimized_start_flag_hides_window_before_mainloop(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = load_headless_app(Path(temporary_directory))
             events = []
             fake_window = SimpleNamespace(
+                start_minimized=lambda: events.append("minimized"),
                 hide_to_tray=lambda: events.append("hidden"),
                 mainloop=lambda: events.append("mainloop"),
             )
@@ -92,7 +98,67 @@ class ApplicationStartupTests(unittest.TestCase):
                 for handler in app.logger.handlers[:]:
                     app.logger.removeHandler(handler)
                     handler.close()
-            self.assertEqual(events, ["console-free", "windows-identity", "database", "hidden", "mainloop"])
+            self.assertEqual(
+                events, ["console-free", "windows-identity", "database", "minimized", "mainloop"]
+            )
+
+    def test_normal_start_uses_the_always_minimized_setting(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            events = []
+            fake_window = SimpleNamespace(
+                start_minimized=lambda: events.append("minimized"),
+                mainloop=lambda: events.append("mainloop"),
+            )
+            try:
+                with patch.object(app, "configure_console_free_subprocesses"), patch.object(
+                    app, "configure_windows_app_identity"
+                ), patch.object(app, "init_db"), patch.object(
+                    app, "ReminderApp", return_value=fake_window
+                ), patch.object(
+                    app, "setting", side_effect=lambda key: "1" if key == "start_minimized" else ""
+                ), patch.object(app.sys, "argv", ["paypamin_flow.py"]):
+                    app.main()
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
+            self.assertIn("minimized", events)
+
+    def test_minimized_start_can_be_turned_off_but_the_flag_still_wins(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            events = []
+            fake_window = SimpleNamespace(
+                start_minimized=lambda: events.append("minimized"),
+                mainloop=lambda: events.append("mainloop"),
+            )
+            try:
+                with patch.object(app, "configure_console_free_subprocesses"), patch.object(
+                    app, "configure_windows_app_identity"
+                ), patch.object(app, "init_db"), patch.object(
+                    app, "ReminderApp", return_value=fake_window
+                ), patch.object(
+                    app, "setting", side_effect=lambda key: "0" if key == "start_minimized" else ""
+                ), patch.object(app.sys, "argv", ["paypamin_flow.py"]):
+                    app.main()
+                self.assertNotIn("minimized", events)
+                events.clear()
+                with patch.object(app, "configure_console_free_subprocesses"), patch.object(
+                    app, "configure_windows_app_identity"
+                ), patch.object(app, "init_db"), patch.object(
+                    app, "ReminderApp", return_value=fake_window
+                ), patch.object(
+                    app, "setting", side_effect=lambda key: "0" if key == "start_minimized" else ""
+                ), patch.object(
+                    app.sys, "argv", ["paypamin_flow_launcher.py", app.MINIMIZED_START_ARG]
+                ):
+                    app.main()
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
+            self.assertEqual(events, ["minimized", "mainloop"])
 
     def test_unexpected_startup_errors_are_logged_and_reraised_for_the_gui_launcher(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

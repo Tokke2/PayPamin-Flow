@@ -16,6 +16,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser Fortnox-
 - **P1/P2-dialog efter importmappsskanning:** efter manuell eller automatisk behandling av PDF-filer visar en dialog fakturanummer, kund och nivå för fakturor som är redo för P1 eller P2. Betalda, ignorerade, ogranskade och väntande fakturor aviseras inte; ingen påminnelse skapas automatiskt.
 - **Färgade statusrader:** grön bakgrund betyder att fakturan förfaller i dag eller senare och inte har P1/P2, gul betyder att P1 ska skapas eller finns utan aktuell P2, och röd betyder att P2 ska skapas eller finns. P2 har företräde framför P1. Betalda, ignorerade, ogranskade och förfallna rader som ännu väntar på P1 lämnas utan statusfärg; den skriftliga statuskolumnen finns kvar.
 - **Flikbaserade fakturavyer med sökning och sortering:** välj direkt mellan **Aktuella**, **Historik / arkiverade / betalda**, **Alla**, **Ignorerade** och **Kronofogden – granska**. Historikfliken visar helt betalda samt ignorerade/arkiverade poster med deras belopp och P1/P2-/e-posthistorik kvar. Aktiva obetalda fakturor blandas inte in, och inget flyttas eller raderas i databasen när du byter flik. Sök fritt på kund eller fakturanummer och sortera genom att klicka på kolumnrubrikerna; fakturanummer sorteras numeriskt och en andra klickning vänder ordningen. Högerklicksmenyn kan öppna sparad original-PDF samt senaste befintliga påminnelse-PDF, med P2 före P1 även när filen ligger i `export/arkiv/<kund>/` eller det äldre platta `export/arkiv/`.
+- **Självlärande som kan granskas:** appen lär sig lokalt av fakturor du har sparat och leverantörsmallar du har bekräftat. Återkommande värden för kundens e-post, logotyp, valuta, fakturatext och leverantörens betalningsfrist samt leverantörens PDF-layout återanvänds nästa gång. Stark och upprepad evidens tillämpas automatiskt; osäkra förslag frågar först. Under **Inställningar → Granska inlärning** ser du allt appen lärt sig och kan glömma enskilda värden eller allt. Inlärningen stannar i den lokala databasen och påverkar aldrig fakturor, påminnelser eller mallar när den glöms.
 - **Återanvändbara kundkontakter och kundlogotyper:** högerklicka på en faktura och välj **Redigera kund** för kundnamn och flera e-postadresser separerade med komma. Adresslistan sparas i databasen och JSON-journalen och fylls i automatiskt på nästa faktura till samma normaliserade kundnamn, även vid manuell inmatning utan förifylld dialog. Senaste icke-tomma SVG-logotyp som sparats på kundens faktura återanvänds också på nästa faktura och för äldre fakturor utan eget val. En explicit faktura-/leverantörslogotyp eller medvetet val av **Ingen logotyp** skrivs inte över. Kundens e-post och logotyp ingår i JSON-säkerhetskopior utan att en äldre journal ersätter en senare lokal logotyp.
 - **E-postutkast efter generering:** när P1/P2 har skapats kan ett kundfärdigt, språkanpassat utkast till alla kundens adresser och med dold kopia till `rl@tadega.com` öppnas i systemets valda e-postapp efter förhandsgranskning. Texten skiljer P1 från P2 och innehåller belopp, avgifter, totalsumma och betalningsfrist. När Thunderbird är standardapp i Windows bifogas senaste påminnelse-PDF automatiskt; andra e-postprogram använder `mailto:` och manuell bifogning. Inget mejl skickas automatiskt. Om kunden saknar adresser öppnas ingen e-postapp.
 - **Förhandsgranskning och separerad e-poststatus:** innan e-postappen öppnas visas mottagare, fast BCC, ämne, redigerbart meddelande och PDF-sökväg i appen. Ändringar gäller bara det aktuella utkastet; avbryt öppnar inget och sparar ingen utkaststatus. Listan skiljer skapad PDF, öppnat utkast och manuellt bekräftad skickad e-post för P1/P2 utan att blanda ihop datumen.
@@ -28,7 +29,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser Fortnox-
 - **Detaljerad aktivitetslogg:** knappar, menyer, systemfältsåtgärder, filter, fakturaval, uppdateringar och övriga viktiga händelser loggas strukturerat med start, slut/fel, varaktighet, sessions-ID och spårnings-ID. Befintliga detaljposter för PDF, reskontra, e-post, säkerhetskopior och bakgrundsjobb finns kvar i samma tekniska logg.
 - **Dagligt loggarkiv och bestående fellogg:** tekniska loggfiler vars senaste skrivning är från gårdagen eller tidigare flyttas till `logs/arkiv/ÅÅÅÅ-MM-DD/`. Olösta fel ligger kvar i den separata `logs/errors.log` även när källoggen roteras eller arkiveras. Först när du uttryckligen väljer **Hjälp → Markera fellogg som åtgärdad** markeras de granskade felen som åtgärdade och en kopia sparas i loggarkivet.
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
-- **Autostart vid inloggning** på Windows, macOS och Linux. Appen startar då minimerad i systemfältet medan manuell start visar fönstret som vanligt. Funktionen är aktiverad som standard och kan stängas av under **Inställningar**.
+- **Alltid minimerad start och autostart:** appen startar i systemfältet vid autostart, manuell start, direktstart och uppdateringsomstart. Öppna fönstret via systemfältet eller genom att starta appen igen; en ny start visar och fokuserar då den befintliga instansen. Autostart vid inloggning finns på Windows, macOS och Linux och är aktiverad som standard. Båda inställningarna kan ändras under **Inställningar**.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
 - **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med commit- och filjämförelse, SHA-256-verifiering och tyst omstart. Både nyare versioner och verkligt ändrade release-byggen med samma versionsnummer upptäcks. Manuell sökning och installation finns via den tydliga **Uppdatera appen**-knappen, **Hjälp → Uppdatera appen** eller systemfältets högerklicksmeny.
 - PDF sparas lokalt och öppnas i datorns standardprogram. **Öppna exportmapp** i knappraden eller under **Arkiv** öppnar mappen med skapade påminnelser i datorns filhanterare. Den samlade felloggen öppnas via **Visa samlad fellogg** eller **Hjälp → Visa samlad fellogg**.
@@ -133,12 +134,36 @@ På Windows använder appen en egen app-identitet för aktivitetsfältets PayPam
 
 **Begränsning i Windows:** Aktivitetshanterarens **Detaljer**-flik och vissa bakgrundsprocessvyer kan fortfarande visa Python-ikonen. Windows hämtar då den inbäddade ikonen från `pythonw.exe`, inte från appfönstret. Att ersätta just den processikonen skulle kräva en native EXE med egen ikonresurs, vilket inte ingår i PayPamin Flows Python-only-distribution.
 
+## Starta minimerad
+
+PayPamin Flow startar som standard minimerad i systemfältet. Det gäller vid inloggning, manuell start, direktstart av `paypamin_flow.py`/startaren och när appen startas om efter en uppdatering. Fönstret skapas och appens schemalagda kontroller börjar direkt, men det visas inte förrän du öppnar det.
+
+- Klicka på systemfältsikonen eller välj **Öppna PayPamin Flow**.
+- Eller starta appen igen: eninstansskyddet aktiverar den befintliga appen och visar fönstret.
+- Stäng av **Starta alltid minimerad i systemfältet** under **Inställningar** om du hellre vill se fönstret vid start. Flaggan `--minimized` används fortfarande av autostart och tvingar minimerad start.
+- Om systemfältet inte är tillgängligt lämnas fönstret synligt i stället för att appen göms oåtkomligt.
+
 ## En aktiv appinstans
 
 - PayPamin Flow använder en per-användarlåsning på Windows, macOS och Linux. Ett nytt startförsök startar inte en andra appinstans.
 - I stället aktiveras den befintliga appen via en lokal, token-skyddad kanal och huvudfönstret visas, lyfts och får fokus även om det ligger dolt i systemfältet.
 - Aktiveringskanalen lyssnar endast på `127.0.0.1` med en slumpad port och en hemlig token per instans. Den är inte exponerad mot nätverket och används inte för fakturadata eller extern kommunikation.
 - Uppdateringsomstarten överlämnar instansägandet från den gamla till den nya processen efter den vanliga UI-bekräftelsen. Fullständigt avslut frigör låsningen; en kraschad process frigör den via operativsystemet.
+
+## Självlärande
+
+Självlärandet är aktiverat som standard och arbetar helt lokalt. Appen samlar endast in värden som du själv har sparat eller bekräftat:
+
+- **Kund:** e-postadresser som används för påminnelser, senaste logotyp, valuta och fakturatext/**Avser** för samma normaliserade kundnamn.
+- **Leverantör:** valuta, betalningsfrist i dagar mellan fakturadatum och förfallodatum samt PDF-layoutens ordval. Layouten sparas när du bekräftar en leverantör i PDF-förhandsgranskningen, och kan identifiera leverantören vid en senare import även om org.nr/bankgiro saknas.
+- **Standardvärden:** tomma fält i en ny faktura fylls från tidigare sparade fakturor för samma kund eller leverantör.
+- **Påminnelser:** mottagarna som faktiskt användes när ett utkast öppnades sparas per kund och används om kundens kontaktuppgifter saknas. Panelen visar även antalet påminnelser. P1/P2-standardtexterna, tidsfristerna och avgifterna lärs däremot inte in automatiskt: texterna innehåller fakturaspecifika belopp och datum och förblir de fasta men redigerbara standardtexter som du har godkänt.
+
+Trösklarna är konservativa: minst tre eniga observationer krävs för att ett värde ska tillämpas automatiskt, och minst två för att det ska visas som ett förslag. Lika vanliga motstridiga värden tillämpas aldrig. När underlaget är osäkert frågar dialogen innan förslagen används; ett nej gör att samma förslag inte upprepas förrän mer evidens har tillkommit. Automatiskt ifyllda värden visas i dialogrutan och loggas.
+
+Öppna **Inställningar → Granska inlärning** för att se inlärda värden med antal observationer, om de är automatiska eller förslag, samt antal leverantörsmallar, PDF-zoner och påminnelser. **Glöm valt** tar bort ett enskilt värde och **Glöm allt** rensar inlärda värden och leverantörslayouter. Fakturor, kunder, påminnelser och sparade mallar ändras inte. Stäng av **Lär sig av sparade fakturor och leverantörsval** för att stoppa ny inlärning.
+
+Inlärda värden ligger i samma lokala SQLite-databas som fakturorna och följer därför med ZIP-säkerhetskopior och återställning. De skickas aldrig över nätverket och rensas inte av cache-rensningen.
 
 ## Smart cache-rensning och betalda fakturor
 
@@ -341,6 +366,7 @@ OCR för skannade PDF:er kräver Tesseract med svenska språkdata (`swe`) och Po
 - `import/`, `export/` och `svg/` ligger i den skrivbara Python-appmappen.
 - Kundfakturor, exporter, lokala databaser, loggar och företagslogotyper ska inte checkas in. Se `.gitignore`.
 - Tekniska loggar och felloggar kan innehålla filnamn, filvägar, tekniska fel samt kund-, faktura- och beloppsuppgifter från reskontraimporten. Granska dem innan de delas.
+- Självlärd data (kundstandardvärden, leverantörslayouter och påminnelsemottagare) ligger i samma lokala databas, följer med ZIP-säkerhetskopior och skickas aldrig över nätverket. Den kan granskas och glömmas under **Inställningar → Granska inlärning**.
 - Använd appens ZIP-säkerhetskopior regelbundet och före en manuell ominstallation.
 
 ## Tester
@@ -349,7 +375,7 @@ OCR för skannade PDF:er kräver Tesseract med svenska språkdata (`swe`) och Po
 python -m unittest discover -s tests -v
 ```
 
-Parser-, importbevaknings-, autostart-, ikon-, språk-, valuta-, databas-, säkerhetskopierings-, systemfälts-, paket- och uppdateringstester använder syntetiska data och kräver ingen grafisk skrivbordssession. `tests/test_tk_accessibility.py` använder däremot verkliga Tk-fönster och hoppar över sig när Tk eller display saknas. På Debian/Ubuntu kan hela sviten köras grafiskt utan en inloggad skrivbordssession:
+Parser-, importbevaknings-, autostart-, ikon-, språk-, valuta-, databas-, säkerhetskopierings-, självlärande-, systemfälts-, paket- och uppdateringstester använder syntetiska data och kräver ingen grafisk skrivbordssession. `tests/test_tk_accessibility.py` använder däremot verkliga Tk-fönster och hoppar över sig när Tk eller display saknas. På Debian/Ubuntu kan hela sviten köras grafiskt utan en inloggad skrivbordssession:
 
 ```sh
 sudo apt-get install python3-tk xvfb xauth

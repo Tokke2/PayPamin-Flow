@@ -170,6 +170,32 @@ class WindowCloseTests(unittest.TestCase):
         self.app.ReminderApp.hide_to_tray(fake)
         self.assertEqual(events, ["withdrawn"])
 
+    def test_start_minimized_hides_a_working_tray_window(self):
+        events = []
+        fake = SimpleNamespace(
+            _quitting=False,
+            tray=SimpleNamespace(running=True),
+            start_tray=Mock(),
+            withdraw=lambda: events.append("withdrawn"),
+        )
+
+        self.assertTrue(self.app.ReminderApp.start_minimized(fake))
+
+        fake.start_tray.assert_not_called()
+        self.assertEqual(events, ["withdrawn"])
+
+    def test_start_minimized_keeps_the_window_visible_without_a_tray(self):
+        fake = SimpleNamespace(
+            _quitting=False,
+            tray=None,
+            start_tray=lambda: None,
+            withdraw=Mock(),
+        )
+
+        self.assertFalse(self.app.ReminderApp.start_minimized(fake))
+
+        fake.withdraw.assert_not_called()
+
     def test_minimize_hides_main_window_to_system_tray(self):
         events = []
         fake = SimpleNamespace(

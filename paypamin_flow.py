@@ -43,6 +43,7 @@ from invoice_parser import (
     parse_amount_value, parse_invoice_text,
 )
 from import_watcher import ImportFolderMonitor
+import learning
 from ledger_import import (
     LedgerImportError, apply_ledger_import, ensure_ledger_schema,
     plan_ledger_import, read_ledger_report,
@@ -425,6 +426,7 @@ def init_db():
         ensure_ledger_schema(db)
         ensure_journal_schema(db)
         ensure_customer_contact_schema(db)
+        learning.ensure_learning_schema(db)
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         db.execute("""CREATE TABLE IF NOT EXISTS pdf_zones (
             vendor TEXT NOT NULL, field TEXT NOT NULL, page_index INTEGER NOT NULL,
@@ -443,7 +445,7 @@ def init_db():
         for column in ('org_number','bankgiro_number'):
             if column not in vendor_logo_columns:
                 db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','update_auto':'1','auto_import':'1','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
 
@@ -545,11 +547,154 @@ def apply_saved_customer_contact(values):
     return values
 
 
+LEARNING_FIELD_LABELS={
+    'email':'E-post',
+    'logo_file':'Logotyp',
+    'currency':'Valuta',
+    'note':'Fakturatext / Avser',
+    'payment_term_days':'Betalningsfrist (dagar)',
+    'reminder_email':'E-post för påminnelser',
+}
+
+
+def learning_enabled(db=None):
+    """Return whether local self-learning is on; defaults to on."""
+    try:
+        if db is not None:
+            row=db.execute("SELECT value FROM settings WHERE key='learning_enabled'").fetchone()
+            return row is None or str(row['value'])!='0'
+        return setting('learning_enabled')!='0'
+    except Exception:
+        return True
+
+
+def invoice_payment_term_days(invoice_date,due_date):
+    """Return a plausible invoice-to-due interval, if both dates are valid."""
+    start=dparse(invoice_date);end=dparse(due_date)
+    if not start or not end:return None
+    days=(end-start).days
+    return days if 0<=days<=120 else None
+
+
+def apply_learned_value(values,learned):
+    """Apply one learned value to an invoice form, deriving due dates."""
+    if learned.field=='payment_term_days':
+        start=dparse(values.get('invoice_date'))
+        try:days=int(learned.value)
+        except (TypeError,ValueError):return values
+        if start is not None:values['due_date']=(start+timedelta(days=days)).isoformat()
+        return values
+    values[learned.field]=learned.value
+    return values
+
+
+def learned_invoice_defaults(values):
+    """Fill empty invoice fields from repeated, confirmed saves only.
+
+    Returns ``(values, applied, suggestions)``. Automatic values are already
+    applied; suggestions are returned untouched so the caller can ask first.
+    """
+    filled=dict(values);applied=[];suggestions=[]
+    if not learning_enabled():return filled,applied,suggestions
+    customer=str(filled.get('customer') or '').strip()
+    vendor=str(filled.get('template_vendor') or '').strip()
+    try:
+        with connect() as db:
+            def consider(learned,field):
+                if learned is None:return
+                current=filled.get(field)
+                empty=current is None if field=='logo_file' else not str(current or '').strip()
+                if not empty:return
+                if learned.automatic:
+                    apply_learned_value(filled,learned);applied.append(learned)
+                else:
+                    suggestions.append(learned)
+            # A supplier's currency says more about an invoice than the
+            # customer's previous choice, so it is considered first.
+            if vendor:consider(learning.recommend(db,learning.KIND_SUPPLIER,vendor,'currency'),'currency')
+            if customer:
+                for field in ('email','logo_file','note','currency'):
+                    consider(learning.recommend(db,learning.KIND_CUSTOMER,customer,field),field)
+            if vendor and not dparse(filled.get('due_date')):
+                consider(learning.recommend(db,learning.KIND_SUPPLIER,vendor,'payment_term_days'),'due_date')
+    except Exception:
+        logger.exception('Learned invoice defaults could not be applied')
+        return filled,applied,suggestions
+    return filled,applied,suggestions
+
+
+def record_invoice_learning_db(db,values):
+    """Record one saved invoice as evidence for future defaults."""
+    if not learning_enabled(db):return
+    customer=str(values.get('customer') or '').strip()
+    vendor=str(values.get('template_vendor') or '').strip()
+    if customer:
+        for field in ('email','currency','note'):
+            learning.record(db,learning.KIND_CUSTOMER,customer,field,values.get(field),scope_label=customer)
+        logo=values.get('logo_file')
+        if logo:learning.record(db,learning.KIND_CUSTOMER,customer,'logo_file',Path(str(logo)).name,scope_label=customer)
+    if vendor:
+        learning.record(db,learning.KIND_SUPPLIER,vendor,'currency',values.get('currency'),scope_label=vendor)
+        term=invoice_payment_term_days(values.get('invoice_date'),values.get('due_date'))
+        if term is not None:learning.record(db,learning.KIND_SUPPLIER,vendor,'payment_term_days',str(term),scope_label=vendor)
+
+
+def record_supplier_learning(vendor,text):
+    """Store the wording layout of a supplier the user has confirmed."""
+    if not vendor or not learning_enabled():return False
+    try:
+        with connect() as db:added=learning.record_supplier_signature(db,vendor,text)
+        if added:logger.info('Learned supplier invoice layout: vendor=%s',vendor)
+        return added
+    except Exception:
+        logger.exception('Supplier invoice layout learning failed')
+        return False
+
+
+def learned_supplier_match(text):
+    """Return a supplier learned from confirmed invoice layouts."""
+    if not learning_enabled():return None
+    try:
+        with connect() as db:matched=learning.match_supplier_signature(db,text)
+    except Exception:
+        logger.exception('Learned supplier layout matching failed')
+        return None
+    if matched is None:return None
+    if matched.similarity>=learning.SUPPLIER_AUTO_SIMILARITY and matched.margin>=learning.SUPPLIER_MIN_MARGIN:
+        return matched.vendor,matched.similarity,True
+    if matched.similarity>=learning.SUPPLIER_SUGGEST_SIMILARITY:
+        return matched.vendor,matched.similarity,False
+    return None
+
+
+def record_reminder_learning(row,recipients):
+    """Remember the recipients actually used for a confirmed reminder."""
+    if not recipients or not learning_enabled():return
+    try:
+        with connect() as db:
+            learning.record(
+                db,learning.KIND_CUSTOMER,row['customer'],'reminder_email',
+                ', '.join(recipients),scope_label=row['customer'],
+            )
+    except Exception:
+        logger.exception('Reminder recipient learning failed')
+
+
 def reminder_email_addresses(row):
-    """Prefer the customer contact, falling back to legacy invoice email data."""
-    with connect() as db:contact=get_customer_contact(db,row['customer'])
-    email_text=contact['emails'] if contact is not None else row['email']
-    return parse_email_addresses(email_text)
+    """Prefer saved contacts, then learned reminder use, then legacy data."""
+    with connect() as db:
+        contact=get_customer_contact(db,row['customer'])
+        email_text=contact['emails'] if contact is not None else row['email']
+        addresses=parse_email_addresses(email_text)
+        if addresses:return addresses
+        try:learned=learning.recommend(db,learning.KIND_CUSTOMER,row['customer'],'reminder_email')
+        except Exception:
+            logger.exception('Learned reminder recipients could not be read')
+            learned=None
+    if learned is not None:
+        try:return parse_email_addresses(learned.value)
+        except EmailAddressError:logger.warning('Learned reminder recipients are invalid: customer=%s',row['customer'])
+    return []
 
 
 def normalize_invoice_number(value):
@@ -756,6 +901,8 @@ def save_invoice_record(values,row_id=None):
                     template_vendor=?,amount=?,currency=?,paid=?,email=?,source=?,source_hash=?,note=?,reviewed=?,logo_file=?
                     WHERE id=?''',params+(row_id,))
             save_customer_contact(db,values['customer'],values['email'],values.get('logo_file'))
+            try:record_invoice_learning_db(db,values)
+            except Exception:logger.exception('Invoice learning update failed; the invoice is still saved')
     return duplicate
 
 
@@ -1218,6 +1365,19 @@ class ReminderApp(tk.Tk):
             self.after_idle(lambda:configure_windows_window_icon(self))
         self.after_idle(self._maybe_show_ledger_reminder)
         log_activity('tray','open_window','completed')
+
+    def start_minimized(self):
+        """Start hidden in the tray without blocking startup on a dialog."""
+        if self._quitting:return False
+        if self.tray is None or not self.tray.running:self.start_tray()
+        if self.tray is None or not self.tray.running:
+            logger.warning('Minimized start requested but the system tray is unavailable; the window stays visible')
+            log_activity('tray','startup_minimized','failed')
+            return False
+        self.withdraw()
+        logger.info('Application started minimized in the system tray')
+        log_activity('tray','startup_minimized','completed')
+        return True
 
     def _poll_single_instance_activation(self):
         """Open this window when a later start activates the existing app."""
@@ -2481,6 +2641,7 @@ class ReminderApp(tk.Tk):
         if not self._quitting:self.after(REMINDER_ARCHIVE_INTERVAL_MS,self._run_scheduled_reminder_archive)
 
     def guess_supplier(self,text,path=None,page_indexes=None):
+        self._supplier_learning_note=None
         profiles=saved_supplier_profiles()
         source=Path(path).name if path else ''
         pages=','.join(str(index+1) for index in page_indexes) if page_indexes is not None else ('1' if path else '')
@@ -2515,6 +2676,12 @@ class ReminderApp(tk.Tk):
             logger.warning('Supplier visual logo matching failed; trying legacy name fallback: file=%s pages=%s',source,pages)
         elif page_indexes is not None:
             logger.info('Visual supplier logo matching skipped for bundled invoice: pages=%s',pages)
+        learned=learned_supplier_match(text)
+        if learned:
+            vendor,similarity,automatic=learned
+            self._supplier_learning_note=(vendor,similarity,automatic)
+            logger.info('Supplier template matched by learned invoice layout: file=%s pages=%s vendor=%s similarity=%.3f automatic=%s',source,pages,vendor,similarity,automatic)
+            return vendor
         for line in [re.sub(r'\s+',' ',x).strip() for x in text.splitlines()[:18]]:
             if re.search(r'(?i)\b(?:AB|ASA|AS|HB)\s*$',line) and len(line)<60 and not re.search(r'faktura|datum|kundnr',line,re.I):
                 logger.info('Supplier template matched by legacy company-name fallback: file=%s pages=%s vendor=%s',source,pages,line)
@@ -2608,6 +2775,11 @@ class ReminderApp(tk.Tk):
         vendor_combo.pack(side='left',padx=7)
         ttk.Label(top,text=_('Dra en ruta över värdet. Sparade rutor kan återanvändas för samma mall.')).pack(side='left',padx=8)
         identifiers=ttk.Frame(win,padding=(12,0,12,4));identifiers.pack(fill='x')
+        learning_note=getattr(self,'_supplier_learning_note',None)
+        self._supplier_learning_note=None
+        if learning_note and learning_note[0]==original_vendor:
+            note_text=('Leverantören är automatiskt igenkänd från tidigare fakturor ({similarity} % likhet). Kontrollera valet.' if learning_note[2] else 'Leverantören är inlärd från tidigare fakturor ({similarity} % likhet). Kontrollera valet.')
+            ttk.Label(win,text=_(note_text,similarity=f'{learning_note[1]*100:.0f}'),style='Sub.TLabel').pack(fill='x',padx=12,pady=(0,4))
         ttk.Label(identifiers,text=_('Leverantörens org.nr:')).pack(side='left')
         org_var=tk.StringVar(value=initial_org)
         ttk.Entry(identifiers,textvariable=org_var,width=17).pack(side='left',padx=(5,16))
@@ -2757,6 +2929,7 @@ class ReminderApp(tk.Tk):
                 messagebox.showerror(_('Leverantör saknas'),_('Välj vilken leverantör logotypen tillhör innan den kopplas.'),parent=win)
                 return
             guess['template_vendor']=mall
+            if mall:record_supplier_learning(mall,preview_text)
             if save_logo:
                 # Keep the choice on this invoice even without saving field zones.
                 guess['logo_file']=selected_logo if selected_logo in logo_files else ''
@@ -3152,12 +3325,36 @@ class ReminderApp(tk.Tk):
         vals['template_vendor']=enriched['template_vendor'] if enriched is not None else (row['template_vendor'] if row else (guess or {}).get('template_vendor',''))
         vals['logo_file']=enriched['logo_file'] if enriched is not None else (row['logo_file'] if row else (guess or {}).get('logo_file'))
         apply_saved_customer_contact(vals)
+        learned_applied=[];learned_suggestions=[]
+        if row is None and not enrich_original:
+            vals,learned_applied,learned_suggestions=learned_invoice_defaults(vals)
         reviewed_var=tk.BooleanVar(value=bool(row['reviewed']) if row else not bool(source))
         entries={};form=self._dialog_form(w,padding=18)
         for i,(lab,k) in enumerate(fields):
             ttk.Label(form,text=_(lab)).grid(row=i,column=0,sticky='w',pady=5,padx=(0,12));e=ttk.Entry(form,width=43);e.grid(row=i,column=1,pady=5);e.insert(0,str(vals.get(k,'') or ''));entries[k]=e
             if enrich_original and k in ORIGINAL_INVOICE_PROTECTED_FIELDS:e.configure(state='readonly')
+        if learned_suggestions:
+            # Ask only after the form is visible, and never overwrite typing.
+            w.update_idletasks()
+            if self._confirm_learned_suggestions(learned_suggestions,w):
+                for learned in learned_suggestions:
+                    apply_learned_value(vals,learned)
+                    target=entries.get('due_date') if learned.field=='payment_term_days' else entries.get(learned.field)
+                    if target is not None and (learned.field=='payment_term_days' or not target.get().strip()):
+                        target.delete(0,'end');target.insert(0,vals.get(learned.field if learned.field!='payment_term_days' else 'due_date',''))
+                learned_applied.extend(learned_suggestions)
+                log_activity('learning','suggestions_applied','completed',fields=','.join(item.field for item in learned_suggestions))
+            else:
+                try:
+                    with connect() as db:
+                        for learned in learned_suggestions:learning.decline(db,learned)
+                except Exception:logger.exception('Declined learning suggestions could not be recorded')
+                log_activity('learning','suggestions_declined','completed',fields=','.join(item.field for item in learned_suggestions))
         review_row=len(fields)
+        if learned_applied:
+            applied_fields=', '.join(sorted({_(LEARNING_FIELD_LABELS.get(item.field,item.field)) for item in learned_applied}))
+            ttk.Label(form,text=_('Inlärda standardvärden ifyllda: {fields}',fields=applied_fields),style='Sub.TLabel',wraplength=520).grid(row=review_row,column=0,columnspan=2,sticky='w',pady=(6,0))
+            review_row+=1
         if enrich_original:
             ttk.Label(form,text=_('Reskontrans fakturanummer, belopp, valuta och betalda belopp är låsta. P1/P2-historiken behålls.'),wraplength=520).grid(row=review_row,column=0,columnspan=2,sticky='w',pady=(9,2))
             review_row+=1
@@ -3411,6 +3608,7 @@ class ReminderApp(tk.Tk):
                 parent=self,
             )
             return False
+        record_reminder_learning(r,recipients)
         if thunderbird:logger.info('Thunderbird compose requested with PDF: invoice=%s level=%s path=%s',r['id'],level,pdf_path)
         logger.info('Opened reminder email draft: invoice=%s level=%s recipients=%d handler=%s',r['id'],level,len(recipients),'thunderbird' if thunderbird else 'mailto')
         try:
@@ -3770,6 +3968,97 @@ class ReminderApp(tk.Tk):
         terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. Avgift per påminnelse: {fee}. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(str(effective_terms.get('objection_days') or '')),fee=money(fee,currency),interest=escape(str(effective_terms.get('interest') or '')))
         story += [Spacer(1,2*mm),HRFlowable(width='100%',thickness=.4,color=colors.HexColor('#999999')),Spacer(1,2*mm),Paragraph(terms,styles['SmallText'])]
         doc.build(story)
+    def _confirm_learned_suggestions(self,suggestions,parent=None):
+        """Ask once before using weaker, learned invoice defaults."""
+        names=[]
+        for learned in suggestions:
+            if learned.scope_label not in names:names.append(learned.scope_label)
+        lines=[]
+        for learned in suggestions:
+            value=learned.value.replace('\n',' · ')
+            if len(value)>120:value=value[:117]+'…'
+            lines.append(_('{field}: {value} ({count} gånger)',field=_(LEARNING_FIELD_LABELS.get(learned.field,learned.field)),value=value,count=learned.observations))
+        return messagebox.askyesno(
+            _('Inlärda förslag'),
+            _('Appen har sett samma mönster flera gånger för {name}. Använd de inlärda förslagen?\n\n{suggestions}\n\nDu kan granska och glömma inlärda värden i Inställningar.',
+              name=', '.join(names),suggestions='\n'.join(lines)),
+            parent=parent,
+        )
+
+    def review_learning(self,parent=None):
+        """Show everything the app has learned and allow forgetting it."""
+        win=self._new_toplevel(_('Granska inlärning'));win.geometry('1000x600');win.minsize(780,430)
+        try:
+            if parent is not None:parent.grab_release()
+        except Exception:pass
+        form=ttk.Frame(win,padding=16);form.pack(fill='both',expand=True)
+        ttk.Label(form,text=_('Appen lär sig endast av värden du själv har sparat eller valt. Allt finns lokalt i databasen.'),style='Sub.TLabel',wraplength=930,justify='left').pack(anchor='w')
+        summary=tk.StringVar(value='')
+        ttk.Label(form,textvariable=summary,style='Sub.TLabel').pack(anchor='w',pady=(6,10))
+        columns=('kind','scope','field','value','evidence','mode')
+        headings={'kind':'Område','scope':'Namn','field':'Uppgift','value':'Inlärt värde','evidence':'Antal','mode':'Tillämpning'}
+        widths={'kind':110,'scope':210,'field':190,'value':300,'evidence':70,'mode':110}
+        tree=ttk.Treeview(form,columns=columns,show='headings',selectmode='browse')
+        for column in columns:
+            tree.heading(column,text=_(headings[column]))
+            tree.column(column,width=widths[column],stretch=column in ('scope','value'))
+        tree.pack(fill='both',expand=True)
+        rows={}
+        def refresh():
+            for item in tree.get_children():tree.delete(item)
+            rows.clear()
+            with connect() as db:
+                items=learning.entries(db)
+                stats=learning.counts(db)
+                suppliers=db.execute('SELECT COUNT(*) FROM vendor_logos').fetchone()[0]
+                zones=db.execute('SELECT COUNT(*) FROM pdf_zones').fetchone()[0]
+                reminders=db.execute("SELECT COUNT(*) FROM invoices WHERE p1_date<>'' OR p2_date<>''").fetchone()[0]
+            summary.set(_('Inlärda värden: {values} · Leverantörsmallar: {suppliers} · PDF-zonmallar: {zones} · Påminnelser: {reminders}',values=stats['values'],suppliers=suppliers,zones=zones,reminders=reminders))
+            for entry in items:
+                value=entry.value.replace('\n',' · ')
+                if len(value)>110:value=value[:107]+'…'
+                item=tree.insert('', 'end', values=(
+                    _('Kund') if entry.kind==learning.KIND_CUSTOMER else _('Leverantör'),
+                    entry.scope_label,_(LEARNING_FIELD_LABELS.get(entry.field,entry.field)),value,
+                    entry.evidence,_('Automatisk') if entry.automatic else _('Förslag'),
+                ))
+                rows[item]=entry
+        def forget_selected():
+            selection=tree.selection()
+            if not selection:return
+            entry=rows.get(selection[0])
+            if entry is None:return
+            preview=entry.value.replace('\n',' · ')[:150]
+            if not messagebox.askyesno(_('Glöm inlärt värde'),_('Glöm {value} för {name}? Fakturor, påminnelser och mallar ändras inte.',value=preview,name=entry.scope_label),parent=win):return
+            with connect() as db:learning.forget(db,kind=entry.kind,scope=entry.scope,field=entry.field,value=entry.value)
+            logger.info('Learned value forgotten: kind=%s field=%s',entry.kind,entry.field)
+            log_activity('learning','forget_value','completed',kind=entry.kind,field=entry.field)
+            refresh()
+        def forget_all():
+            if not messagebox.askyesno(_('Glöm all inlärning'),_('Ta bort alla inlärda värden och leverantörslayouter? Fakturor, kunder, påminnelser och mallar ändras inte.'),parent=win):return
+            with connect() as db:
+                learning.forget(db)
+                db.execute('DELETE FROM learning_signatures')
+            logger.info('All learned values were forgotten by user')
+            log_activity('learning','forget_all','completed')
+            refresh()
+        buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(10,0))
+        ttk.Button(buttons,text=_('Glöm valt'),command=forget_selected).pack(side='left')
+        ttk.Button(buttons,text=_('Glöm allt'),command=forget_all).pack(side='left',padx=(8,0))
+        def close():
+            win.destroy()
+            try:
+                if parent is not None and parent.winfo_exists():parent.grab_set()
+            except Exception:pass
+        ttk.Button(buttons,text=_('Stäng'),command=close).pack(side='right')
+        win.protocol('WM_DELETE_WINDOW',close)
+        refresh()
+        if parent is not None:
+            try:win.transient(parent)
+            except Exception:pass
+        win.focus_force()
+        log_activity('learning','review_opened','completed')
+
     def settings(self):
         w=self._new_toplevel(_('Inställningar'));w.grab_set();w.resizable(True,True);form=self._dialog_form(w,padding=20)
         language_var=tk.StringVar(value=SUPPORTED_LANGUAGES[get_language()])
@@ -3804,6 +4093,14 @@ class ReminderApp(tk.Tk):
         font_scale_combo.grid(row=len(fields)+12,column=1,sticky='w',pady=(12,3))
         ttk.Label(form,text=_('Textstorleken kan också ändras med Ctrl/Cmd +, Ctrl/Cmd − och Ctrl/Cmd 0.'),style='Sub.TLabel').grid(row=len(fields)+13,column=0,columnspan=3,sticky='w')
         ttk.Label(form,text=_('Högkontrast följer systemets inställning och uppdateras automatiskt.'),style='Sub.TLabel').grid(row=len(fields)+14,column=0,columnspan=3,sticky='w',pady=(8,0))
+        start_minimized_var=tk.BooleanVar(value=setting('start_minimized')!='0')
+        ttk.Checkbutton(form,text=_('Starta alltid minimerad i systemfältet'),variable=start_minimized_var).grid(row=len(fields)+15,column=0,columnspan=3,sticky='w',pady=(12,2))
+        ttk.Label(form,text=_('Ett nytt startförsök öppnar ändå det befintliga fönstret.'),style='Sub.TLabel').grid(row=len(fields)+16,column=0,columnspan=3,sticky='w')
+        learning_var=tk.BooleanVar(value=setting('learning_enabled')!='0')
+        learning_row=ttk.Frame(form);learning_row.grid(row=len(fields)+17,column=0,columnspan=3,sticky='w',pady=(12,2))
+        ttk.Checkbutton(learning_row,text=_('Lär sig av sparade fakturor och leverantörsval (endast lokalt)'),variable=learning_var).pack(side='left')
+        ttk.Button(learning_row,text=_('Granska inlärning'),command=lambda:self.review_learning(w)).pack(side='left',padx=(14,0))
+        ttk.Label(form,text=_('Återkommande mönster tillämpas automatiskt; osäkra förslag frågar först. Allt kan glömmas.'),style='Sub.TLabel').grid(row=len(fields)+18,column=0,columnspan=3,sticky='w')
         def save():
             try:
                 for k,e in entries.items():
@@ -3825,17 +4122,19 @@ class ReminderApp(tk.Tk):
             set_setting('auto_import','1' if automatic_import_var.get() else '0')
             set_setting('ledger_friday_reminder','1' if ledger_reminder_var.get() else '0')
             set_setting('cache_auto','1' if automatic_cache_var.get() else '0')
+            set_setting('start_minimized','1' if start_minimized_var.get() else '0')
+            set_setting('learning_enabled','1' if learning_var.get() else '0')
             set_setting('language',new_language)
             new_font_scale=normalize_font_scale(self._font_scale_var.get())
             set_setting(FONT_SCALE_SETTING,font_scale_storage(new_font_scale))
             self.set_font_scale(new_font_scale,persist=False)
             set_language(new_language)
             refresh_json_journal(parent=w)
-            logger.info('Settings saved; fee_locked=%s autostart=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language)
+            logger.info('Settings saved; fee_locked=%s autostart=%s start_minimized=%s learning=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(start_minimized_var.get()),bool(learning_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language)
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()
-        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+15,column=1,sticky='e',pady=(15,0))
+        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+19,column=1,sticky='e',pady=(15,0))
 
 def main():
     instance=None
@@ -3872,8 +4171,14 @@ def main():
         after_idle=getattr(window,'after_idle',None)
         if after_idle is not None:after_idle(mark_update_ready)
         else:mark_update_ready()
-        if MINIMIZED_START_ARG in sys.argv[1:]:
-            window.hide_to_tray()
+        start_hidden=MINIMIZED_START_ARG in sys.argv[1:]
+        if not start_hidden:
+            try:start_hidden=setting('start_minimized')!='0'
+            except Exception:start_hidden=True
+        if start_hidden:
+            starter=getattr(window,'start_minimized',None)
+            if starter is not None:starter()
+            elif hasattr(window,'hide_to_tray'):window.hide_to_tray()
             if getattr(window,'_quitting',False):return
         window.mainloop()
     except Exception as e:
