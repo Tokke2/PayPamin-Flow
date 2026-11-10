@@ -22,6 +22,7 @@ from accessibility import (
     HIGH_CONTRAST_FIELD_BACKGROUND,
     HIGH_CONTRAST_FOCUS,
     HIGH_CONTRAST_TEXT,
+    ResponsiveGrid,
     ScrollableForm,
     apply_widget_contrast,
     fit_window_to_screen,
@@ -171,6 +172,55 @@ class RealTkAccessibilityTests(unittest.TestCase):
         left, top, width, height = monitor_work_area(dialog)
         self.assertLessEqual(dialog.winfo_y() + dialog.winfo_height(), top + height + 1)
         self.assertLessEqual(dialog.winfo_x() + dialog.winfo_width(), left + width + 1)
+
+    def test_real_form_reflows_between_three_and_one_column_on_resize(self):
+        dialog = tk.Toplevel(self.root)
+        surface = ScrollableForm(dialog, tk, ttk, padding=8)
+        form = surface.form
+        grid = ResponsiveGrid(form)
+        cells = []
+        for index in range(6):
+            frame = ttk.Frame(form)
+            label = ttk.Label(frame, text=f"Field {index + 1}")
+            label.grid(row=0, column=0, sticky="w")
+            entry = ttk.Entry(frame, width=14)
+            entry.grid(row=1, column=0, sticky="w")
+            grid.add_cell(frame, label=label, entry=entry)
+            cells.append(frame)
+        dialog.geometry("960x420+40+40")
+        dialog.update()
+        grid.apply(940)
+        dialog.update()
+
+        self.assertEqual({cell.grid_info()["column"] for cell in cells}, {0, 1, 2})
+        self.assertFalse(surface.horizontal.winfo_ismapped())
+
+        dialog.geometry("420x420+40+40")
+        dialog.update()
+        grid.apply(390)
+        dialog.update()
+
+        self.assertEqual({cell.grid_info()["column"] for cell in cells}, {0})
+        self.assertFalse(surface.horizontal.winfo_ismapped())
+        for cell in cells:
+            self.assertTrue(cell.winfo_ismapped())
+
+    def test_real_fit_to_content_keeps_the_requested_size_inside_the_cap(self):
+        dialog = tk.Toplevel(self.root)
+        surface = ScrollableForm(dialog, tk, ttk, padding=8)
+        for index in range(30):
+            ttk.Label(surface.form, text=f"Row {index + 1}").grid(
+                row=index, column=0, sticky="w", pady=2,
+            )
+        dialog.update()
+
+        size = surface.fit_to_content(max_width=520, max_height=240)
+
+        self.assertIsNotNone(size)
+        self.assertLessEqual(size[0], 520)
+        self.assertLessEqual(size[1], 240)
+        self.assertLessEqual(int(surface.canvas.cget("width")), 520)
+        self.assertLessEqual(int(surface.canvas.cget("height")), 240)
 
     def test_real_high_contrast_changes_ttk_and_classic_widgets(self):
         style = AccessibleStyle(ttk.Style(self.root), tkfont)

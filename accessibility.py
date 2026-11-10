@@ -522,6 +522,150 @@ def fit_window_to_screen(window, margin=24, min_width=360, min_height=240):
         return None
 
 
+class ResponsiveGrid:
+    """Reflow a dialog form into as many columns as actually fit.
+
+    The form is built once and only re-gridded when the available width
+    changes, so no value is lost and nothing is ever hidden. Headings,
+    check boxes and help texts keep the full width; label/field cells share a
+    row when the dialogue is wide enough. Labels wrap and entries shrink, so
+    the form never needs horizontal scrolling.
+    """
+
+    HEADING_GAP = 14
+    MIN_LABEL_WRAP = 120
+
+    def __init__(self, form, min_cell_width=250, max_columns=3, gap=18):
+        self.form = form
+        self.min_cell_width = max(120, int(min_cell_width))
+        self.max_columns = max(1, int(max_columns))
+        self.gap = max(0, int(gap))
+        self.items = []
+        self.columns = 0
+        self.width = 0
+        self.compact = False
+
+    def add_heading(self, widget, pady=None):
+        self.items.append({"kind": "heading", "widget": widget, "pady": pady})
+        return widget
+
+    def add_full(self, widget, pady=(2, 2)):
+        self.items.append({"kind": "full", "widget": widget, "pady": pady})
+        return widget
+
+    def add_hint(self, widget, pady=(0, 0)):
+        self.items.append({"kind": "hint", "widget": widget, "pady": pady})
+        return widget
+
+    def add_cell(self, widget, label=None, entry=None, pady=(2, 8)):
+        self.items.append({
+            "kind": "cell", "widget": widget, "label": label,
+            "entry": entry, "pady": pady,
+        })
+        return widget
+
+    @staticmethod
+    def columns_for(width, min_cell_width=250, max_columns=3):
+        """Return how many field columns fit into ``width`` pixels."""
+        try:
+            width = int(width)
+        except (TypeError, ValueError):
+            return 1
+        if width <= 0:
+            return 1
+        return max(1, min(max(1, int(max_columns)), width // max(120, int(min_cell_width))))
+
+    def _pady(self, item, row):
+        pady = item["pady"]
+        if pady is None:
+            pady = (0 if row == 0 else self.HEADING_GAP, 6)
+        pady = (int(pady[0]), int(pady[1]))
+        if self.compact and item["kind"] in ("cell", "full", "hint"):
+            pady = (max(0, pady[0] // 2), max(1, pady[1] // 2))
+        return pady
+
+    def _cell_width(self, columns, width):
+        if columns <= 1 or width <= 0:
+            return max(0, width)
+        return max(0, (width - self.gap * (columns - 1)) // columns)
+
+    def apply(self, width=None):
+        """Lay the form out for ``width``; returns True when it changed."""
+        try:
+            width = int(width if width is not None else self.form.winfo_width())
+        except Exception:
+            width = 0
+        columns = self.columns_for(width, self.min_cell_width, self.max_columns)
+        if columns == self.columns and width == self.width:
+            return False
+        self.columns = columns
+        self.width = width
+        for column in range(self.max_columns):
+            try:
+                self.form.grid_columnconfigure(
+                    column, weight=1 if column < columns else 0,
+                )
+            except Exception:
+                pass
+        cell_width = self._cell_width(columns, width)
+        row = 0
+        column = 0
+        for item in self.items:
+            widget = item["widget"]
+            pady = self._pady(item, row)
+            try:
+                if item["kind"] == "cell":
+                    widget.grid(
+                        row=row, column=column, sticky="nw",
+                        padx=(0, self.gap if column < columns - 1 else 0),
+                        pady=pady,
+                    )
+                    column += 1
+                    if column >= columns:
+                        column = 0
+                        row += 1
+                else:
+                    if column:
+                        row += 1
+                        column = 0
+                    widget.grid(
+                        row=row, column=0, columnspan=columns,
+                        sticky="w", padx=0, pady=pady,
+                    )
+                    row += 1
+            except Exception:
+                continue
+            self._resize_content(item, cell_width)
+        return True
+
+    def _resize_content(self, item, cell_width):
+        if item["kind"] == "hint":
+            if self.width > 0:
+                try:
+                    item["widget"].configure(
+                        wraplength=max(self.MIN_LABEL_WRAP, self.width - 8),
+                    )
+                except Exception:
+                    pass
+            return
+        if item["kind"] != "cell":
+            return
+        label = item.get("label")
+        if label is not None and self.width > 0:
+            try:
+                label.configure(
+                    wraplength=max(self.MIN_LABEL_WRAP, cell_width - 8),
+                )
+            except Exception:
+                pass
+        entry = item.get("entry")
+        if entry is not None and cell_width > 0:
+            try:
+                entry.configure(width=max(8, min(16, (cell_width - 16) // 9)))
+            except Exception:
+                pass
+
+
 class ScrollableForm:
     """A two-direction scrolling surface for a dialog's ordinary ttk form.
 
@@ -565,6 +709,27 @@ class ScrollableForm:
             except Exception:
                 continue
         self._content_changed()
+
+    def fit_to_content(self, max_width=1100, max_height=800):
+        """Request a canvas size that matches the content, capped to a maximum.
+
+        The dialogue then opens at the size its content needs, and scrolling is
+        only used for the part that genuinely does not fit.
+        """
+        self._content_changed()
+        try:
+            content_width = max(1, int(self.form.winfo_reqwidth()))
+            content_height = max(1, int(self.form.winfo_reqheight()))
+            self.canvas.configure(
+                width=min(int(max_width), content_width),
+                height=min(int(max_height), content_height),
+            )
+            return (
+                min(int(max_width), content_width),
+                min(int(max_height), content_height),
+            )
+        except Exception:
+            return None
 
     def _owns(self, widget):
         """Return whether ``widget`` belongs to this form's scrolling surface."""

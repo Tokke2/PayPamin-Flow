@@ -102,6 +102,133 @@ class BindingWindow:
         self.bindings[sequence] = callback
 
 
+class FakeGridWidget:
+    """Record grid/configure calls for ResponsiveGrid tests."""
+
+    def __init__(self, kind="widget"):
+        self.kind = kind
+        self.grid_calls = []
+        self.options = {}
+
+    def grid(self, **kwargs):
+        self.grid_calls.append(kwargs)
+
+    def configure(self, **kwargs):
+        self.options.update(kwargs)
+
+    @property
+    def last_grid(self):
+        return self.grid_calls[-1] if self.grid_calls else {}
+
+
+class FakeGridForm(FakeGridWidget):
+    def __init__(self):
+        super().__init__("form")
+        self.column_options = {}
+
+    def grid_columnconfigure(self, index, **kwargs):
+        self.column_options[index] = kwargs
+
+    def winfo_width(self):
+        return self.options.get("width", 1000)
+
+
+class ResponsiveGridTests(unittest.TestCase):
+    def build(self, width):
+        form = FakeGridForm()
+        grid = accessibility.ResponsiveGrid(form)
+        heading = FakeGridWidget("heading")
+        cells = []
+        hints = []
+        checks = []
+        grid.add_heading(heading)
+        for index in range(7):
+            label = FakeGridWidget("label")
+            entry = FakeGridWidget("entry")
+            cell = FakeGridWidget("cell")
+            grid.add_cell(cell, label=label, entry=entry)
+            cells.append((cell, label, entry))
+        grid.add_full(check := FakeGridWidget("check"))
+        checks.append(check)
+        hint = FakeGridWidget("hint")
+        grid.add_hint(hint)
+        hints.append(hint)
+        grid.apply(width)
+        return grid, form, heading, cells, hints, checks
+
+    def test_column_count_uses_one_shared_rule(self):
+        cases = {1200: 3, 750: 3, 700: 2, 500: 2, 480: 1, 0: 1, None: 1, "wide": 1}
+        for width, expected in cases.items():
+            self.assertEqual(accessibility.ResponsiveGrid.columns_for(width), expected)
+
+    def test_fields_flow_into_the_widest_fitting_column_count(self):
+        grid, _form, _heading, cells, _hints, _checks = self.build(1000)
+
+        self.assertEqual(grid.columns, 3)
+        columns = [cell.last_grid["column"] for cell, _label, _entry in cells]
+        self.assertEqual(columns, [0, 1, 2, 0, 1, 2, 0])
+        rows = [cell.last_grid["row"] for cell, _label, _entry in cells]
+        self.assertEqual(rows, [1, 1, 1, 2, 2, 2, 3])
+
+    def test_narrow_width_puts_every_field_in_one_column(self):
+        grid, _form, _heading, cells, _hints, _checks = self.build(400)
+
+        self.assertEqual(grid.columns, 1)
+        self.assertEqual({cell.last_grid["column"] for cell, _label, _entry in cells}, {0})
+        self.assertEqual(len({cell.last_grid["row"] for cell, _label, _entry in cells}), 7)
+
+    def test_full_width_items_break_the_field_flow(self):
+        grid, _form, heading, cells, hints, checks = self.build(1000)
+
+        self.assertEqual(heading.last_grid["columnspan"], 3)
+        self.assertEqual(checks[0].last_grid["columnspan"], 3)
+        self.assertEqual(hints[0].last_grid["columnspan"], 3)
+        self.assertGreater(checks[0].last_grid["row"], max(
+            cell.last_grid["row"] for cell, _label, _entry in cells
+        ))
+
+    def test_help_text_and_labels_wrap_to_the_available_width(self):
+        _grid, _form, _heading, cells, hints, _checks = self.build(620)
+
+        self.assertEqual(hints[0].options["wraplength"], 612)
+        for _cell, label, _entry in cells:
+            self.assertLessEqual(label.options["wraplength"], 620)
+            self.assertGreaterEqual(label.options["wraplength"], 120)
+
+    def test_entries_shrink_but_stay_usable_in_narrow_columns(self):
+        _grid, _form, _heading, cells, _hints, _checks = self.build(400)
+
+        for _cell, _label, entry in cells:
+            self.assertGreaterEqual(entry.options["width"], 8)
+            self.assertLessEqual(entry.options["width"], 16)
+
+    def test_reapplying_the_same_width_does_no_work(self):
+        grid, _form, _heading, _cells, _hints, _checks = self.build(1000)
+
+        self.assertFalse(grid.apply(1000))
+
+    def test_resizing_reflows_existing_widgets_without_replacing_them(self):
+        grid, _form, _heading, cells, _hints, _checks = self.build(1000)
+        before = [id(cell) for cell, _label, _entry in cells]
+
+        self.assertTrue(grid.apply(420))
+
+        self.assertEqual([id(cell) for cell, _label, _entry in cells], before)
+        self.assertEqual({cell.last_grid["column"] for cell, _label, _entry in cells}, {0})
+        self.assertEqual(grid.columns, 1)
+
+    def test_compact_mode_halves_spacing_without_hiding_anything(self):
+        grid, _form, _heading, cells, _hints, _checks = self.build(1000)
+        roomy = cells[0][0].last_grid["pady"]
+
+        grid.compact = True
+        grid.apply(900)
+
+        self.assertEqual(len(grid.items), 10)
+        compact = cells[0][0].last_grid["pady"]
+        self.assertLessEqual(sum(compact), sum(roomy))
+
+
 class AccessibilityTests(unittest.TestCase):
     def test_scale_is_bounded_and_accepts_percentages(self):
         self.assertEqual(accessibility.normalize_font_scale("125 %"), 1.25)

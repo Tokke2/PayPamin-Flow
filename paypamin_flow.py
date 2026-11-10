@@ -104,6 +104,7 @@ from accessibility import (
     FONT_SCALE_CHOICES,
     FONT_SCALE_SETTING,
     SYSTEM_CONTRAST_POLL_INTERVAL_MS,
+    ResponsiveGrid,
     ScrollableForm,
     apply_widget_contrast,
     contrast_palette,
@@ -111,6 +112,7 @@ from accessibility import (
     focus_first,
     font_scale_label,
     font_scale_storage,
+    monitor_work_area,
     normalize_font_scale,
     prepare_focus_tree,
     scaled_number,
@@ -1084,11 +1086,15 @@ def build_reminder_email_content(row,level,recipients):
     return {'recipients':addresses,'bcc':REMINDER_BCC,'subject':subject,'body':body}
 
 
-def form_columns(available_width):
-    """Return how many setting columns fit in the available dialog width."""
-    try:width=int(available_width)
-    except (TypeError,ValueError):return 1
-    return 2 if width>=700 else 1
+def window_work_area_height(window):
+    """Return the usable height of the monitor holding ``window``."""
+    try:
+        area=monitor_work_area(window)
+        height=int(area[3])
+        if height>=200:return height
+        return int(window.winfo_screenheight())
+    except Exception:
+        return 0
 
 
 def dialog_available_width(window,maximum=1100,margin=24):
@@ -4095,46 +4101,52 @@ class ReminderApp(tk.Tk):
         log_activity('learning','review_opened','completed')
 
     def settings(self):
-        """Show every setting even on a short screen.
+        """Show every setting, laid out to fit the current window.
 
-        Fields reflow into one or two columns, the form scrolls with the wheel
-        and a pinned footer keeps Save reachable on any monitor size.
+        The form reflows between one and three field columns as the dialogue
+        is resized, help texts wrap, and the footer with Save/Close stays
+        outside the scrolling area. Nothing is hidden in tabs or collapsed
+        sections; scrolling is only used for what genuinely cannot fit.
         """
         w=self._new_toplevel(_('Inställningar'));w.grab_set();w.resizable(True,True)
         footer=ttk.Frame(w,padding=(16,10));footer.pack(side='bottom',fill='x')
         ttk.Separator(w,orient='horizontal').pack(side='bottom',fill='x')
-        form=self._dialog_form(w,padding=16)
+        surface=ScrollableForm(w,tk,ttk,padding=16)
+        form=surface.form
+        grid=ResponsiveGrid(form)
         available_width=dialog_available_width(w)
-        columns=form_columns(available_width)
-        total_columns=columns*2
-        for index in range(columns):
-            form.grid_columnconfigure(index*2,weight=1)
-        row=0
+        area_height=window_work_area_height(w)
+
         def heading(text):
-            nonlocal row
-            ttk.Label(form,text=_(text),style='Heading.TLabel').grid(
-                row=row,column=0,columnspan=total_columns,sticky='w',
-                pady=(0 if row==0 else 16,6),
-            )
-            row+=1
-        def wide(widget,pady=(2,2)):
-            nonlocal row
-            widget.grid(row=row,column=0,columnspan=total_columns,sticky='w',pady=pady)
-            row+=1
-            return widget
+            grid.add_heading(ttk.Label(form,text=_(text),style='Heading.TLabel'))
         def hint(text,**values):
-            wide(ttk.Label(
+            grid.add_hint(ttk.Label(
                 form,text=_(text,**values),style='Sub.TLabel',
-                wraplength=max(320,available_width-56),justify='left',
+                justify='left',wraplength=max(240,available_width-32),
             ))
         def check(text,variable,**values):
-            return wide(ttk.Checkbutton(form,text=_(text,**values),variable=variable))
+            return grid.add_full(ttk.Checkbutton(
+                form,text=_(text,**values),variable=variable,
+            ))
+        def cell(label,key):
+            frame=ttk.Frame(form)
+            label_widget=ttk.Label(frame,text=_(label),style='Sub.TLabel',justify='left')
+            label_widget.grid(row=0,column=0,sticky='w')
+            entry=ttk.Entry(frame,width=14)
+            entry.grid(row=1,column=0,sticky='w',pady=(2,0))
+            entry.insert(0,setting(key))
+            grid.add_cell(frame,label=label_widget,entry=entry)
+            return entry
         language_var=tk.StringVar(value=SUPPORTED_LANGUAGES[get_language()])
         heading('Språk')
+        language_frame=ttk.Frame(form)
+        language_label=ttk.Label(language_frame,text=_('Språk'),style='Sub.TLabel')
+        language_label.grid(row=0,column=0,sticky='w')
         ttk.Combobox(
-            form,textvariable=language_var,state='readonly',
+            language_frame,textvariable=language_var,state='readonly',
             values=list(SUPPORTED_LANGUAGES.values()),width=18,
-        ).grid(row=row,column=0,columnspan=2,sticky='w',pady=(0,2));row+=1
+        ).grid(row=1,column=0,sticky='w',pady=(2,0))
+        grid.add_cell(language_frame,label=language_label)
         fields=[
             ('Dagar efter förfallodatum till P1','p1_days'),
             ('Dagar efter P1 till P2','p2_days'),
@@ -4146,28 +4158,16 @@ class ReminderApp(tk.Tk):
         ]
         heading('Påminnelser')
         entries={}
-        field_top=row
-        for index,(label,key) in enumerate(fields):
-            cell=ttk.Frame(form)
-            cell.grid(
-                row=field_top+index//columns,column=(index%columns)*2,columnspan=2,
-                sticky='w',padx=(0,24),pady=(2,6),
-            )
-            ttk.Label(cell,text=_(label),style='Sub.TLabel').grid(row=0,column=0,sticky='w')
-            entry=ttk.Entry(cell,width=14)
-            entry.grid(row=1,column=0,sticky='w',pady=(2,0))
-            entry.insert(0,setting(key))
-            entries[key]=entry
-            if key=='fee' and setting('fee_locked')=='1':entry.configure(state='disabled')
-        row=field_top+(len(fields)+columns-1)//columns
+        for label,key in fields:
+            entries[key]=cell(label,key)
+            if key=='fee' and setting('fee_locked')=='1':entries[key].configure(state='disabled')
         locked=tk.BooleanVar(value=setting('fee_locked')=='1')
         def toggle_lock():
             entries['fee'].configure(state='disabled' if locked.get() else 'normal')
-        ttk.Checkbutton(
+        grid.add_full(ttk.Checkbutton(
             form,text=_('Lås påminnelseavgiften (förhindra oavsiktlig ändring)'),
             variable=locked,command=toggle_lock,
-        ).grid(row=row,column=0,columnspan=total_columns,sticky='w',pady=(2,2))
-        row+=1
+        ))
         hint('Låset skyddar inställningen i appen; lås upp här för att ändra avgiften.')
         hint('Obs: påminnelseavgiften använder fakturans valuta. Kontrollera att avgift, ränta och villkor gäller för era kunder.')
         heading('Start och uppdateringar')
@@ -4189,19 +4189,19 @@ class ReminderApp(tk.Tk):
         hint('Under dagen endast cache äldre än 24 timmar; vid avslut all identifierad appcache.\nFakturor och importmappen rörs inte.')
         heading('Tillgänglighet')
         self._font_scale_var=tk.StringVar(value=font_scale_label(self.ui_font_scale))
-        text_cell=ttk.Frame(form)
-        text_cell.grid(row=row,column=0,columnspan=2,sticky='w',pady=(2,6));row+=1
-        ttk.Label(text_cell,text=_('Textstorlek'),style='Sub.TLabel').grid(row=0,column=0,sticky='w')
+        text_frame=ttk.Frame(form)
+        text_label=ttk.Label(text_frame,text=_('Textstorlek'),style='Sub.TLabel')
+        text_label.grid(row=0,column=0,sticky='w')
         ttk.Combobox(
-            text_cell,textvariable=self._font_scale_var,state='readonly',
+            text_frame,textvariable=self._font_scale_var,state='readonly',
             values=[font_scale_label(choice) for choice in FONT_SCALE_CHOICES],width=16,
         ).grid(row=1,column=0,sticky='w',pady=(2,0))
+        grid.add_cell(text_frame,label=text_label)
         hint('Textstorleken kan också ändras med Ctrl/Cmd +, Ctrl/Cmd − och Ctrl/Cmd 0.')
         hint('Högkontrast följer systemets inställning och uppdateras automatiskt.')
         heading('Självlärande')
         learning_var=tk.BooleanVar(value=setting('learning_enabled')!='0')
         learning_row=ttk.Frame(form)
-        learning_row.grid(row=row,column=0,columnspan=total_columns,sticky='w',pady=(2,2));row+=1
         ttk.Checkbutton(
             learning_row,text=_('Lär sig av sparade fakturor och leverantörsval (endast lokalt)'),
             variable=learning_var,
@@ -4209,7 +4209,34 @@ class ReminderApp(tk.Tk):
         ttk.Button(
             learning_row,text=_('Granska inlärning'),command=lambda:self.review_learning(w),
         ).pack(side='left',padx=(14,0))
+        grid.add_full(learning_row)
         hint('Inga inlärda värden används utan att du bekräftar dem varje gång. Allt kan glömmas.')
+        def reflow(width=None):
+            try:
+                current=int(width if width is not None else surface.canvas.winfo_width()-32)
+            except Exception:
+                current=0
+            if current<=1:current=available_width
+            if area_height:
+                grid.compact=area_height<640
+            grid.apply(current)
+        def schedule_reflow(event=None):
+            source=getattr(event,'widget',None)
+            if source is not None and source is not w and source is not surface.canvas:return
+            pending=getattr(w,'_settings_reflow_job',None)
+            if pending:
+                try:w.after_cancel(pending)
+                except Exception:pass
+            w._settings_reflow_job=w.after_idle(reflow)
+        surface.canvas.bind('<Configure>',schedule_reflow,add='+')
+        reflow(available_width)
+        try:
+            surface.fit_to_content(
+                max_width=max(520,available_width),
+                max_height=max(320,area_height-140) if area_height else 720,
+            )
+        except Exception:pass
+        fit_window_to_screen(w,min_width=520,min_height=360)
         def save():
             try:
                 for k,e in entries.items():
