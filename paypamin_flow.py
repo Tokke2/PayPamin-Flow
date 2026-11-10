@@ -589,13 +589,14 @@ def apply_learned_value(values,learned):
 
 
 def learned_invoice_defaults(values):
-    """Fill empty invoice fields from repeated, confirmed saves only.
+    """Collect learned suggestions for empty invoice fields.
 
-    Returns ``(values, applied, suggestions)``. Automatic values are already
-    applied; suggestions are returned untouched so the caller can ask first.
+    The app never fills anything on its own. Returns ``(values, suggestions)``
+    where ``values`` is unchanged and every suggestion needs an explicit yes
+    from the user, regardless of how much evidence has accumulated.
     """
-    filled=dict(values);applied=[];suggestions=[]
-    if not learning_enabled():return filled,applied,suggestions
+    filled=dict(values);suggestions=[]
+    if not learning_enabled():return filled,suggestions
     customer=str(filled.get('customer') or '').strip()
     vendor=str(filled.get('template_vendor') or '').strip()
     try:
@@ -605,10 +606,7 @@ def learned_invoice_defaults(values):
                 current=filled.get(field)
                 empty=current is None if field=='logo_file' else not str(current or '').strip()
                 if not empty:return
-                if learned.automatic:
-                    apply_learned_value(filled,learned);applied.append(learned)
-                else:
-                    suggestions.append(learned)
+                suggestions.append(learned)
             # A supplier's currency says more about an invoice than the
             # customer's previous choice, so it is considered first.
             if vendor:consider(learning.recommend(db,learning.KIND_SUPPLIER,vendor,'currency'),'currency')
@@ -618,9 +616,10 @@ def learned_invoice_defaults(values):
             if vendor and not dparse(filled.get('due_date')):
                 consider(learning.recommend(db,learning.KIND_SUPPLIER,vendor,'payment_term_days'),'due_date')
     except Exception:
-        logger.exception('Learned invoice defaults could not be applied')
-        return filled,applied,suggestions
-    return filled,applied,suggestions
+        logger.exception('Learned invoice suggestions could not be read')
+        return filled,suggestions
+    if suggestions:logger.info('Learned invoice suggestions await confirmation: count=%d fields=%s',len(suggestions),','.join(item.field for item in suggestions))
+    return filled,suggestions
 
 
 def record_invoice_learning_db(db,values):
@@ -652,7 +651,11 @@ def record_supplier_learning(vendor,text):
 
 
 def learned_supplier_match(text):
-    """Return a supplier learned from confirmed invoice layouts."""
+    """Return a supplier suggestion from confirmed invoice layouts.
+
+    The result is only ever prefilled in the review dialog. It never becomes a
+    saved supplier choice without the user saving that reviewed invoice.
+    """
     if not learning_enabled():return None
     try:
         with connect() as db:matched=learning.match_supplier_signature(db,text)
@@ -660,11 +663,11 @@ def learned_supplier_match(text):
         logger.exception('Learned supplier layout matching failed')
         return None
     if matched is None:return None
-    if matched.similarity>=learning.SUPPLIER_AUTO_SIMILARITY and matched.margin>=learning.SUPPLIER_MIN_MARGIN:
-        return matched.vendor,matched.similarity,True
-    if matched.similarity>=learning.SUPPLIER_SUGGEST_SIMILARITY:
-        return matched.vendor,matched.similarity,False
-    return None
+    # A close second supplier means the layout is ambiguous; suggest nothing.
+    if matched.margin<learning.SUPPLIER_MIN_MARGIN:
+        logger.warning('Learned supplier layout was ambiguous: first=%s margin=%.3f',matched.vendor,matched.margin)
+        return None
+    return matched.vendor,matched.similarity
 
 
 def record_reminder_learning(row,recipients):
@@ -2678,9 +2681,9 @@ class ReminderApp(tk.Tk):
             logger.info('Visual supplier logo matching skipped for bundled invoice: pages=%s',pages)
         learned=learned_supplier_match(text)
         if learned:
-            vendor,similarity,automatic=learned
-            self._supplier_learning_note=(vendor,similarity,automatic)
-            logger.info('Supplier template matched by learned invoice layout: file=%s pages=%s vendor=%s similarity=%.3f automatic=%s',source,pages,vendor,similarity,automatic)
+            vendor,similarity=learned
+            self._supplier_learning_note=(vendor,similarity)
+            logger.info('Supplier suggestion from learned invoice layout awaits confirmation: file=%s pages=%s vendor=%s similarity=%.3f',source,pages,vendor,similarity)
             return vendor
         for line in [re.sub(r'\s+',' ',x).strip() for x in text.splitlines()[:18]]:
             if re.search(r'(?i)\b(?:AB|ASA|AS|HB)\s*$',line) and len(line)<60 and not re.search(r'faktura|datum|kundnr',line,re.I):
@@ -2778,8 +2781,10 @@ class ReminderApp(tk.Tk):
         learning_note=getattr(self,'_supplier_learning_note',None)
         self._supplier_learning_note=None
         if learning_note and learning_note[0]==original_vendor:
-            note_text=('Leverantören är automatiskt igenkänd från tidigare fakturor ({similarity} % likhet). Kontrollera valet.' if learning_note[2] else 'Leverantören är inlärd från tidigare fakturor ({similarity} % likhet). Kontrollera valet.')
-            ttk.Label(win,text=_(note_text,similarity=f'{learning_note[1]*100:.0f}'),style='Sub.TLabel').pack(fill='x',padx=12,pady=(0,4))
+            ttk.Label(
+                win,text=_('Förslag från tidigare fakturor ({similarity} % likhet). Inget sparas utan din bekräftelse.',similarity=f'{learning_note[1]*100:.0f}'),
+                style='Sub.TLabel',
+            ).pack(fill='x',padx=12,pady=(0,4))
         ttk.Label(identifiers,text=_('Leverantörens org.nr:')).pack(side='left')
         org_var=tk.StringVar(value=initial_org)
         ttk.Entry(identifiers,textvariable=org_var,width=17).pack(side='left',padx=(5,16))
@@ -3327,7 +3332,7 @@ class ReminderApp(tk.Tk):
         apply_saved_customer_contact(vals)
         learned_applied=[];learned_suggestions=[]
         if row is None and not enrich_original:
-            vals,learned_applied,learned_suggestions=learned_invoice_defaults(vals)
+            vals,learned_suggestions=learned_invoice_defaults(vals)
         reviewed_var=tk.BooleanVar(value=bool(row['reviewed']) if row else not bool(source))
         entries={};form=self._dialog_form(w,padding=18)
         for i,(lab,k) in enumerate(fields):
@@ -3353,7 +3358,7 @@ class ReminderApp(tk.Tk):
         review_row=len(fields)
         if learned_applied:
             applied_fields=', '.join(sorted({_(LEARNING_FIELD_LABELS.get(item.field,item.field)) for item in learned_applied}))
-            ttk.Label(form,text=_('Inlärda standardvärden ifyllda: {fields}',fields=applied_fields),style='Sub.TLabel',wraplength=520).grid(row=review_row,column=0,columnspan=2,sticky='w',pady=(6,0))
+            ttk.Label(form,text=_('Inlärda förslag som du godkände: {fields}',fields=applied_fields),style='Sub.TLabel',wraplength=520).grid(row=review_row,column=0,columnspan=2,sticky='w',pady=(6,0))
             review_row+=1
         if enrich_original:
             ttk.Label(form,text=_('Reskontrans fakturanummer, belopp, valuta och betalda belopp är låsta. P1/P2-historiken behålls.'),wraplength=520).grid(row=review_row,column=0,columnspan=2,sticky='w',pady=(9,2))
@@ -3980,7 +3985,7 @@ class ReminderApp(tk.Tk):
             lines.append(_('{field}: {value} ({count} gånger)',field=_(LEARNING_FIELD_LABELS.get(learned.field,learned.field)),value=value,count=learned.observations))
         return messagebox.askyesno(
             _('Inlärda förslag'),
-            _('Appen har sett samma mönster flera gånger för {name}. Använd de inlärda förslagen?\n\n{suggestions}\n\nDu kan granska och glömma inlärda värden i Inställningar.',
+            _('Appen har sett samma mönster flera gånger för {name}, men fyller aldrig i något på egen hand. Vill du använda förslagen den här gången?\n\n{suggestions}\n\nInget sparas förrän du själv sparar fakturan. Du kan granska och glömma inlärda värden i Inställningar.',
               name=', '.join(names),suggestions='\n'.join(lines)),
             parent=parent,
         )
@@ -3995,9 +4000,10 @@ class ReminderApp(tk.Tk):
         ttk.Label(form,text=_('Appen lär sig endast av värden du själv har sparat eller valt. Allt finns lokalt i databasen.'),style='Sub.TLabel',wraplength=930,justify='left').pack(anchor='w')
         summary=tk.StringVar(value='')
         ttk.Label(form,textvariable=summary,style='Sub.TLabel').pack(anchor='w',pady=(6,10))
-        columns=('kind','scope','field','value','evidence','mode')
-        headings={'kind':'Område','scope':'Namn','field':'Uppgift','value':'Inlärt värde','evidence':'Antal','mode':'Tillämpning'}
-        widths={'kind':110,'scope':210,'field':190,'value':300,'evidence':70,'mode':110}
+        ttk.Label(form,text=_('Alla inlärda värden är förslag. Inget används utan att du svarar ja.'),style='BodyBold.TLabel').pack(anchor='w',pady=(4,8))
+        columns=('kind','scope','field','value','evidence')
+        headings={'kind':'Område','scope':'Namn','field':'Uppgift','value':'Inlärt värde','evidence':'Antal'}
+        widths={'kind':110,'scope':230,'field':200,'value':330,'evidence':70}
         tree=ttk.Treeview(form,columns=columns,show='headings',selectmode='browse')
         for column in columns:
             tree.heading(column,text=_(headings[column]))
@@ -4020,7 +4026,7 @@ class ReminderApp(tk.Tk):
                 item=tree.insert('', 'end', values=(
                     _('Kund') if entry.kind==learning.KIND_CUSTOMER else _('Leverantör'),
                     entry.scope_label,_(LEARNING_FIELD_LABELS.get(entry.field,entry.field)),value,
-                    entry.evidence,_('Automatisk') if entry.automatic else _('Förslag'),
+                    entry.evidence,
                 ))
                 rows[item]=entry
         def forget_selected():
@@ -4100,7 +4106,7 @@ class ReminderApp(tk.Tk):
         learning_row=ttk.Frame(form);learning_row.grid(row=len(fields)+17,column=0,columnspan=3,sticky='w',pady=(12,2))
         ttk.Checkbutton(learning_row,text=_('Lär sig av sparade fakturor och leverantörsval (endast lokalt)'),variable=learning_var).pack(side='left')
         ttk.Button(learning_row,text=_('Granska inlärning'),command=lambda:self.review_learning(w)).pack(side='left',padx=(14,0))
-        ttk.Label(form,text=_('Återkommande mönster tillämpas automatiskt; osäkra förslag frågar först. Allt kan glömmas.'),style='Sub.TLabel').grid(row=len(fields)+18,column=0,columnspan=3,sticky='w')
+        ttk.Label(form,text=_('Inga inlärda värden används utan att du bekräftar dem varje gång. Allt kan glömmas.'),style='Sub.TLabel').grid(row=len(fields)+18,column=0,columnspan=3,sticky='w')
         def save():
             try:
                 for k,e in entries.items():

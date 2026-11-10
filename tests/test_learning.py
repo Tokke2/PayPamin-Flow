@@ -1,4 +1,4 @@
-"""Tests for conservative, local self-learning and its invoice integration."""
+"""Tests for local self-learning that never acts without explicit consent."""
 import sqlite3
 import tempfile
 import unittest
@@ -54,16 +54,26 @@ class LearningStoreTests(unittest.TestCase):
         self.assertIsNotNone(learned)
         self.assertEqual(learned.value, "Avser konsultuppdrag")
         self.assertEqual(learned.observations, 2)
-        self.assertFalse(learned.automatic)
+        self.assertFalse(hasattr(learned, "automatic"))
 
-    def test_three_consistent_saves_are_applied_automatically(self):
-        self.observe("Avser konsultuppdrag", 3)
+    def test_heavy_evidence_is_still_only_a_suggestion(self):
+        self.observe("Avser konsultuppdrag", 40)
 
         learned = learning.recommend(self.db, learning.KIND_CUSTOMER, "kund ab", "note")
 
         self.assertIsNotNone(learned)
-        self.assertTrue(learned.automatic)
-        self.assertGreaterEqual(learned.share, learning.AUTO_MIN_SHARE)
+        self.assertEqual(learned.observations, 40)
+        self.assertFalse(hasattr(learned, "automatic"))
+
+    def test_no_amount_of_evidence_turns_a_value_into_a_decision(self):
+        for _ in range(200):
+            self.observe("Avser konsultuppdrag", 1)
+
+        learned = learning.recommend(self.db, learning.KIND_CUSTOMER, "Kund AB", "note")
+
+        self.assertIsNotNone(learned)
+        self.assertGreater(learned.observations, 100)
+        self.assertFalse(hasattr(learned, "automatic"))
 
     def test_ambiguous_evidence_is_never_applied(self):
         self.observe("Avser A", 2)
@@ -110,14 +120,14 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(learning.entries(self.db), [])
         self.assertEqual(learning.counts(self.db)["values"], 0)
 
-    def test_entries_describe_evidence_and_mode(self):
+    def test_entries_describe_evidence_without_a_decision_mode(self):
         self.observe("Avser A", 3)
         self.observe("Avser B", 1)
 
         entry = next(item for item in learning.entries(self.db) if item.value == "Avser A")
 
         self.assertEqual((entry.observations, entry.total), (3, 4))
-        self.assertTrue(entry.automatic)
+        self.assertFalse(hasattr(entry, "automatic"))
 
     def test_signature_is_learned_and_matches_a_later_invoice(self):
         self.assertTrue(learning.record_supplier_signature(self.db, "Nordic Industri AB", supplier_text()))
@@ -128,7 +138,7 @@ class LearningStoreTests(unittest.TestCase):
 
         self.assertIsNotNone(matched)
         self.assertEqual(matched.vendor, "Nordic Industri AB")
-        self.assertGreaterEqual(matched.similarity, learning.SUPPLIER_AUTO_SIMILARITY)
+        self.assertGreaterEqual(matched.similarity, learning.SUPPLIER_SUGGEST_SIMILARITY)
 
     def test_unrelated_invoice_does_not_match_a_learned_supplier(self):
         learning.record_supplier_signature(self.db, "Nordic Industri AB", supplier_text())
@@ -202,46 +212,50 @@ class InvoiceLearningIntegrationTests(unittest.TestCase):
         for number in ("L-1", "L-2"):
             self.app.save_invoice_record(self.invoice(number, currency="EUR", note="Avser konsult"))
 
-        values, applied, suggested = self.defaults()
+        values, suggested = self.defaults()
 
-        self.assertEqual(applied, [])
         self.assertEqual({item.field for item in suggested}, {"currency", "note"})
         self.assertEqual(values["currency"], "")
+        self.assertEqual(values["note"], "")
 
-    def test_three_saved_invoices_apply_customer_defaults(self):
-        for number in ("L-1", "L-2", "L-3"):
-            self.app.save_invoice_record(self.invoice(number, currency="EUR", note="Avser konsult"))
-
-        values, applied, suggested = self.defaults()
-
-        self.assertEqual(values["currency"], "EUR")
-        self.assertEqual(values["note"], "Avser konsult")
-        self.assertEqual(suggested, [])
-        self.assertIn("currency", {item.field for item in applied})
-
-    def test_supplier_payment_term_fills_a_missing_due_date(self):
-        for number in ("L-1", "L-2", "L-3"):
+    def test_many_saved_invoices_still_never_fill_a_field(self):
+        for number in range(25):
             self.app.save_invoice_record(
-                self.invoice(number, template_vendor="Leverantör AB", due_date="2026-01-31")
+                self.invoice(f"L-{number}", currency="EUR", note="Avser konsult")
             )
 
-        values, applied, _suggested = self.defaults(template_vendor="Leverantör AB")
+        values, suggested = self.defaults()
 
-        self.assertEqual(values["due_date"], "2026-03-03")
-        self.assertIn("payment_term_days", {item.field for item in applied})
+        # The app suggests, but never decides: the form stays empty.
+        self.assertEqual(values["currency"], "")
+        self.assertEqual(values["note"], "")
+        self.assertEqual(values["email"], "")
+        self.assertEqual({item.field for item in suggested}, {"currency", "note"})
+        self.assertTrue(all(item.observations >= 25 for item in suggested))
+
+    def test_supplier_payment_term_is_suggested_but_not_applied(self):
+        for number in range(10):
+            self.app.save_invoice_record(
+                self.invoice(f"L-{number}", template_vendor="Leverantör AB", due_date="2026-01-31")
+            )
+
+        values, suggested = self.defaults(template_vendor="Leverantör AB")
+
+        self.assertEqual(values["due_date"], "")
+        self.assertIn("payment_term_days", {item.field for item in suggested})
 
     def test_startup_and_learning_are_enabled_on_a_fresh_database(self):
         self.assertEqual(self.app.setting("start_minimized"), "1")
         self.assertEqual(self.app.setting("learning_enabled"), "1")
 
-    def test_disabled_learning_records_nothing_and_applies_nothing(self):
+    def test_disabled_learning_records_and_suggests_nothing(self):
         self.app.set_setting("learning_enabled", "0")
         for number in ("L-1", "L-2", "L-3"):
             self.app.save_invoice_record(self.invoice(number, currency="EUR", note="Avser konsult"))
 
-        values, applied, suggested = self.defaults()
+        values, suggested = self.defaults()
 
-        self.assertEqual((applied, suggested, values["currency"]), ([], [], ""))
+        self.assertEqual((suggested, values["currency"]), ([], ""))
         with self.app.connect() as db:
             self.assertEqual(self.app.learning.entries(db), [])
 
@@ -263,14 +277,39 @@ class InvoiceLearningIntegrationTests(unittest.TestCase):
             self.app.reminder_email_addresses(row), ["faktura@kund.se", "ekonomi@kund.se"]
         )
 
-    def test_confirmed_supplier_layout_is_used_by_supplier_guessing(self):
+    def test_confirmed_supplier_layout_only_prefills_the_review_dialog(self):
         self.assertTrue(self.app.record_supplier_learning("Nordic Industri AB", supplier_text()))
+        fake = SimpleNamespace(_supplier_learning_note=None)
 
         vendor = self.app.ReminderApp.guess_supplier(
-            SimpleNamespace(), supplier_text(customer="Ny Kund AB", invoice_no="7777")
+            fake, supplier_text(customer="Ny Kund AB", invoice_no="7777")
         )
 
         self.assertEqual(vendor, "Nordic Industri AB")
+        # The note carries the similarity only; there is no automatic flag.
+        self.assertEqual(len(fake._supplier_learning_note), 2)
+
+    def test_even_overwhelming_evidence_is_asked_as_a_question(self):
+        learned = learning.LearnedValue(
+            kind=learning.KIND_CUSTOMER, scope="kund ab", scope_label="Kund AB",
+            field="currency", value="EUR", observations=100, total=100,
+        )
+        asked = {}
+
+        def ask(title, message, parent=None):
+            asked["title"] = title
+            asked["message"] = message
+            return False
+
+        with patch.object(self.app.messagebox, "askyesno", side_effect=ask, create=True):
+            accepted = self.app.ReminderApp._confirm_learned_suggestions(
+                SimpleNamespace(), [learned], None
+            )
+
+        self.assertFalse(accepted)
+        self.assertEqual(asked["title"], "Inlärda förslag")
+        self.assertIn("(100 gånger)", asked["message"])
+        self.assertIn("aldrig", asked["message"])
 
     def test_learning_is_local_to_the_database(self):
         self.app.save_invoice_record(self.invoice("L-1", note="Avser konsult"))

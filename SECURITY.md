@@ -10,7 +10,7 @@ Autostart entries are created only for the current OS user and can be disabled i
 
 Single-instance activation listens only on `127.0.0.1` with a random local port and a per-instance secret token. It accepts only a window-activation command, carries no invoice data and is not exposed to other machines. The per-user lock and activation state are stored under `~/.paminnelseapp/` and are released when the app exits.
 
-Self-learning is local and uses only values the user has already saved or explicitly confirmed. Learned customer defaults, reminder recipients, supplier terms and supplier PDF layouts are stored in the existing local SQLite database under `~/.paminnelseapp/`, included in local backups and never sent to a server. No PDF content or customer data is uploaded. Learning can be disabled in Settings, and every learned value can be reviewed and forgotten under **Settings → Review learning** without changing invoices, reminders or saved templates.
+Self-learning is local and uses only values the user has already saved or explicitly confirmed. It never changes data or fills fields on its own: every learned value is a suggestion that requires explicit confirmation each time. Learned customer defaults, reminder recipients, supplier terms and supplier PDF layouts are stored in the existing local SQLite database under `~/.paminnelseapp/`, included in local backups and never sent to a server. No PDF content or customer data is uploaded. Learning can be disabled in Settings, and every learned value can be reviewed and forgotten under **Settings → Review learning** without changing invoices, reminders or saved templates.
 
 ## Automatic updates
 

@@ -3,9 +3,9 @@
 The app learns only from values that the user has already saved or explicitly
 confirmed. Everything stays in the local SQLite database; nothing is uploaded.
 
-Repeated and consistent evidence is applied automatically. Weaker evidence is
-returned as a suggestion so the GUI can ask before using it. Every learned
-value can be reviewed or forgotten from Settings.
+Nothing is ever applied on the app's own initiative. Learned values are only
+suggestions that the user must confirm each time, no matter how much evidence
+has accumulated. Every learned value can be reviewed or forgotten in Settings.
 """
 from __future__ import annotations
 
@@ -20,16 +20,13 @@ from datetime import datetime
 KIND_CUSTOMER = "customer"
 KIND_SUPPLIER = "supplier"
 
-# Applying a value silently requires several consistent observations.
-AUTO_MIN_OBSERVATIONS = 3
-AUTO_MIN_SHARE = 0.75
-# Weaker, repeated evidence is offered as a question instead.
+# Evidence needed before a value is even offered as a question.
 SUGGEST_MIN_OBSERVATIONS = 2
 SUGGEST_MIN_SHARE = 0.60
 MAX_VALUE_LENGTH = 500
 
 # Learned supplier layout comparison. Similarity is a binary-token cosine.
-SUPPLIER_AUTO_SIMILARITY = 0.92
+# A match is only ever a prefill in the review dialog, never a saved decision.
 SUPPLIER_SUGGEST_SIMILARITY = 0.82
 SUPPLIER_MIN_MARGIN = 0.06
 SIGNATURE_MIN_TOKENS = 40
@@ -62,7 +59,6 @@ class LearnedValue:
     value: str
     observations: int
     total: int
-    automatic: bool
 
     @property
     def share(self) -> float:
@@ -180,10 +176,11 @@ def _dismissed_observations(db, kind, scope, field, value) -> int | None:
 
 
 def recommend(db, kind, scope, field) -> LearnedValue | None:
-    """Return a safe learned value, or None when evidence is insufficient.
+    """Return a learned suggestion, or None when evidence is insufficient.
 
-    A tie between equally common values is never applied. A declined
-    suggestion is only offered again after at least two further observations.
+    The result always requires an explicit confirmation. A tie between equally
+    common values is never suggested, and a declined suggestion is only offered
+    again after at least two further observations.
     """
     scope_key = normalize_scope(scope)
     if not scope_key:
@@ -198,7 +195,7 @@ def recommend(db, kind, scope, field) -> LearnedValue | None:
         return None
     top_value, top_count, label = rows[0][0], int(rows[0][1]), rows[0][2]
     if len(rows) > 1 and int(rows[1][1]) == top_count:
-        return None  # Ambiguous evidence must not be applied.
+        return None  # Ambiguous evidence must not even be suggested.
     total = sum(int(row[1]) for row in rows)
     share = top_count / total if total else 0.0
     if top_count < SUGGEST_MIN_OBSERVATIONS or share < SUGGEST_MIN_SHARE:
@@ -206,7 +203,6 @@ def recommend(db, kind, scope, field) -> LearnedValue | None:
     dismissed = _dismissed_observations(db, str(kind), scope_key, str(field), top_value)
     if dismissed is not None and top_count <= dismissed + 1:
         return None
-    automatic = top_count >= AUTO_MIN_OBSERVATIONS and share >= AUTO_MIN_SHARE
     return LearnedValue(
         kind=str(kind),
         scope=scope_key,
@@ -215,7 +211,6 @@ def recommend(db, kind, scope, field) -> LearnedValue | None:
         value=top_value,
         observations=top_count,
         total=total,
-        automatic=automatic,
     )
 
 
@@ -258,8 +253,6 @@ def entries(db, kind=None) -> list[LearningEntry]:
             row[0], row[1], row[2], row[3], row[4], int(row[5]),
         )
         total = totals.get((kind_value, scope, field), observations)
-        share = observations / total if total else 0.0
-        automatic = observations >= AUTO_MIN_OBSERVATIONS and share >= AUTO_MIN_SHARE
         result.append(
             LearningEntry(
                 kind=kind_value,
@@ -269,7 +262,6 @@ def entries(db, kind=None) -> list[LearningEntry]:
                 value=value,
                 observations=observations,
                 total=total,
-                automatic=automatic,
             )
         )
     return result

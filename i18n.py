@@ -653,7 +653,8 @@ _ENGLISH = {
     "Ett nytt startförsök öppnar ändå det befintliga fönstret.": "Starting again still opens the existing window.",
     "Lär sig av sparade fakturor och leverantörsval (endast lokalt)": "Learns from saved invoices and supplier choices (local only)",
     "Granska inlärning": "Review learning",
-    "Återkommande mönster tillämpas automatiskt; osäkra förslag frågar först. Allt kan glömmas.": "Repeated patterns are applied automatically; uncertain suggestions ask first. Everything can be forgotten.",
+    "Inga inlärda värden används utan att du bekräftar dem varje gång. Allt kan glömmas.": "No learned value is used unless you confirm it every time. Everything can be forgotten.",
+    "Alla inlärda värden är förslag. Inget används utan att du svarar ja.": "Every learned value is a suggestion. Nothing is used unless you say yes.",
     "Appen lär sig endast av värden du själv har sparat eller valt. Allt finns lokalt i databasen.": "The app learns only from values you have saved or chosen yourself. Everything stays in the local database.",
     "Inlärda värden: {values} · Leverantörsmallar: {suppliers} · PDF-zonmallar: {zones} · Påminnelser: {reminders}": "Learned values: {values} · Supplier templates: {suppliers} · PDF field zones: {zones} · Reminders: {reminders}",
     "Område": "Area",
@@ -675,11 +676,10 @@ _ENGLISH = {
     "Betalningsfrist (dagar)": "Payment term (days)",
     "E-post för påminnelser": "Email for reminders",
     "Inlärda förslag": "Learned suggestions",
-    "Appen har sett samma mönster flera gånger för {name}. Använd de inlärda förslagen?\n\n{suggestions}\n\nDu kan granska och glömma inlärda värden i Inställningar.": "The app has seen the same pattern several times for {name}. Use the learned suggestions?\n\n{suggestions}\n\nYou can review and forget learned values in Settings.",
+    "Appen har sett samma mönster flera gånger för {name}, men fyller aldrig i något på egen hand. Vill du använda förslagen den här gången?\n\n{suggestions}\n\nInget sparas förrän du själv sparar fakturan. Du kan granska och glömma inlärda värden i Inställningar.": "The app has seen the same pattern several times for {name}, but it never fills anything in on its own. Use the suggestions this time?\n\n{suggestions}\n\nNothing is saved until you save the invoice yourself. You can review and forget learned values in Settings.",
     "{field}: {value} ({count} gånger)": "{field}: {value} ({count} times)",
-    "Inlärda standardvärden ifyllda: {fields}": "Learned defaults filled in: {fields}",
-    "Leverantören är automatiskt igenkänd från tidigare fakturor ({similarity} % likhet). Kontrollera valet.": "The supplier was recognized automatically from earlier invoices ({similarity}% similarity). Review the choice.",
-    "Leverantören är inlärd från tidigare fakturor ({similarity} % likhet). Kontrollera valet.": "The supplier was learned from earlier invoices ({similarity}% similarity). Review the choice.",
+    "Inlärda förslag som du godkände: {fields}": "Learned suggestions you approved: {fields}",
+    "Förslag från tidigare fakturor ({similarity} % likhet). Inget sparas utan din bekräftelse.": "Suggestion from earlier invoices ({similarity}% similarity). Nothing is saved without your confirmation.",
 }
 
 
