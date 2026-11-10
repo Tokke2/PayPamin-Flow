@@ -53,19 +53,49 @@ TK_DISPLAY_AVAILABLE = _tk_display_available()
 
 @unittest.skipUnless(TK_DISPLAY_AVAILABLE, "real Tk/display is not available")
 class RealTkAccessibilityTests(unittest.TestCase):
-    def setUp(self):
-        self.root = tk.Tk()
-        self.root.geometry("1000x800")
-        self.root.deiconify()
-        self.root.lift()
-        self.root.focus_force()
-        self.root.update()
+    """Real widgets on one shared root.
 
-    def tearDown(self):
+    Tk is not designed for repeated interpreter creation in one process; on
+    macOS that aborts the interpreter. One root for the class and one
+    destroyed Toplevel per test keeps the suite stable on every platform.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = tk.Tk()
+        cls.root.geometry("1000x800")
+        cls.root.deiconify()
+        cls.root.lift()
+        cls.root.update()
+
+    @classmethod
+    def tearDownClass(cls):
         try:
-            self.root.destroy()
+            cls.root.destroy()
         except Exception:
             pass
+
+    def setUp(self):
+        self.root.focus_force()
+        self.root.update()
+        self._dialogs = []
+
+    def tearDown(self):
+        for dialog in self._dialogs:
+            try:
+                dialog.destroy()
+            except Exception:
+                pass
+        self._dialogs.clear()
+        try:
+            self.root.geometry("1000x800+0+0")
+            self.root.update()
+        except Exception:
+            pass
+
+    def track(self, dialog):
+        self._dialogs.append(dialog)
+        return dialog
 
     def test_real_widgets_follow_visual_tab_order_and_show_focus(self):
         frame = ttk.Frame(self.root)
@@ -91,7 +121,7 @@ class RealTkAccessibilityTests(unittest.TestCase):
     def test_real_two_hundred_percent_form_fits_and_reveals_last_field(self):
         style = AccessibleStyle(ttk.Style(self.root), tkfont)
         style.apply(2.0)
-        dialog = tk.Toplevel(self.root)
+        dialog = self.track(tk.Toplevel(self.root))
         dialog.title("200 % accessibility test")
         surface = ScrollableForm(dialog, tk, ttk, padding=12)
         entries = []
@@ -160,7 +190,7 @@ class RealTkAccessibilityTests(unittest.TestCase):
     def test_real_dialog_stays_inside_the_work_area_with_large_text(self):
         style = AccessibleStyle(ttk.Style(self.root), tkfont)
         style.apply(2.0)
-        dialog = tk.Toplevel(self.root)
+        dialog = self.track(tk.Toplevel(self.root))
         surface = ScrollableForm(dialog, tk, ttk, padding=12)
         for index in range(40):
             ttk.Label(surface.form, text=f"Field {index + 1}").grid(
@@ -174,7 +204,7 @@ class RealTkAccessibilityTests(unittest.TestCase):
         self.assertLessEqual(dialog.winfo_x() + dialog.winfo_width(), left + width + 1)
 
     def test_real_form_reflows_between_three_and_one_column_on_resize(self):
-        dialog = tk.Toplevel(self.root)
+        dialog = self.track(tk.Toplevel(self.root))
         surface = ScrollableForm(dialog, tk, ttk, padding=8)
         form = surface.form
         grid = ResponsiveGrid(form)
@@ -206,7 +236,7 @@ class RealTkAccessibilityTests(unittest.TestCase):
             self.assertTrue(cell.winfo_ismapped())
 
     def test_real_fit_to_content_keeps_the_requested_size_inside_the_cap(self):
-        dialog = tk.Toplevel(self.root)
+        dialog = self.track(tk.Toplevel(self.root))
         surface = ScrollableForm(dialog, tk, ttk, padding=8)
         for index in range(30):
             ttk.Label(surface.form, text=f"Row {index + 1}").grid(
