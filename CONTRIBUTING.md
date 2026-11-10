@@ -15,5 +15,6 @@ Thanks for considering a contribution to PayPamin Flow.
 6. Wrap every user-visible Swedish message key with `_()` from `i18n.py` and add its English translation. Keep dynamic values in named placeholders and run the translation completeness tests. Both the UI and generated documents must work in Swedish and English.
 7. Keep currency on the invoice, preserve SEK as the backward-compatible default and never introduce implicit currency conversion. Cover formatting, parser suggestions and database migrations with synthetic tests.
 8. Keep release asset names in `app_info.py`, `packaging/package_release.py` and the updater consistent. Test update downloads with synthetic packages and checksums; never run replacement helpers against a real development or production installation.
+9. **Never open a pull request from an `arena/*` session branch.** Arena tracks the working branch through its pull request, so a temporary PR opened only to trigger CI closes the branch when the PR is closed. CI already runs the full Windows/macOS/Linux matrix on every push to `arena/**` (see `.github/workflows/build.yml`), so push and read the workflow run instead. `tests/test_ci_workflow.py` keeps that trigger in place.
 
 PayPamin Flow is created by Rickard Längkvist. Copyright © 2026 Rickard Längkvist.

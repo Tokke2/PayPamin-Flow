@@ -8,7 +8,9 @@ on:
         required: false
         type: string
   push:
-    branches: [main]
+    # Arena session branches run the full Windows/macOS/Linux matrix on every
+    # push, so verification never depends on opening a pull request.
+    branches: [main, 'arena/**']
   pull_request:
   release:
     types: [published]
