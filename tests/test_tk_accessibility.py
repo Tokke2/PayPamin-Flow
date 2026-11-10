@@ -98,7 +98,8 @@ class RealTkAccessibilityTests(unittest.TestCase):
         return dialog
 
     def test_real_widgets_follow_visual_tab_order_and_show_focus(self):
-        frame = ttk.Frame(self.root)
+        dialog = self.track(tk.Toplevel(self.root))
+        frame = ttk.Frame(dialog)
         frame.pack(fill="both", expand=True)
         first = ttk.Entry(frame)
         second = ttk.Button(frame, text="Next")
@@ -107,14 +108,14 @@ class RealTkAccessibilityTests(unittest.TestCase):
         second.grid(row=0, column=1, padx=8, pady=8)
         first.grid(row=0, column=0, padx=8, pady=8)
         text.grid(row=1, column=0, columnspan=2, padx=8, pady=8)
-        self.root.update()
+        dialog.update()
 
-        order = prepare_focus_tree(self.root)
+        order = prepare_focus_tree(dialog)
         self.assertEqual(order, [first, second, text])
-        focus_first(self.root)
-        self.assertIs(self.root.focus_get(), first)
+        focus_first(dialog)
+        self.assertIs(dialog.focus_get(), first)
         move_focus(first)
-        self.assertIs(self.root.focus_get(), second)
+        self.assertIs(dialog.focus_get(), second)
         self.assertEqual(text.cget("highlightcolor"), FOCUS)
         self.assertEqual(int(text.cget("highlightthickness")), 2)
 
@@ -151,27 +152,27 @@ class RealTkAccessibilityTests(unittest.TestCase):
         self.assertGreater(after[1], before[1])
 
     def test_real_mouse_wheel_scrolls_the_form_but_not_foreign_widgets(self):
-        surface = ScrollableForm(self.root, tk, ttk, padding=8)
+        dialog = self.track(tk.Toplevel(self.root))
+        surface = ScrollableForm(dialog, tk, ttk, padding=8)
         for index in range(60):
             ttk.Label(surface.form, text=f"Row {index + 1}").grid(
                 row=index, column=0, sticky="w", pady=2,
             )
-        self.root.update()
-        surface.window.geometry("420x260+40+40")
-        self.root.update()
+        dialog.geometry("420x260+40+40")
+        dialog.update()
 
         target = surface.form.winfo_children()[5]
         before = surface.canvas.yview()
         target.event_generate("<Button-5>", x=2, y=2)
-        self.root.update()
+        dialog.update()
         after_scroll = surface.canvas.yview()
         self.assertGreater(after_scroll[0], before[0])
 
         surface.canvas.yview_moveto(1.0)
-        self.root.update()
+        dialog.update()
         at_bottom = surface.canvas.yview()
         target.event_generate("<Button-5>", x=2, y=2)
-        self.root.update()
+        dialog.update()
         self.assertEqual(surface.canvas.yview(), at_bottom)
 
         other = ttk.Frame()
