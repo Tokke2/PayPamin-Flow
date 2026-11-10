@@ -151,6 +151,47 @@ class AccessibilityTests(unittest.TestCase):
         geometry = window.geometry.call_args.args[0]
         self.assertTrue(geometry.startswith('752x552+'))
 
+    def test_window_is_bounded_by_the_monitor_work_area(self):
+        window = Mock()
+        window.winfo_screenwidth.return_value = 1920
+        window.winfo_screenheight.return_value = 1080
+        window.winfo_reqwidth.return_value = 1000
+        window.winfo_reqheight.return_value = 900
+        window.winfo_x.return_value = 0
+        window.winfo_y.return_value = 0
+        # A 1080p screen with a taskbar leaves 1040 usable pixels.
+        with patch.object(accessibility, "monitor_work_area", return_value=(0, 0, 1920, 1040)):
+            result = accessibility.fit_window_to_screen(window)
+        self.assertEqual(result, (1000, 900))
+        self.assertTrue(window.geometry.call_args.args[0].startswith("1000x900+"))
+
+    def test_window_never_extends_below_a_short_work_area(self):
+        window = Mock()
+        window.winfo_screenwidth.return_value = 1366
+        window.winfo_screenheight.return_value = 768
+        window.winfo_reqwidth.return_value = 1200
+        window.winfo_reqheight.return_value = 1200
+        window.winfo_x.return_value = 100
+        window.winfo_y.return_value = 700
+        with patch.object(accessibility, "monitor_work_area", return_value=(0, 0, 1366, 728)):
+            width, height = accessibility.fit_window_to_screen(window)
+        self.assertEqual((width, height), (1200, 680))
+        geometry = window.geometry.call_args.args[0]
+        x, y = (int(part) for part in geometry.split("+")[1:])
+        self.assertLessEqual(y + height, 728)
+        self.assertLessEqual(x + width, 1366)
+
+    def test_work_area_falls_back_to_the_screen_when_windows_apis_fail(self):
+        window = Mock()
+        window.winfo_screenwidth.return_value = 1024
+        window.winfo_screenheight.return_value = 700
+        with patch.object(accessibility.sys, "platform", "linux"):
+            self.assertEqual(accessibility.monitor_work_area(window), (0, 0, 1024, 700))
+        with patch.object(accessibility.sys, "platform", "win32"), patch.object(
+            window, "winfo_id", side_effect=RuntimeError("no native handle"), create=True
+        ):
+            self.assertEqual(accessibility.monitor_work_area(window), (0, 0, 1024, 700))
+
     def test_high_contrast_is_applied_to_classic_widgets_and_focus(self):
         root = FakeWidget('Tk')
         text = FakeWidget('Text')

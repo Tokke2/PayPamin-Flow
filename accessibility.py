@@ -410,20 +410,98 @@ def apply_widget_contrast(root, high_contrast=False):
     return palette
 
 
-def fit_window_to_screen(window, margin=24, min_width=360, min_height=240):
-    """Make a dialog resizable and keep its requested geometry on-screen.
+def monitor_work_area(window):
+    """Return the usable desktop area as ``(left, top, width, height)``.
 
-    ScrollableForm provides overflow for long forms.  This helper handles the
-    window itself, including small screens and 200% text, without changing the
-    main window's geometry or any application data.
+    On Windows the taskbar is excluded and the monitor containing the window is
+    used, so a dialog on a small secondary screen is not sized for the primary
+    one. Other platforms use Tk's reported screen size. The result is always in
+    Tk's own pixel units; any failure falls back to the full screen.
+    """
+    try:
+        screen_width = max(1, int(window.winfo_screenwidth()))
+        screen_height = max(1, int(window.winfo_screenheight()))
+    except Exception:
+        return (0, 0, 0, 0)
+    fallback = (0, 0, screen_width, screen_height)
+    if not sys.platform.startswith("win"):
+        return fallback
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _Rect(ctypes.Structure):
+            _fields_ = [
+                ("left", wintypes.LONG), ("top", wintypes.LONG),
+                ("right", wintypes.LONG), ("bottom", wintypes.LONG),
+            ]
+
+        class _MonitorInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD), ("rcMonitor", _Rect),
+                ("rcWork", _Rect), ("dwFlags", wintypes.DWORD),
+            ]
+
+        user32 = ctypes.windll.user32
+        user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        user32.GetAncestor.restype = wintypes.HWND
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        user32.MonitorFromPoint.restype = ctypes.c_void_p
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MonitorInfo)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        source = int(window.winfo_id())
+        hwnd = int(user32.GetAncestor(source, 2) or 0) or source  # GA_ROOT
+        monitor = user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+        if not monitor:
+            return fallback
+        info = _MonitorInfo()
+        info.cbSize = ctypes.sizeof(_MonitorInfo)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return fallback
+        # GetMonitorInfo reports physical pixels. Tk may report virtualized
+        # pixels on a DPI-unaware build, so convert with the primary monitor.
+        primary = _MonitorInfo()
+        primary.cbSize = ctypes.sizeof(_MonitorInfo)
+        primary_monitor = user32.MonitorFromPoint(wintypes.POINT(0, 0), 1)
+        scale_x = scale_y = 1.0
+        if primary_monitor and user32.GetMonitorInfoW(primary_monitor, ctypes.byref(primary)):
+            primary_width = int(primary.rcMonitor.right) - int(primary.rcMonitor.left)
+            primary_height = int(primary.rcMonitor.bottom) - int(primary.rcMonitor.top)
+            if primary_width > 0 and primary_height > 0:
+                scale_x = screen_width / primary_width
+                scale_y = screen_height / primary_height
+        left = int(round(int(info.rcWork.left) * scale_x))
+        top = int(round(int(info.rcWork.top) * scale_y))
+        width = int(round((int(info.rcWork.right) - int(info.rcWork.left)) * scale_x))
+        height = int(round((int(info.rcWork.bottom) - int(info.rcWork.top)) * scale_y))
+        if width < 240 or height < 200 or width > screen_width * 2 or height > screen_height * 2:
+            return fallback
+        return (left, top, width, height)
+    except Exception:
+        return fallback
+
+
+def fit_window_to_screen(window, margin=24, min_width=360, min_height=240):
+    """Make a dialog resizable and keep its requested geometry usable.
+
+    The monitor work area (excluding the Windows taskbar) bounds the dialog, so
+    every field stays reachable on small screens, secondary monitors and with
+    200% text. ScrollableForm provides overflow for long forms. The main
+    window's geometry and all application data are left untouched.
     """
     try:
         window.resizable(True, True)
         window.update_idletasks()
         screen_width = max(1, int(window.winfo_screenwidth()))
         screen_height = max(1, int(window.winfo_screenheight()))
-        max_width = max(240, screen_width - 2 * int(margin))
-        max_height = max(200, screen_height - 2 * int(margin))
+        area_left, area_top, area_width, area_height = monitor_work_area(window)
+        if area_width < 240 or area_height < 200:
+            area_left, area_top = 0, 0
+            area_width, area_height = screen_width, screen_height
+        max_width = max(240, area_width - 2 * int(margin))
+        max_height = max(200, area_height - 2 * int(margin))
         width = min(max(int(min_width), int(window.winfo_reqwidth())), max_width)
         height = min(max(int(min_height), int(window.winfo_reqheight())), max_height)
         minimum_width = min(int(min_width), max_width)
@@ -434,10 +512,10 @@ def fit_window_to_screen(window, margin=24, min_width=360, min_height=240):
         except Exception:
             x = y = 0
         if x <= 0 and y <= 0:
-            x = max(0, (screen_width - width) // 2)
-            y = max(0, (screen_height - height) // 2)
-        x = min(max(0, x), max(0, screen_width - width))
-        y = min(max(0, y), max(0, screen_height - height))
+            x = area_left + max(0, (area_width - width) // 2)
+            y = area_top + max(0, (area_height - height) // 2)
+        x = min(max(area_left, x), max(area_left, area_left + area_width - width))
+        y = min(max(area_top, y), max(area_top, area_top + area_height - height))
         window.geometry(f"{width}x{height}+{x}+{y}")
         return width, height
     except Exception:
@@ -478,7 +556,57 @@ class ScrollableForm:
         self._syncing = False
         self.form.bind("<Configure>", self._content_changed, add="+")
         self.canvas.bind("<Configure>", self._canvas_changed, add="+")
+        # The toplevel is the last stop in Tk's binding order, so the wheel
+        # works over every field without stealing wheel handling from other
+        # widgets. Only this form's own surface scrolls.
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            try:
+                self.window.bind(sequence, self._on_mousewheel, add="+")
+            except Exception:
+                continue
         self._content_changed()
+
+    def _owns(self, widget):
+        """Return whether ``widget`` belongs to this form's scrolling surface."""
+        try:
+            current = widget
+            while current is not None:
+                if current is self.container or current is self.canvas or current is self.form:
+                    return True
+                current = getattr(current, "master", None)
+        except Exception:
+            return False
+        return False
+
+    def _on_mousewheel(self, event):
+        """Scroll the form with the mouse wheel, trackpad and Linux buttons."""
+        if not self._owns(getattr(event, "widget", None)):
+            return None
+        try:
+            raw = self.canvas.cget("scrollregion")
+            values = raw if isinstance(raw, (tuple, list)) else str(raw).split()
+            if len(values) != 4:
+                return None
+            content_height = float(values[3]) - float(values[1])
+            if content_height <= int(self.canvas.winfo_height()) + 1:
+                return None
+        except Exception:
+            return None
+        delta = getattr(event, "delta", 0) or 0
+        number = getattr(event, "num", None)
+        if delta:
+            step = -1 if delta > 0 else 1
+        elif number == 4:
+            step = -1
+        elif number == 5:
+            step = 1
+        else:
+            return None
+        try:
+            self.canvas.yview_scroll(step * 3, "units")
+        except Exception:
+            return None
+        return "break"
 
     def _content_changed(self, _event=None):
         if self._syncing:

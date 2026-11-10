@@ -26,6 +26,7 @@ from accessibility import (
     apply_widget_contrast,
     fit_window_to_screen,
     focus_first,
+    monitor_work_area,
     move_focus,
     prepare_focus_tree,
     reveal_widget,
@@ -117,6 +118,59 @@ class RealTkAccessibilityTests(unittest.TestCase):
         after = surface.canvas.yview()
         self.assertNotEqual(before, after)
         self.assertGreater(after[1], before[1])
+
+    def test_real_mouse_wheel_scrolls_the_form_but_not_foreign_widgets(self):
+        surface = ScrollableForm(self.root, tk, ttk, padding=8)
+        for index in range(60):
+            ttk.Label(surface.form, text=f"Row {index + 1}").grid(
+                row=index, column=0, sticky="w", pady=2,
+            )
+        self.root.update()
+        surface.window.geometry("420x260+40+40")
+        self.root.update()
+
+        target = surface.form.winfo_children()[5]
+        before = surface.canvas.yview()
+        target.event_generate("<Button-5>", x=2, y=2)
+        self.root.update()
+        after_scroll = surface.canvas.yview()
+        self.assertGreater(after_scroll[0], before[0])
+
+        surface.canvas.yview_moveto(1.0)
+        self.root.update()
+        at_bottom = surface.canvas.yview()
+        target.event_generate("<Button-5>", x=2, y=2)
+        self.root.update()
+        self.assertEqual(surface.canvas.yview(), at_bottom)
+
+        other = ttk.Frame()
+        self.assertIsNone(surface._on_mousewheel(type("Event", (), {"widget": other, "delta": -120, "num": None})()))
+
+    def test_real_work_area_is_a_usable_rectangle_inside_the_screen(self):
+        screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        left, top, width, height = monitor_work_area(self.root)
+        self.assertGreaterEqual(width, 240)
+        self.assertGreaterEqual(height, 200)
+        self.assertLessEqual(width, screen_width + 1)
+        self.assertLessEqual(height, screen_height + 1)
+        self.assertGreaterEqual(left, 0)
+        self.assertGreaterEqual(top, 0)
+
+    def test_real_dialog_stays_inside_the_work_area_with_large_text(self):
+        style = AccessibleStyle(ttk.Style(self.root), tkfont)
+        style.apply(2.0)
+        dialog = tk.Toplevel(self.root)
+        surface = ScrollableForm(dialog, tk, ttk, padding=12)
+        for index in range(40):
+            ttk.Label(surface.form, text=f"Field {index + 1}").grid(
+                row=index, column=0, sticky="w", pady=4,
+            )
+        dialog.update()
+        fit_window_to_screen(dialog, min_width=320, min_height=200)
+        dialog.update()
+        left, top, width, height = monitor_work_area(dialog)
+        self.assertLessEqual(dialog.winfo_y() + dialog.winfo_height(), top + height + 1)
+        self.assertLessEqual(dialog.winfo_x() + dialog.winfo_width(), left + width + 1)
 
     def test_real_high_contrast_changes_ttk_and_classic_widgets(self):
         style = AccessibleStyle(ttk.Style(self.root), tkfont)

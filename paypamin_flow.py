@@ -1084,6 +1084,20 @@ def build_reminder_email_content(row,level,recipients):
     return {'recipients':addresses,'bcc':REMINDER_BCC,'subject':subject,'body':body}
 
 
+def form_columns(available_width):
+    """Return how many setting columns fit in the available dialog width."""
+    try:width=int(available_width)
+    except (TypeError,ValueError):return 1
+    return 2 if width>=700 else 1
+
+
+def dialog_available_width(window,maximum=1100,margin=24):
+    """Return the width a dialog may use on the current screen."""
+    try:screen_width=int(window.winfo_screenwidth())
+    except Exception:screen_width=maximum
+    return max(320,min(int(maximum),screen_width-2*int(margin)))
+
+
 def build_reminder_mailto(row,level,recipients,content=None):
     """Encode previewed content without allowing recipients or BCC to be changed."""
     content=content or build_reminder_email_content(row,level,recipients)
@@ -1307,7 +1321,7 @@ def reminder_archive_customer_map():
 class ReminderApp(tk.Tk):
     def __init__(self):
         set_language(setting('language') or 'sv')
-        super().__init__(); self.title(APP_NAME); self.geometry('1180x700'); self.minsize(940,560)
+        super().__init__(); self.title(APP_NAME); self._apply_initial_main_geometry()
         self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
         self.invoice_sort_column='due_date';self.invoice_sort_reverse=False
         self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._available_update=None;self._update_helper_process=None;self.update_button=None
@@ -1642,6 +1656,20 @@ class ReminderApp(tk.Tk):
     def _dialog_form(self,window,padding=20):
         """Return a scrollable form so large text never hides dialog actions."""
         return ScrollableForm(window,tk,ttk,padding=padding).form
+
+    def _apply_initial_main_geometry(self):
+        """Open the main window fully inside the current monitor."""
+        try:
+            screen_width=max(1,int(self.winfo_screenwidth()))
+            screen_height=max(1,int(self.winfo_screenheight()))
+        except Exception:
+            screen_width,screen_height=1180,700
+        width=min(1180,max(720,screen_width-80))
+        height=min(700,max(480,screen_height-120))
+        try:self.geometry(f'{width}x{height}')
+        except Exception:pass
+        try:self.minsize(min(940,width),min(560,height))
+        except Exception:pass
 
     def _configure_macos_dock_icon(self):
         if sys.platform!='darwin':return
@@ -3996,6 +4024,8 @@ class ReminderApp(tk.Tk):
         try:
             if parent is not None:parent.grab_release()
         except Exception:pass
+        buttons=ttk.Frame(win,padding=(16,10));buttons.pack(side='bottom',fill='x')
+        ttk.Separator(win,orient='horizontal').pack(side='bottom',fill='x')
         form=ttk.Frame(win,padding=16);form.pack(fill='both',expand=True)
         ttk.Label(form,text=_('Appen lär sig endast av värden du själv har sparat eller valt. Allt finns lokalt i databasen.'),style='Sub.TLabel',wraplength=930,justify='left').pack(anchor='w')
         summary=tk.StringVar(value='')
@@ -4048,7 +4078,6 @@ class ReminderApp(tk.Tk):
             logger.info('All learned values were forgotten by user')
             log_activity('learning','forget_all','completed')
             refresh()
-        buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(10,0))
         ttk.Button(buttons,text=_('Glöm valt'),command=forget_selected).pack(side='left')
         ttk.Button(buttons,text=_('Glöm allt'),command=forget_all).pack(side='left',padx=(8,0))
         def close():
@@ -4066,47 +4095,121 @@ class ReminderApp(tk.Tk):
         log_activity('learning','review_opened','completed')
 
     def settings(self):
-        w=self._new_toplevel(_('Inställningar'));w.grab_set();w.resizable(True,True);form=self._dialog_form(w,padding=20)
+        """Show every setting even on a short screen.
+
+        Fields reflow into one or two columns, the form scrolls with the wheel
+        and a pinned footer keeps Save reachable on any monitor size.
+        """
+        w=self._new_toplevel(_('Inställningar'));w.grab_set();w.resizable(True,True)
+        footer=ttk.Frame(w,padding=(16,10));footer.pack(side='bottom',fill='x')
+        ttk.Separator(w,orient='horizontal').pack(side='bottom',fill='x')
+        form=self._dialog_form(w,padding=16)
+        available_width=dialog_available_width(w)
+        columns=form_columns(available_width)
+        total_columns=columns*2
+        for index in range(columns):
+            form.grid_columnconfigure(index*2,weight=1)
+        row=0
+        def heading(text):
+            nonlocal row
+            ttk.Label(form,text=_(text),style='Heading.TLabel').grid(
+                row=row,column=0,columnspan=total_columns,sticky='w',
+                pady=(0 if row==0 else 16,6),
+            )
+            row+=1
+        def wide(widget,pady=(2,2)):
+            nonlocal row
+            widget.grid(row=row,column=0,columnspan=total_columns,sticky='w',pady=pady)
+            row+=1
+            return widget
+        def hint(text,**values):
+            wide(ttk.Label(
+                form,text=_(text,**values),style='Sub.TLabel',
+                wraplength=max(320,available_width-56),justify='left',
+            ))
+        def check(text,variable,**values):
+            return wide(ttk.Checkbutton(form,text=_(text,**values),variable=variable))
         language_var=tk.StringVar(value=SUPPORTED_LANGUAGES[get_language()])
-        ttk.Label(form,text=_('Språk')).grid(row=0,column=0,sticky='w',padx=(0,14),pady=6)
-        ttk.Combobox(form,textvariable=language_var,state='readonly',values=list(SUPPORTED_LANGUAGES.values()),width=15).grid(row=0,column=1,sticky='w',pady=6)
-        fields=[('Dagar efter förfallodatum till P1','p1_days'),('Dagar efter P1 till P2','p2_days'),('Dagar efter P2 till Kronofogden-granskning','p3_days'),('Påminnelseavgift per påminnelse (fakturans valuta)','fee'),('Dröjsmålsränta per år (%)','interest'),('Anmärkningstid enligt fakturavillkor (dagar)','objection_days'),('Betalningsfrist på påminnelsen (dagar)','payment_deadline_days')]
+        heading('Språk')
+        ttk.Combobox(
+            form,textvariable=language_var,state='readonly',
+            values=list(SUPPORTED_LANGUAGES.values()),width=18,
+        ).grid(row=row,column=0,columnspan=2,sticky='w',pady=(0,2));row+=1
+        fields=[
+            ('Dagar efter förfallodatum till P1','p1_days'),
+            ('Dagar efter P1 till P2','p2_days'),
+            ('Dagar efter P2 till Kronofogden-granskning','p3_days'),
+            ('Påminnelseavgift per påminnelse (fakturans valuta)','fee'),
+            ('Dröjsmålsränta per år (%)','interest'),
+            ('Anmärkningstid enligt fakturavillkor (dagar)','objection_days'),
+            ('Betalningsfrist på påminnelsen (dagar)','payment_deadline_days'),
+        ]
+        heading('Påminnelser')
         entries={}
-        for i,(label,key) in enumerate(fields,start=1):
-            ttk.Label(form,text=_(label)).grid(row=i,column=0,sticky='w',padx=(0,14),pady=6);e=ttk.Entry(form,width=16);e.grid(row=i,column=1,pady=6);e.insert(0,setting(key));entries[key]=e
-            if key=='fee' and setting('fee_locked')=='1':e.configure(state='disabled')
-        autostart_var=tk.BooleanVar(value=setting('autostart')=='1')
-        ttk.Checkbutton(form,text=_('Starta {app_name} automatiskt när jag loggar in',app_name=APP_NAME),variable=autostart_var).grid(row=len(fields)+2,column=0,columnspan=3,sticky='w',pady=(10,3))
-        ttk.Label(form,text=_('Autostart för din användare · {platforms}',platforms=SUPPORTED_PLATFORMS),style='Sub.TLabel').grid(row=len(fields)+3,column=0,columnspan=3,sticky='w')
-        automatic_updates_var=tk.BooleanVar(value=setting('update_auto')=='1')
-        ttk.Checkbutton(form,text=_('Sök efter och installera uppdateringar automatiskt två gånger per dygn'),variable=automatic_updates_var).grid(row=len(fields)+4,column=0,columnspan=3,sticky='w',pady=(10,3))
+        field_top=row
+        for index,(label,key) in enumerate(fields):
+            cell=ttk.Frame(form)
+            cell.grid(
+                row=field_top+index//columns,column=(index%columns)*2,columnspan=2,
+                sticky='w',padx=(0,24),pady=(2,6),
+            )
+            ttk.Label(cell,text=_(label),style='Sub.TLabel').grid(row=0,column=0,sticky='w')
+            entry=ttk.Entry(cell,width=14)
+            entry.grid(row=1,column=0,sticky='w',pady=(2,0))
+            entry.insert(0,setting(key))
+            entries[key]=entry
+            if key=='fee' and setting('fee_locked')=='1':entry.configure(state='disabled')
+        row=field_top+(len(fields)+columns-1)//columns
         locked=tk.BooleanVar(value=setting('fee_locked')=='1')
         def toggle_lock():
             entries['fee'].configure(state='disabled' if locked.get() else 'normal')
-        ttk.Checkbutton(form,text=_('Lås påminnelseavgiften (förhindra oavsiktlig ändring)'),variable=locked,command=toggle_lock).grid(row=len(fields)+5,column=0,columnspan=3,sticky='w',pady=(10,4))
-        ttk.Label(form,text=_('Låset skyddar inställningen i appen; lås upp här för att ändra avgiften.'),style='Sub.TLabel').grid(row=len(fields)+6,column=0,columnspan=3,sticky='w')
-        ttk.Label(form,text=_('Obs: påminnelseavgiften använder fakturans valuta. Kontrollera att avgift, ränta och villkor gäller för era kunder.'),style='Sub.TLabel').grid(row=len(fields)+7,column=0,columnspan=3,sticky='w',pady=(8,0))
-        automatic_import_var=tk.BooleanVar(value=setting('auto_import')=='1')
-        ttk.Checkbutton(form,text=_('Bevaka importmappen och importera nya PDF:er automatiskt'),variable=automatic_import_var).grid(row=len(fields)+8,column=0,columnspan=3,sticky='w',pady=(10,3))
-        ledger_reminder_var=tk.BooleanVar(value=setting('ledger_friday_reminder')=='1')
-        ttk.Checkbutton(form,text=_('Påminn om att importera kundreskontralista varje fredag'),variable=ledger_reminder_var).grid(row=len(fields)+9,column=0,columnspan=3,sticky='w',pady=(10,3))
-        automatic_cache_var=tk.BooleanVar(value=setting('cache_auto')=='1')
-        ttk.Checkbutton(form,text=_('Rensa appcache automatiskt en gång per dygn samt vid avslut'),variable=automatic_cache_var).grid(row=len(fields)+10,column=0,columnspan=3,sticky='w',pady=(10,3))
-        ttk.Label(form,text=_('Under dagen endast cache äldre än 24 timmar; vid avslut all identifierad appcache.\nFakturor och importmappen rörs inte.'),style='Sub.TLabel').grid(row=len(fields)+11,column=0,columnspan=3,sticky='w')
-        self._font_scale_var=tk.StringVar(value=font_scale_label(self.ui_font_scale))
-        ttk.Label(form,text=_('Textstorlek')).grid(row=len(fields)+12,column=0,sticky='w',padx=(0,14),pady=(12,3))
-        font_scale_combo=ttk.Combobox(form,textvariable=self._font_scale_var,state='readonly',values=[font_scale_label(choice) for choice in FONT_SCALE_CHOICES],width=15)
-        font_scale_combo.grid(row=len(fields)+12,column=1,sticky='w',pady=(12,3))
-        ttk.Label(form,text=_('Textstorleken kan också ändras med Ctrl/Cmd +, Ctrl/Cmd − och Ctrl/Cmd 0.'),style='Sub.TLabel').grid(row=len(fields)+13,column=0,columnspan=3,sticky='w')
-        ttk.Label(form,text=_('Högkontrast följer systemets inställning och uppdateras automatiskt.'),style='Sub.TLabel').grid(row=len(fields)+14,column=0,columnspan=3,sticky='w',pady=(8,0))
+        ttk.Checkbutton(
+            form,text=_('Lås påminnelseavgiften (förhindra oavsiktlig ändring)'),
+            variable=locked,command=toggle_lock,
+        ).grid(row=row,column=0,columnspan=total_columns,sticky='w',pady=(2,2))
+        row+=1
+        hint('Låset skyddar inställningen i appen; lås upp här för att ändra avgiften.')
+        hint('Obs: påminnelseavgiften använder fakturans valuta. Kontrollera att avgift, ränta och villkor gäller för era kunder.')
+        heading('Start och uppdateringar')
+        autostart_var=tk.BooleanVar(value=setting('autostart')=='1')
+        check('Starta {app_name} automatiskt när jag loggar in',autostart_var,app_name=APP_NAME)
+        hint('Autostart för din användare · {platforms}',platforms=SUPPORTED_PLATFORMS)
+        automatic_updates_var=tk.BooleanVar(value=setting('update_auto')=='1')
+        check('Sök efter och installera uppdateringar automatiskt två gånger per dygn',automatic_updates_var)
         start_minimized_var=tk.BooleanVar(value=setting('start_minimized')!='0')
-        ttk.Checkbutton(form,text=_('Starta alltid minimerad i systemfältet'),variable=start_minimized_var).grid(row=len(fields)+15,column=0,columnspan=3,sticky='w',pady=(12,2))
-        ttk.Label(form,text=_('Ett nytt startförsök öppnar ändå det befintliga fönstret.'),style='Sub.TLabel').grid(row=len(fields)+16,column=0,columnspan=3,sticky='w')
+        check('Starta alltid minimerad i systemfältet',start_minimized_var)
+        hint('Ett nytt startförsök öppnar ändå det befintliga fönstret.')
+        heading('Import, reskontra och cache')
+        automatic_import_var=tk.BooleanVar(value=setting('auto_import')=='1')
+        check('Bevaka importmappen och importera nya PDF:er automatiskt',automatic_import_var)
+        ledger_reminder_var=tk.BooleanVar(value=setting('ledger_friday_reminder')=='1')
+        check('Påminn om att importera kundreskontralista varje fredag',ledger_reminder_var)
+        automatic_cache_var=tk.BooleanVar(value=setting('cache_auto')=='1')
+        check('Rensa appcache automatiskt en gång per dygn samt vid avslut',automatic_cache_var)
+        hint('Under dagen endast cache äldre än 24 timmar; vid avslut all identifierad appcache.\nFakturor och importmappen rörs inte.')
+        heading('Tillgänglighet')
+        self._font_scale_var=tk.StringVar(value=font_scale_label(self.ui_font_scale))
+        text_cell=ttk.Frame(form)
+        text_cell.grid(row=row,column=0,columnspan=2,sticky='w',pady=(2,6));row+=1
+        ttk.Label(text_cell,text=_('Textstorlek'),style='Sub.TLabel').grid(row=0,column=0,sticky='w')
+        ttk.Combobox(
+            text_cell,textvariable=self._font_scale_var,state='readonly',
+            values=[font_scale_label(choice) for choice in FONT_SCALE_CHOICES],width=16,
+        ).grid(row=1,column=0,sticky='w',pady=(2,0))
+        hint('Textstorleken kan också ändras med Ctrl/Cmd +, Ctrl/Cmd − och Ctrl/Cmd 0.')
+        hint('Högkontrast följer systemets inställning och uppdateras automatiskt.')
+        heading('Självlärande')
         learning_var=tk.BooleanVar(value=setting('learning_enabled')!='0')
-        learning_row=ttk.Frame(form);learning_row.grid(row=len(fields)+17,column=0,columnspan=3,sticky='w',pady=(12,2))
-        ttk.Checkbutton(learning_row,text=_('Lär sig av sparade fakturor och leverantörsval (endast lokalt)'),variable=learning_var).pack(side='left')
-        ttk.Button(learning_row,text=_('Granska inlärning'),command=lambda:self.review_learning(w)).pack(side='left',padx=(14,0))
-        ttk.Label(form,text=_('Inga inlärda värden används utan att du bekräftar dem varje gång. Allt kan glömmas.'),style='Sub.TLabel').grid(row=len(fields)+18,column=0,columnspan=3,sticky='w')
+        learning_row=ttk.Frame(form)
+        learning_row.grid(row=row,column=0,columnspan=total_columns,sticky='w',pady=(2,2));row+=1
+        ttk.Checkbutton(
+            learning_row,text=_('Lär sig av sparade fakturor och leverantörsval (endast lokalt)'),
+            variable=learning_var,
+        ).pack(side='left')
+        ttk.Button(
+            learning_row,text=_('Granska inlärning'),command=lambda:self.review_learning(w),
+        ).pack(side='left',padx=(14,0))
+        hint('Inga inlärda värden används utan att du bekräftar dem varje gång. Allt kan glömmas.')
         def save():
             try:
                 for k,e in entries.items():
@@ -4140,7 +4243,8 @@ class ReminderApp(tk.Tk):
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()
-        ttk.Button(form,text=_('Spara inställningar'),command=save,style='Accent.TButton').grid(row=len(fields)+19,column=1,sticky='e',pady=(15,0))
+        ttk.Button(footer,text=_('Stäng'),command=w.destroy).pack(side='right')
+        ttk.Button(footer,text=_('Spara inställningar'),command=save,style='Accent.TButton').pack(side='right',padx=(0,8))
 
 def main():
     instance=None
