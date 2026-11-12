@@ -290,7 +290,16 @@ Original och skrivbordsformat ligger i `assets/`:
 - `paypamin_flow.icns` – macOS-ikonkälla.
 - `icons/` – funktionsikoner med normal och `_light`-variant för varje symbol.
 
-Generera om logotyp, raster-/skrivbordsikoner och samtliga funktionsikoner med Pillow installerat:
+Tryckfilerna ligger i `assets/print/` och **följer med releasepaketet** – de behöver aldrig laddas ner separat. Öppna mappen direkt från appen med **Arkiv → Öppna tryckfiler**.
+
+- `paypamin_logo_print.svg` och `paypamin_logo_print.pdf` – färgversion, vektor.
+- `paypamin_logo_print_mono.svg` och `paypamin_logo_print_mono.pdf` – enfärgsversion för stämpel, gravyr och etikett.
+- `paypamin_logo_print*.png` – förhandsvisningar på vit botten.
+- `README.txt` – mått, färger, fritt utrymme och rekommendationer till tryckeriet.
+
+PDF:erna är 98 × 29,9 mm inklusive 4 mm fritt utrymme, innehåller bara vektor och har metadata med skapare och copyright.
+
+Generera om logotyp, raster-/skrivbordsikoner, tryck-PDF:er och samtliga funktionsikoner med Pillow installerat:
 
 ```sh
 python assets/build_icons.py

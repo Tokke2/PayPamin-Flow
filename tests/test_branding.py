@@ -78,8 +78,8 @@ class BrandingTests(unittest.TestCase):
             "paypamin_flow.svg",
             "paypamin_flow_small.svg",
             "paypamin_logo.svg",
-            "paypamin_logo_print.svg",
-            "paypamin_logo_print_mono.svg",
+            "print/paypamin_logo_print.svg",
+            "print/paypamin_logo_print_mono.svg",
         ):
             with self.subTest(svg=name):
                 text = (ASSETS / name).read_text(encoding="utf-8")
@@ -106,7 +106,7 @@ class BrandingTests(unittest.TestCase):
     def test_print_lockups_have_flat_ink_and_no_transparency(self):
         from PIL import Image
 
-        for name in ("paypamin_logo_print.png", "paypamin_logo_print_mono.png"):
+        for name in ("print/paypamin_logo_print.png", "print/paypamin_logo_print_mono.png"):
             with self.subTest(image=name), Image.open(ASSETS / name) as image:
                 self.assertEqual(image.mode, "RGB")
                 self.assertEqual(image.size, (2400, 582))
@@ -114,9 +114,38 @@ class BrandingTests(unittest.TestCase):
                 self.assertEqual(image.getpixel((0, 0)), (255, 255, 255))
                 self.assertEqual(image.getpixel((2399, 0)), (255, 255, 255))
 
-        mono = (ASSETS / "paypamin_logo_print_mono.svg").read_text(encoding="utf-8")
+        mono = (ASSETS / "print" / "paypamin_logo_print_mono.svg").read_text(encoding="utf-8")
         self.assertIn('fill="#000000"', mono)
         self.assertNotIn("#0F2F63", mono)
+
+    def test_print_pdfs_are_vector_and_sized_for_a_printer(self):
+        import pymupdf
+
+        for name in ("paypamin_logo_print.pdf", "paypamin_logo_print_mono.pdf"):
+            with self.subTest(pdf=name):
+                with pymupdf.open(ASSETS / "print" / name) as document:
+                    self.assertEqual(document.page_count, 1)
+                    page = document[0]
+                    self.assertEqual(page.get_images(), [])
+                    self.assertGreater(len(page.get_drawings()), 0)
+                    # 90 mm artwork plus 4 mm clear space on every side.
+                    self.assertAlmostEqual(page.rect.width / 72 * 25.4, 98.0, delta=0.5)
+                    self.assertAlmostEqual(page.rect.height / 72 * 25.4, 29.9, delta=0.5)
+                    self.assertIn(APP_AUTHOR, document.metadata.get("author", ""))
+
+    def test_print_folder_is_self_contained_and_documented(self):
+        print_dir = ASSETS / "print"
+        expected = {
+            "paypamin_logo_print.svg", "paypamin_logo_print_mono.svg",
+            "paypamin_logo_print.pdf", "paypamin_logo_print_mono.pdf",
+            "paypamin_logo_print.png", "paypamin_logo_print_mono.png",
+            "README.txt",
+        }
+        self.assertEqual({path.name for path in print_dir.iterdir()}, expected)
+        instructions = (print_dir / "README.txt").read_text(encoding="utf-8")
+        self.assertIn(APP_AUTHOR, instructions)
+        self.assertIn("90 mm", instructions)
+        self.assertIn("assets/print", instructions)
 
     def test_horizontal_logo_has_vector_raster_and_creator_metadata(self):
         from PIL import Image

@@ -57,19 +57,60 @@ def compare_images(expected: Path, rebuilt: Path) -> list[str]:
     return problems
 
 
+def compare_print_pdf(path: Path) -> list[str]:
+    """Confirm a print PDF is vector-only at the documented physical size."""
+    problems: list[str] = []
+    try:
+        import pymupdf
+    except ImportError:  # older PyMuPDF releases only expose ``fitz``
+        import fitz as pymupdf
+    try:
+        with pymupdf.open(path) as document:
+            if document.page_count != 1:
+                return [f"{path.name}: {document.page_count} pages instead of 1"]
+            page = document[0]
+            if page.get_images():
+                problems.append(f"{path.name}: embeds a raster image instead of vector art")
+            if not page.get_drawings():
+                problems.append(f"{path.name}: contains no vector artwork")
+            width_mm = page.rect.width / 72 * 25.4
+            height_mm = page.rect.height / 72 * 25.4
+            if not (97.0 <= width_mm <= 99.0 and 29.0 <= height_mm <= 31.0):
+                problems.append(
+                    f"{path.name}: page is {width_mm:.1f} x {height_mm:.1f} mm, expected 98 x 29.9 mm"
+                )
+    except Exception as exc:  # a corrupt PDF must fail the check, not crash it
+        problems.append(f"{path.name}: unreadable ({exc})")
+    return problems
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as folder:
         rebuilt = Path(folder)
         build_icons.main(rebuilt)
         problems: list[str] = []
 
-        committed_png = sorted(p for p in ASSETS.glob("*.png"))
+        committed_png = sorted(p for p in ASSETS.rglob("*.png") if p.parent.name != "icons")
         for path in committed_png:
-            candidate = rebuilt / path.name
+            candidate = rebuilt / path.relative_to(ASSETS)
             if not candidate.is_file():
                 problems.append(f"{path.name}: not produced by the vector masters")
                 continue
             problems.extend(compare_images(path, candidate))
+
+        # Print PDFs are checked structurally: vector only, one page, and the
+        # physical size the README promises to a print shop.
+        print_dir = ASSETS / "print"
+        for name in ("paypamin_logo_print.pdf", "paypamin_logo_print_mono.pdf"):
+            path = print_dir / name
+            candidate = rebuilt / "print" / name
+            if not path.is_file():
+                problems.append(f"{name}: missing from assets/print")
+                continue
+            if not candidate.is_file():
+                problems.append(f"{name}: not produced by the vector masters")
+                continue
+            problems.extend(compare_print_pdf(path))
 
         # Binary containers only need to exist with the same embedded sizes;
         # ICO/ICNS headers carry timestamps that are not part of the artwork.
@@ -83,7 +124,7 @@ def main() -> int:
                 if committed.size != fresh.size:
                     problems.append(f"{name}: leading image size differs")
 
-        vector_files = sorted(ASSETS.glob("*.svg"))
+        vector_files = sorted(ASSETS.rglob("*.svg"))
         if not vector_files:
             problems.append("no SVG masters found")
         for path in vector_files:
@@ -99,7 +140,10 @@ def main() -> int:
         for problem in problems:
             print(f"error: {problem}")
         return 1
-    print(f"Branding verified: {len(committed_png)} PNG files and 2 icon containers match the vector masters")
+    print(
+        f"Branding verified: {len(committed_png)} PNG files, 2 print PDFs "
+        "and 2 icon containers match the vector masters"
+    )
     return 0
 
 

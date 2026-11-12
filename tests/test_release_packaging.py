@@ -127,6 +127,22 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("assets/paypamin_flow.icns", names)
                 self.assertIn("assets/paypamin_logo.png", names)
                 self.assertIn("assets/paypamin_logo.svg", names)
+                # Print files travel inside the package; nothing is a separate download.
+                for print_name in (
+                    "assets/print/paypamin_logo_print.svg",
+                    "assets/print/paypamin_logo_print_mono.svg",
+                    "assets/print/paypamin_logo_print.pdf",
+                    "assets/print/paypamin_logo_print_mono.pdf",
+                    "assets/print/paypamin_logo_print.png",
+                    "assets/print/paypamin_logo_print_mono.png",
+                    "assets/print/README.txt",
+                ):
+                    self.assertIn(print_name, names)
+                    self.assertIn(print_name, manifest["files"])
+                self.assertEqual(
+                    sorted(name for name in names if name.startswith("assets/print/")),
+                    sorted(name for name in PYTHON_PACKAGE_REQUIRED_FILES if name.startswith("assets/print/")),
+                )
                 for icon_name in ICON_NAMES:
                     self.assertIn(f"assets/icons/{icon_name}.png", names)
                     self.assertIn(f"assets/icons/{icon_name}_light.png", names)

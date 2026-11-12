@@ -9,8 +9,9 @@ The vector files are the single source of truth:
 * ``assets/paypamin_flow.svg``       – product mark, detail version (48 px and up)
 * ``assets/paypamin_flow_small.svg`` – simplified mark for 16–32 px
 * ``assets/paypamin_logo.svg``       – screen lockup (wordmark as outlines)
-* ``assets/paypamin_logo_print.svg`` – flat print lockup, CMYK-safe colours
-* ``assets/paypamin_logo_print_mono.svg`` – one-colour print lockup
+* ``assets/print/paypamin_logo_print.svg`` – flat print lockup
+* ``assets/print/paypamin_logo_print_mono.svg`` – one-colour print lockup
+* ``assets/print/*.pdf`` – vector PDFs at 90 mm width for a print shop
 
 Every PNG, ICO and ICNS file is rasterised from those files, so a change to
 the artwork only has to be made once. The small UI icons use a common
@@ -45,13 +46,23 @@ ACTION_ICONS = (
 )
 
 
+PRINT_ASSETS = ASSETS / "print"
+
 SVG_SOURCES = {
     "icon": ASSETS / "paypamin_flow.svg",
     "icon_small": ASSETS / "paypamin_flow_small.svg",
     "logo": ASSETS / "paypamin_logo.svg",
-    "logo_print": ASSETS / "paypamin_logo_print.svg",
-    "logo_print_mono": ASSETS / "paypamin_logo_print_mono.svg",
+    "logo_print": PRINT_ASSETS / "paypamin_logo_print.svg",
+    "logo_print_mono": PRINT_ASSETS / "paypamin_logo_print_mono.svg",
 }
+
+# The lockups ship as three formats so a print shop never has to convert
+# anything: SVG (editable), PDF (vector, with the physical size in mm) and a
+# high-resolution PNG preview. They travel inside the release package; no
+# separate download is needed.
+PRINT_WIDTH_MM = 90
+PRINT_MARGIN_MM = 4
+MM_TO_POINT = 72 / 25.4
 
 # Below this size the detailed mark turns into mush, so the simplified
 # artwork is used instead. Windows uses 16/24/32 px in the taskbar and tray.
@@ -106,24 +117,52 @@ def create_horizontal_logo(width: int = 512) -> Image.Image:
     return rasterise_svg(SVG_SOURCES["logo"], width, height)
 
 
-def create_print_logo(path: Path, width: int = 1600, mono: bool = False) -> Path:
-    """Write a high-resolution print lockup on white paper.
-
-    Print previews have no transparency: they show what the printer puts on
-    paper, so the artwork is composited on white instead of turning the
-    transparent pixels black.
-    """
+def create_print_logo(path: Path, width: int = 1600, mono: bool = False):
+    """Rasterise a print lockup and put it on white paper."""
     source = SVG_SOURCES["logo_print_mono" if mono else "logo_print"]
     height = round(width * 180 / 742)
     image = rasterise_svg(source, width, height).convert("RGBA")
     paper = Image.new("RGBA", image.size, (255, 255, 255, 255))
-    return image, paper
+    paper.alpha_composite(image)
+    return paper
 
 
 def save_print_logo(path: Path, width: int = 1600, mono: bool = False, data=None) -> Path:
-    image, paper = create_print_logo(path, width=width, mono=mono)
-    paper.alpha_composite(image)
-    paper.convert("RGB").save(path, format="PNG", pnginfo=data, optimize=True)
+    image = create_print_logo(path, width=width, mono=mono)
+    image.convert("RGB").save(path, format="PNG", pnginfo=data, optimize=True)
+    return path
+
+
+def save_print_pdf(path: Path, mono: bool = False) -> Path:
+    """Write a vector PDF at a real print size for a commercial printer.
+
+    The SVG is placed with 4 mm of clear space on a page sized to the artwork,
+    so the PDF opens at the right physical dimensions. Text and shapes stay
+    vector: no raster image is embedded, which keeps edges sharp at any size.
+    """
+    from reportlab.graphics import renderPDF
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas as pdf_canvas
+    from svglib.svglib import svg2rlg
+
+    source = SVG_SOURCES["logo_print_mono" if mono else "logo_print"]
+    drawing = svg2rlg(str(source))
+    if drawing is None:
+        raise SystemExit(f"Could not read SVG artwork: {source}")
+    scale = (PRINT_WIDTH_MM * mm) / drawing.width
+    drawing.width *= scale
+    drawing.height *= scale
+    drawing.scale(scale, scale)
+    margin = PRINT_MARGIN_MM * mm
+    page_width = drawing.width + 2 * margin
+    page_height = drawing.height + 2 * margin
+    sheet = pdf_canvas.Canvas(str(path), pagesize=(page_width, page_height))
+    sheet.setTitle("PayPamin Flow logotyp")
+    sheet.setAuthor(APP_AUTHOR)
+    sheet.setSubject("Tryckfärdig vektorlogotyp för PayPamin Flow")
+    renderPDF.draw(drawing, sheet, margin, margin)
+    sheet.showPage()
+    sheet.save()
     return path
 
 
@@ -290,8 +329,12 @@ def main(output_dir: Path | None = None):
     )
     logo.save(target / "paypamin_logo_1024.png", pnginfo=data, optimize=True)
 
+    print_target = (target / "print") if output_dir else PRINT_ASSETS
+    print_target.mkdir(parents=True, exist_ok=True)
     for name, mono in (("paypamin_logo_print.png", False), ("paypamin_logo_print_mono.png", True)):
-        save_print_logo(target / name, width=2400, mono=mono, data=data)
+        save_print_logo(print_target / name, width=2400, mono=mono, data=data)
+    save_print_pdf(print_target / "paypamin_logo_print.pdf", mono=False)
+    save_print_pdf(print_target / "paypamin_logo_print_mono.pdf", mono=True)
 
     # Windows: every size Windows may request, small sizes from the simple mark.
     ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]

@@ -143,6 +143,7 @@ SVG_DIR.mkdir(parents=True,exist_ok=True)
 IMPORT_DIR = DATA_FOLDER / "import"
 IMPORT_DIR.mkdir(parents=True,exist_ok=True)
 ICON_DIR = RESOURCE_DIR / "assets"
+PRINT_DIR = ICON_DIR / "print"
 LOG_DIR = APP_DIR / "logs"
 LOG_DIR.mkdir(parents=True,exist_ok=True)
 
@@ -2355,6 +2356,7 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Importera JSON-journal'),command=self.import_journal)
         file_menu.add_command(label=_('Importera reskontralista'),command=self.import_ledger_list)
         file_menu.add_command(label=_('Öppna exportmapp'),command=self.open_export_folder)
+        file_menu.add_command(label=_('Öppna tryckfiler'),command=self.open_print_folder)
         file_menu.add_command(label=_('Rensa cache nu'),command=self.clear_cache_now)
         file_menu.add_separator()
         file_menu.add_command(label=_('Dölj till systemfältet'),command=self.hide_to_tray)
@@ -3219,6 +3221,19 @@ class ReminderApp(tk.Tk):
         EXPORT_DIR.mkdir(exist_ok=True)
         try:open_path(EXPORT_DIR)
         except Exception:logger.exception('Could not open export folder')
+
+    def open_print_folder(self):
+        """Open the print files that travel inside the release package."""
+        try:
+            if not PRINT_DIR.is_dir():
+                raise FileNotFoundError(PRINT_DIR)
+            open_path(PRINT_DIR)
+            log_activity('branding','print_files_opened',folder=str(PRINT_DIR))
+        except Exception:
+            logger.exception('Could not open the print folder')
+            messagebox.showwarning(_('Tryckfiler'),
+                _('Tryckfilerna saknas i den här installationen. Kör python assets/build_icons.py i appmappen och försök igen.'),
+                parent=self)
 
     def show_ledger_history(self,window):
         search=getattr(self,'invoice_search_var',None)
