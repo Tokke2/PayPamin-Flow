@@ -68,6 +68,9 @@ MM_TO_POINT = 72 / 25.4
 # artwork is used instead. Windows uses 16/24/32 px in the taskbar and tray.
 SMALL_ICON_LIMIT = 40
 RASTER_OVERSAMPLE = 4
+# Menu and button glyphs are 16 px in Tk; drawing them at 4x and reducing them
+# keeps the strokes solid instead of grey.
+UI_ICON_SIZE = 16
 
 
 def rasterise_svg(path: Path, width: int, height: int | None = None) -> Image.Image:
@@ -101,7 +104,14 @@ def rasterise_svg(path: Path, width: int, height: int | None = None) -> Image.Im
             raw = pixmap.samples
             mode = "RGBA" if pixmap.alpha else "RGB"
             image = Image.frombytes(mode, (pixmap.width, pixmap.height), raw)
-    return image.resize((width, height), Image.Resampling.LANCZOS)
+    if image.mode != "RGBA":
+        return image.resize((width, height), Image.Resampling.LANCZOS)
+    # Downsample in premultiplied alpha. Resizing straight RGBA blends the
+    # colour of fully transparent pixels (black) into the edge, which shows up
+    # as a grey halo around the icon - the "muddy" look at 16-48 px.
+    return image.convert("RGBa").resize(
+        (width, height), Image.Resampling.LANCZOS
+    ).convert("RGBA")
 
 
 def create_icon(size: int = SIZE) -> Image.Image:
@@ -110,11 +120,20 @@ def create_icon(size: int = SIZE) -> Image.Image:
     return rasterise_svg(source, size, size)
 
 
+# The lockup's own aspect ratio (viewBox 739.88 x 180). Deriving the height
+# from it keeps the wordmark from being stretched, which looks soft even when
+# the pixels themselves are sharp.
+LOGO_ASPECT = 739.88 / 180
+
+
+def logo_height(width: int) -> int:
+    """Return the exact proportional height for a lockup of ``width`` pixels."""
+    return max(1, round(width / LOGO_ASPECT))
+
+
 def create_horizontal_logo(width: int = 512) -> Image.Image:
     """Return the screen lockup with the outlined wordmark."""
-    drawing_width, drawing_height = 555.0, 135.0
-    height = round(width * drawing_height / drawing_width)
-    return rasterise_svg(SVG_SOURCES["logo"], width, height)
+    return rasterise_svg(SVG_SOURCES["logo"], width, logo_height(width))
 
 
 def create_print_logo(path: Path, width: int = 1600, mono: bool = False):
@@ -217,7 +236,8 @@ def check(canvas, points=((6.5, 12.2), (10.2, 16), (17.8, 7.5)), width=2.1):
     canvas.line(list(points), width)
 
 
-def draw_action_icon(name, color):
+def draw_action_icon(name, color, size=UI_ICON_SIZE):
+    """Draw one action glyph on the 24 x 24 grid and reduce it to ``size``."""
     c = IconCanvas(color)
     if name == "add":
         c.line([(12, 4), (12, 20)], 2.2); c.line([(4, 12), (20, 12)], 2.2)
@@ -299,7 +319,11 @@ def draw_action_icon(name, color):
         c.line([(19, 3), (20, 8), (15, 8)], 1.8); c.line([(5, 21), (4, 16), (9, 16)], 1.8)
     else:
         raise ValueError(name)
-    return c.image.resize((16, 16), Image.Resampling.LANCZOS)
+    # Premultiplied downsampling keeps the edges the icon colour instead of
+    # blending them with the transparent black pixels around them.
+    return c.image.convert("RGBa").resize(
+        (size, size), Image.Resampling.LANCZOS
+    ).convert("RGBA")
 
 
 def metadata():
@@ -323,11 +347,14 @@ def main(output_dir: Path | None = None):
         icons[size].save(target / f"paypamin_flow_{size}.png", pnginfo=data, optimize=True)
     icons[256].save(target / "paypamin_flow.png", pnginfo=data, optimize=True)
 
-    logo = create_horizontal_logo(555)
-    logo.resize((256, 64), Image.Resampling.LANCZOS).save(
+    # One high-resolution lockup for HiDPI and previews, plus the small header
+    # version. Both keep the artwork's own proportions.
+    create_horizontal_logo(1024).save(
+        target / "paypamin_logo_1024.png", pnginfo=data, optimize=True,
+    )
+    create_horizontal_logo(256).save(
         target / "paypamin_logo.png", pnginfo=data, optimize=True,
     )
-    logo.save(target / "paypamin_logo_1024.png", pnginfo=data, optimize=True)
 
     print_target = (target / "print") if output_dir else PRINT_ASSETS
     print_target.mkdir(parents=True, exist_ok=True)
@@ -351,7 +378,9 @@ def main(output_dir: Path | None = None):
 
     ui_target.mkdir(parents=True, exist_ok=True)
     for name in ACTION_ICONS:
-        draw_action_icon(name, "#344054").save(ui_target / f"{name}.png", pnginfo=data, optimize=True)
+        # The same navy as the brand ink keeps menus and buttons crisp instead
+        # of a washed-out grey on the light background.
+        draw_action_icon(name, "#0F2F63").save(ui_target / f"{name}.png", pnginfo=data, optimize=True)
         draw_action_icon(name, "#FFFFFF").save(ui_target / f"{name}_light.png", pnginfo=data, optimize=True)
     print(f"Generated product branding from vector masters and {len(ACTION_ICONS) * 2} UI icons in {target}")
 

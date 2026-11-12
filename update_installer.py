@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -21,7 +22,7 @@ import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
@@ -38,6 +39,9 @@ from update_checker import ReleaseInfo
 
 DOWNLOAD_TIMEOUT = 90
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+_LOG_ERROR_MARKERS = re.compile(
+    r"fail|error|could not|invalid|mismatch|cancel|rolled back", re.IGNORECASE
+)
 MAX_CHECKSUM_BYTES = 65_536
 MAX_PACKAGE_FILES = 500
 UPDATE_READY_FILE_ENV = "PAYPAMIN_UPDATE_READY_FILE"
@@ -75,11 +79,18 @@ class InstalledUpdate:
 
 
 def _log(plan: UpdatePlan, message: str) -> None:
+    """Append an update event to the shared technical log.
+
+    The line uses the application's own record format so the updater writes to
+    app.log instead of a separate file, and so errors.log recognises a failed
+    step as an error.
+    """
     try:
         plan.log_path.parent.mkdir(parents=True, exist_ok=True)
+        level = "ERROR" if _LOG_ERROR_MARKERS.search(message) else "INFO"
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
         with plan.log_path.open("a", encoding="utf-8") as handle:
-            timestamp = datetime.now(timezone.utc).isoformat()
-            handle.write(f"{timestamp} {message}\n")
+            handle.write(f"{stamp} {level} {message}\n")
     except OSError:
         pass
 
@@ -290,7 +301,7 @@ def stage_update(
             source_path=source_path,
             target_path=(target_path or Path(__file__).resolve().parent).resolve(),
             work_dir=work_dir,
-            log_path=log_path or Path.home() / ".paminnelseapp" / "logs" / "update.log",
+            log_path=log_path or Path.home() / ".paminnelseapp" / "logs" / "app.log",
         )
         _log(plan, f"Validated Python update {release.version}")
         return plan

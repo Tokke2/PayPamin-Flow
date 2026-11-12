@@ -7,7 +7,7 @@ OCR för skannade PDF: se README.
 Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.
 """
 from __future__ import annotations
-import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib, tempfile, json, time
+import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib, tempfile, json, time, platform
 from logging.handlers import RotatingFileHandler
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -17,8 +17,8 @@ import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_ID, APP_NAME, APP_SLUG, APP_VERSION, MINIMIZED_START_ARG, SUPPORTED_PLATFORMS
-from activity_log import instrument_tk_command, log_activity
-from build_info import APP_RELEASE_COMMIT
+from activity_log import ACTIVITY_LOG_NAME, ACTIVITY_LOGGER_NAME, instrument_tk_command, log_activity
+from build_info import APP_RELEASE_COMMIT, APP_RELEASE_ID
 from app_backup import (
     BackupError,
     BackupPaths,
@@ -32,7 +32,7 @@ from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from console_free import configure_console_free_subprocesses
 from error_log import ERROR_LOG_NAME, refresh_error_log, resolve_errors
-from log_archive import DailySizeRotatingFileHandler, archive_old_logs
+from log_archive import RETENTION_DAYS, DailySizeRotatingFileHandler, archive_old_logs
 from customer_contacts import (
     EmailAddressError, ensure_customer_contact_schema, get_customer_contact,
     normalize_email_addresses, parse_email_addresses, save_customer_contact,
@@ -144,8 +144,28 @@ IMPORT_DIR = DATA_FOLDER / "import"
 IMPORT_DIR.mkdir(parents=True,exist_ok=True)
 ICON_DIR = RESOURCE_DIR / "assets"
 PRINT_DIR = ICON_DIR / "print"
+
+
+def tray_icon_path(platform_name=None):
+    """Return the tray bitmap that matches the platform's icon size.
+
+    Windows draws a 16-32 px tray icon and scales whatever image it is given;
+    handing it the 256 px detailed mark produced a blurred, muddy result. The
+    simplified master at 32 px lands on the real tray sizes, and macOS/Linux
+    menu bars are happiest with the 48 px variant.
+    """
+    platform_name = platform_name or sys.platform
+    name = 'paypamin_flow_32.png' if platform_name.startswith('win') else 'paypamin_flow_48.png'
+    candidate = ICON_DIR / name
+    return candidate if candidate.is_file() else ICON_DIR / 'paypamin_flow_256.png'
+
+
 LOG_DIR = APP_DIR / "logs"
 LOG_DIR.mkdir(parents=True,exist_ok=True)
+
+
+# Legacy startup/update side logs are merged into app.log on first start.
+_LEGACY_SIDE_LOG=re.compile(r'^(?:legacy-(?:\d+-)?)?(?:startup|update)\.log(?:\.\d+)?$')
 
 
 def _relocate_legacy_logs():
@@ -155,7 +175,7 @@ def _relocate_legacy_logs():
     except OSError:return moved,['.']
     for source in candidates:
         name=source.name
-        known=name in {'app.log','errors.log','startup.log','update.log'} or re.fullmatch(r'(?:app|update)\.log\.\d+',name)
+        known=name in {'app.log','activity.log','errors.log','startup.log','update.log'} or re.fullmatch(r'(?:app|activity|startup|update)\.log\.\d+',name)
         if not known or source.is_symlink() or not source.is_file():continue
         destination=LOG_DIR/name
         if destination.exists() or destination.is_symlink():
@@ -171,34 +191,78 @@ def _relocate_legacy_logs():
 
 _legacy_log_moves,_legacy_log_errors=_relocate_legacy_logs()
 LOG_PATH = LOG_DIR / "app.log"
+ACTIVITY_LOG_PATH = LOG_DIR / ACTIVITY_LOG_NAME
 ERROR_LOG_PATH = LOG_DIR / ERROR_LOG_NAME
+# A running day writes exactly these three files.
+DAILY_LOG_NAMES = (LOG_PATH.name, ACTIVITY_LOG_PATH.name, ERROR_LOG_PATH.name)
 logger = logging.getLogger(APP_SLUG)
 logger.setLevel(logging.INFO)
+activity_logger = logging.getLogger(ACTIVITY_LOGGER_NAME)
+activity_logger.setLevel(logging.INFO)
+# Activity events belong in their own file; they must not duplicate into app.log.
+activity_logger.propagate = False
+_LOG_FORMAT = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 if not logger.handlers:
     log_handler=DailySizeRotatingFileHandler(LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8')
-    log_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    log_handler.setFormatter(_LOG_FORMAT)
     logger.addHandler(log_handler)
+if not activity_logger.handlers:
+    activity_handler=DailySizeRotatingFileHandler(ACTIVITY_LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8')
+    activity_handler.setFormatter(_LOG_FORMAT)
+    activity_logger.addHandler(activity_handler)
+
+
+def _merge_legacy_side_logs():
+    """Fold startup.log and update.log into app.log so one day has three files.
+
+    The content is appended verbatim behind a comment header before the side
+    log is removed, so every historical record stays readable in app.log and
+    expires together with the rest of the archive.
+    """
+    merged=[]
+    try:candidates=sorted(LOG_DIR.iterdir())
+    except OSError:return merged
+    for source in candidates:
+        if source.is_symlink() or not source.is_file() or not _LEGACY_SIDE_LOG.fullmatch(source.name):continue
+        try:
+            content=source.read_text(encoding='utf-8',errors='replace').strip()
+            if content:
+                with LOG_PATH.open('a',encoding='utf-8') as handle:
+                    handle.write(f'\n# Merged from {source.name}\n{content}\n')
+            merged.append((source.name,source))
+        except OSError:continue
+    return merged
+
+
+_legacy_side_logs=_merge_legacy_side_logs()
 for _source_name,_destination_name in _legacy_log_moves:
     logger.info('Legacy log moved into logs folder: %s -> %s',_source_name,_destination_name)
 for _source_name in _legacy_log_errors:
     logger.warning('Legacy log could not be moved into logs folder: %s',_source_name)
+for _source_name,_source_path in _legacy_side_logs:
+    logger.info('Legacy side log merged into app.log: %s',_source_name)
+    try:_source_path.unlink()
+    except OSError:logger.warning('Legacy side log could not be removed after merge: %s',_source_name)
 
 
 def _archive_previous_day_logs():
-    """Roll an idle log at midnight, then archive files from earlier days."""
-    for handler in logger.handlers:
-        if isinstance(handler,DailySizeRotatingFileHandler):
-            handler.rollover_for_new_day()
-    return archive_old_logs(LOG_DIR)
+    """Roll idle logs at midnight, then archive and prune earlier days."""
+    for active_logger in (logger,activity_logger):
+        for handler in active_logger.handlers:
+            if isinstance(handler,DailySizeRotatingFileHandler):
+                handler.rollover_for_new_day()
+    return archive_old_logs(LOG_DIR,retention_days=RETENTION_DAYS)
 
 
 def _refresh_and_archive_logs():
-    """Capture unresolved errors before their technical sources are archived."""
+    """Capture unresolved errors, then archive yesterday and prune old days."""
     report=refresh_error_log(LOG_DIR)
     archive=_archive_previous_day_logs()
-    if archive.archived or archive.collisions or archive.errors:
-        log=logger.warning if archive.errors else logger.info
-        log('Daily log archive: archived=%d collisions=%d errors=%d',archive.archived,archive.collisions,archive.errors)
+    if archive.changed:
+        log=logger.warning if archive.errors or archive.pruned_errors else logger.info
+        log('Log maintenance: archived=%d collisions=%d pruned_days=%d retention_days=%d errors=%d',
+            archive.archived,archive.collisions,archive.pruned_days,RETENTION_DAYS,
+            archive.errors+archive.pruned_errors)
     return report
 
 
@@ -1155,10 +1219,13 @@ def next_stage(row):
     return 'Väntar – efter P2'
 
 
+# Soft but distinct status tints. They read clearly on the white table while
+# staying calm next to the navy brand colour, and all keep well above 4.5:1
+# contrast with the table text.
 INVOICE_ROW_COLORS = {
-    'status-not-due':'#e2f4e8',
-    'status-p1':'#fff1c2',
-    'status-p2':'#fbdede',
+    'status-not-due':'#DDEFE6',
+    'status-p1':'#FBF0D2',
+    'status-p2':'#FBE4E4',
 }
 
 
@@ -1369,7 +1436,7 @@ class ReminderApp(tk.Tk):
         """
         if self.tray is not None and self.tray.running:return
         self.tray=TrayController(
-            name=APP_NAME,identifier=APP_SLUG,icon_path=ICON_DIR/'paypamin_flow_256.png',
+            name=APP_NAME,identifier=APP_SLUG,icon_path=tray_icon_path(),
             scheduler=lambda callback:self.after(0,callback),on_open=self.show_from_tray,
             on_update=self.update_from_tray,on_exit=self.quit_app,
             on_scan=self.scan_import_folder,
@@ -2367,6 +2434,8 @@ class ReminderApp(tk.Tk):
         help_menu.add_command(label=_('Visa samlad fellogg'),command=self.open_log)
         help_menu.add_command(label=_('Markera fellogg som åtgärdad'),command=self.resolve_error_log)
         help_menu.add_command(label=_('Visa teknisk logg'),command=self.open_technical_log)
+        help_menu.add_command(label=_('Visa aktivitetslogg'),command=self.open_activity_log)
+        help_menu.add_command(label=_('Öppna loggmappen'),command=self.open_log_folder)
         help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
         help_menu.add_command(label=_('Uppdatera Python-tillägg'),command=self.update_python_addons)
         help_menu.add_command(label=_('Kortkommandon och tillgänglighet'),command=self.show_keyboard_help,accelerator='F1')
@@ -2713,6 +2782,20 @@ class ReminderApp(tk.Tk):
         logger.info('User opened technical diagnostic log')
         try:open_path(LOG_PATH)
         except Exception:logger.exception('Could not open technical diagnostic log')
+
+    def open_activity_log(self):
+        """Open the structured activity trail for the current day."""
+        log_activity('log','activity_log_opened','completed',path=str(ACTIVITY_LOG_PATH))
+        try:open_path(ACTIVITY_LOG_PATH)
+        except Exception:
+            logger.exception('Could not open the activity log')
+            messagebox.showwarning(_('Aktivitetsloggen'),_('Aktivitetsloggen finns ännu inte. Den skapas vid första registrerade åtgärden.'),parent=self)
+
+    def open_log_folder(self):
+        """Open the log folder with today's three files and the dated archive."""
+        logger.info('User opened the log folder')
+        try:open_path(LOG_DIR)
+        except Exception:logger.exception('Could not open the log folder')
 
     def _run_scheduled_error_log_refresh(self):
         """Keep the consolidated local view current without touching source logs."""
@@ -4394,6 +4477,12 @@ class ReminderApp(tk.Tk):
         ttk.Button(footer,text=_('Stäng'),command=w.destroy).pack(side='right')
         ttk.Button(footer,text=_('Spara inställningar'),command=save,style='Accent.TButton').pack(side='right',padx=(0,8))
 
+def _tk_version():
+    """Return the Tk patch level for the startup record without opening a window."""
+    try:return str(tk.TkVersion)
+    except Exception:return 'unknown'
+
+
 def main():
     instance=None
     try:
@@ -4412,6 +4501,12 @@ def main():
             return
         init_db()
         logger.info('%s %s started on %s',APP_NAME,APP_VERSION,sys.platform)
+        logger.info(
+            'Runtime: release_id=%s commit=%s python=%s tk=%s data_dir=%s log_dir=%s '
+            'log_files=%s retention_days=%d',
+            APP_RELEASE_ID or 'source',APP_RELEASE_COMMIT or 'source',platform.python_version(),
+            _tk_version(),APP_DIR,LOG_DIR,','.join(DAILY_LOG_NAMES),RETENTION_DAYS,
+        )
         log_activity('application','started','completed',version=APP_VERSION,platform=sys.platform,commit=APP_RELEASE_COMMIT)
         try:
             report=_refresh_and_archive_logs()

@@ -185,10 +185,13 @@ class ConsolidatedErrorLogTests(unittest.TestCase):
 
         app_dir = home / ".paminnelseapp" / "logs"
         consolidated = (app_dir / "errors.log").read_text(encoding="utf-8")
-        self.assertIn("SOURCE: startup.log", consolidated)
+        # A startup failure goes into the shared app.log, so one day still has
+        # exactly three log files.
+        self.assertIn("SOURCE: app.log", consolidated)
         self.assertIn("RuntimeError: synthetic launcher failure", consolidated)
+        self.assertFalse((app_dir / "startup.log").exists())
         message = show_error.call_args.args[0]
-        self.assertIn("startup.log", message)
+        self.assertIn("app.log", message)
         self.assertIn("errors.log", message)
 
 
@@ -217,10 +220,17 @@ class LogFolderTests(unittest.TestCase):
                 self.assertEqual(app.LOG_DIR, log_dir)
                 self.assertEqual(app.LOG_PATH, log_dir / "app.log")
                 self.assertEqual(app.ERROR_LOG_PATH, log_dir / "errors.log")
-                self.assertTrue((log_dir / "app.log").read_text(encoding="utf-8").startswith("current app log\n"))
+                current = (log_dir / "app.log").read_text(encoding="utf-8")
+                self.assertTrue(current.startswith("current app log\n"))
+                # startup.log and update.log are folded into app.log instead of
+                # becoming extra daily files.
+                self.assertIn("old startup failure", current)
+                self.assertIn("old update failure", current)
                 self.assertEqual((log_dir / "legacy-app.log").read_text(encoding="utf-8"), legacy["app.log"])
-                for name in ("app.log.1", "errors.log", "startup.log", "update.log"):
-                    self.assertEqual((log_dir / name).read_text(encoding="utf-8"), legacy[name])
+                self.assertEqual((log_dir / "app.log.1").read_text(encoding="utf-8"), legacy["app.log.1"])
+                self.assertEqual((log_dir / "errors.log").read_text(encoding="utf-8"), legacy["errors.log"])
+                for name in ("startup.log", "update.log"):
+                    self.assertFalse((log_dir / name).exists())
                 for name in legacy:
                     self.assertFalse((app_dir / name).exists())
                 self.assertEqual(journal.read_text(encoding="utf-8"), "keep outside logs")

@@ -24,12 +24,13 @@ Rekommendation till tryckeriet
 - Minsta bredd för tryck: 25 mm. Under det blir bockens kontur otydlig.
 - Fritt utrymme runt logotypen: minst 4 mm på alla sidor.
 - Färger (RGB i originalet, konverteras till CMYK av tryckeriet):
-    Mörkblå   #0F2F63
-    Ljusblå   #1B5AA8
-    Turkos    #0B7F79  (bock)
+    Mörkblå   #0F2F63   (märke och "PayPamin")
+    Turkos    #0E9189   (bock)
+    Mörkgrön  #0A6E68   ("Flow")
     Vit       #FFFFFF
-  Kontrollera alltid en färgproof före större upplagor; turkos kan ligga
-  utanför CMYK-gamut och då behöver tryckeriet justera mättnaden.
+  Alla färger är plana, utan tonövergångar. Kontrollera alltid en färgproof
+  före större upplagor; turkos kan ligga utanför CMYK-gamut och då behöver
+  tryckeriet justera mättnaden.
 - Enfärgsversionen används när bara en färg är tillgänglig. Den fungerar
   som svart på vitt och inverterad (vit på mörk botten).
 

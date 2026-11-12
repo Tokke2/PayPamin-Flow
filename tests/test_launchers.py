@@ -67,9 +67,10 @@ class ConsoleFreeLauncherTests(unittest.TestCase):
             home = Path(temporary_directory)
             with patch.object(Path, "home", return_value=home), patch.dict(sys.modules, {"paypamin_flow": None}):
                 self.assertEqual(launcher["run"](), 1)
-            log_path = home / ".paminnelseapp" / "logs" / "startup.log"
+            log_path = home / ".paminnelseapp" / "logs" / "app.log"
             self.assertTrue(log_path.is_file())
             self.assertIn("paypamin_flow", log_path.read_text(encoding="utf-8"))
+            self.assertFalse((log_path.parent / "startup.log").exists())
         self.assertEqual(len(messages), 1)
         self.assertIn("could not start", messages[0])
         self.assertIn("Tkinter", messages[0])

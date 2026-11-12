@@ -5,7 +5,12 @@ import unittest
 from datetime import date, datetime
 from pathlib import Path
 
-from log_archive import DailySizeRotatingFileHandler, archive_old_logs
+from log_archive import (
+    DailySizeRotatingFileHandler,
+    RETENTION_DAYS,
+    archive_old_logs,
+    prune_expired_archives,
+)
 
 
 class LogArchiveTests(unittest.TestCase):
@@ -72,6 +77,62 @@ class LogArchiveTests(unittest.TestCase):
         self.assertEqual(report.archived, 0)
         self.assertTrue(link.is_symlink())
         self.assertEqual(outside.read_text(), "keep outside\n")
+
+
+    def test_archived_days_older_than_seven_are_deleted(self):
+        archive = self.log_dir / "arkiv"
+        for day in ("2026-10-26", "2026-10-27", "2026-11-02", "2026-11-03"):
+            folder = archive / day
+            folder.mkdir(parents=True)
+            (folder / "app.log").write_text(f"log for {day}\n", encoding="utf-8")
+        resolved = archive / "resolved" / "2026-10-25"
+        resolved.mkdir(parents=True)
+        (resolved / "errors-1.log").write_text("old resolved\n", encoding="utf-8")
+        untouched = archive / "keep-me"
+        untouched.mkdir()
+        (untouched / "notes.txt").write_text("unrelated\n", encoding="utf-8")
+
+        # Today is 2026-11-03: keep 2026-10-27..2026-11-03, drop anything older.
+        report = archive_old_logs(self.log_dir, today=date(2026, 11, 3), retention_days=7)
+
+        self.assertEqual(report.pruned_days, 2)
+        self.assertFalse((archive / "2026-10-26").exists())
+        self.assertFalse((archive / "resolved" / "2026-10-25").exists())
+        self.assertTrue((archive / "2026-10-27").exists())
+        self.assertTrue((archive / "2026-11-02").exists())
+        self.assertTrue(untouched.exists())
+
+    def test_retention_defaults_to_seven_days(self):
+        self.assertEqual(RETENTION_DAYS, 7)
+        archive = self.log_dir / "arkiv"
+        (archive / "2026-11-02").mkdir(parents=True)
+        (archive / "2026-11-03").mkdir(parents=True)
+
+        # Seven days are kept in full: 2026-11-03 is exactly seven days old and
+        # stays, while 2026-11-02 is deleted.
+        removed, errors = prune_expired_archives(self.log_dir, today=date(2026, 11, 10))
+
+        self.assertEqual((removed, errors), (1, 0))
+        self.assertFalse((archive / "2026-11-02").exists())
+        self.assertTrue((archive / "2026-11-03").exists())
+
+    def test_retention_skips_symlinked_days_instead_of_following_them(self):
+        outside = Path(self.temporary.name) / "outside-archive"
+        outside.mkdir()
+        (outside / "app.log").write_text("keep outside\n", encoding="utf-8")
+        archive = self.log_dir / "arkiv"
+        archive.mkdir()
+        link = archive / "2026-10-01"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"Symlinks are unavailable on this platform: {exc}")
+
+        report = archive_old_logs(self.log_dir, today=date(2026, 11, 3))
+
+        self.assertEqual(report.pruned_days, 0)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual((outside / "app.log").read_text(), "keep outside\n")
 
 
 class DailySizeRotationTests(unittest.TestCase):

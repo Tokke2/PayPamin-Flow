@@ -13,6 +13,11 @@ from pathlib import Path
 from app_info import APP_SLUG
 
 
+# Activity events are structured JSON lines. They get their own file so
+# app.log stays a readable technical log; errors.log scans both files.
+ACTIVITY_LOG_NAME = "activity.log"
+ACTIVITY_LOGGER_NAME = f"{APP_SLUG}.activity"
+
 _SESSION_ID = uuid.uuid4().hex[:16]
 _WRAPPED_ATTRIBUTE = "_paypamin_activity_wrapped"
 
@@ -47,7 +52,8 @@ def log_activity(component, action, status="completed", *, level=logging.INFO, e
         "details": _safe(details),
     }
     try:
-        logging.getLogger(APP_SLUG).log(
+        activity_logger = logging.getLogger(ACTIVITY_LOGGER_NAME)
+        activity_logger.log(
             level,
             "Activity: %s",
             json.dumps(event, ensure_ascii=False, sort_keys=True),

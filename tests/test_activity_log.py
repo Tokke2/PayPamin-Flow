@@ -4,8 +4,7 @@ import unittest
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
-from activity_log import instrument_action, instrument_tk_command
-from app_info import APP_SLUG
+from activity_log import ACTIVITY_LOGGER_NAME, instrument_action, instrument_tk_command
 from test_database import load_headless_app
 
 
@@ -19,7 +18,7 @@ def events(records):
 
 class ActivityLogTests(unittest.TestCase):
     def test_python_action_logs_start_and_completion_with_matching_id(self):
-        with self.assertLogs(APP_SLUG, level="INFO") as captured:
+        with self.assertLogs(ACTIVITY_LOGGER_NAME, level="INFO") as captured:
             traced = instrument_action(lambda: "result", "Spara")
             self.assertIs(traced, instrument_action(traced, "Spara"))
             self.assertEqual(traced(), "result")
@@ -43,7 +42,7 @@ class ActivityLogTests(unittest.TestCase):
 
         owner = SimpleNamespace(tk=FakeTk())
         traced = instrument_tk_command(owner, "registered-command", "Ta bort vald")
-        with self.assertLogs(APP_SLUG, level="INFO") as captured:
+        with self.assertLogs(ACTIVITY_LOGGER_NAME, level="INFO") as captured:
             with self.assertRaisesRegex(RuntimeError, "synthetic action failure"):
                 traced()
 
@@ -132,7 +131,7 @@ class ActivityWidgetTests(unittest.TestCase):
         try:
             raise ValueError("synthetic Tk failure")
         except ValueError as exc:
-            with self.assertLogs(APP_SLUG, level="INFO") as captured:
+            with self.assertLogs(ACTIVITY_LOGGER_NAME, level="INFO") as captured:
                 self.app.ReminderApp.report_callback_exception(
                     SimpleNamespace(), type(exc), exc, exc.__traceback__,
                 )
@@ -152,7 +151,7 @@ class ActivityWidgetTests(unittest.TestCase):
         fake._instrument_action_tree(root)
         fake._instrument_action_tree(root)
         self.assertEqual(len(button.configure_calls), 1)
-        with self.assertLogs(APP_SLUG, level="INFO") as captured:
+        with self.assertLogs(ACTIVITY_LOGGER_NAME, level="INFO") as captured:
             result = button.options["command"]()
 
         self.assertEqual(result, "registered-result")
@@ -166,7 +165,7 @@ class ActivityWidgetTests(unittest.TestCase):
         self.app.ReminderApp._instrument_menu_actions(fake, menu)
         self.app.ReminderApp._instrument_menu_actions(fake, menu)
         self.assertEqual(len(menu.configure_calls), 1)
-        with self.assertLogs(APP_SLUG, level="INFO") as captured:
+        with self.assertLogs(ACTIVITY_LOGGER_NAME, level="INFO") as captured:
             result = menu.command()
 
         self.assertEqual(result, "registered-result")

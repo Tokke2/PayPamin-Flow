@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
+from activity_log import ACTIVITY_LOGGER_NAME
 from test_database import load_headless_app
 
 
@@ -193,7 +194,7 @@ class InvoiceViewTests(unittest.TestCase):
             current_filter_key="current",
             refresh=Mock(),
         )
-        with self.assertLogs(self.app.logger, level="INFO") as captured:
+        with self.assertLogs(ACTIVITY_LOGGER_NAME, level="INFO") as captured:
             self.app.ReminderApp.on_filter_select(fake)
 
         self.assertEqual(fake.current_filter_key, "history")

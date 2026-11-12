@@ -97,11 +97,37 @@ class BrandingTests(unittest.TestCase):
         small = (ASSETS / "paypamin_flow_small.svg").read_text(encoding="utf-8")
         large = (ASSETS / "paypamin_flow.svg").read_text(encoding="utf-8")
         self.assertNotEqual(small, large)
-        # The 16-32 px variant drops the gradient and the thin white ring.
-        self.assertNotIn("linearGradient", small)
-        self.assertIn("stroke-width=\"76\"", small)
-        # ...while the detailed master keeps the gradient for larger sizes.
-        self.assertIn("linearGradient", large)
+        # Both masters are flat: a gradient turns muddy in a 16 px tray icon
+        # and complicates print, so every colour is a single ink.
+        for text in (small, large):
+            self.assertNotIn("linearGradient", text)
+            self.assertNotIn("url(#", text)
+        # The 16-40 px variant uses a thicker stroke and a smaller badge so the
+        # mark stays readable when it is only a few pixels wide.
+        self.assertIn('stroke-width="80"', small)
+        self.assertIn('r="86"', small)
+        self.assertIn('stroke-width="64"', large)
+        self.assertIn('r="96"', large)
+
+    def test_small_icons_have_no_grey_halo_at_tray_sizes(self):
+        """Partial-alpha edge pixels must carry the icon's own colour.
+
+        Downsampling straight RGBA blends the transparent black around the
+        artwork into the edge, which is what made 16-32 px icons look muddy.
+        """
+        from PIL import Image
+
+        for name, size in (("paypamin_flow_16.png", 16), ("paypamin_flow_32.png", 32)):
+            with self.subTest(icon=name), Image.open(ASSETS / name) as image:
+                pixels = image.convert("RGBA").load()
+                for y in range(size):
+                    for x in range(size):
+                        red, green, blue, alpha = pixels[x, y]
+                        if 8 < alpha < 248:
+                            # Blue-dominant and never near-black: the halo
+                            # would show up as a desaturated grey pixel here.
+                            self.assertGreater(max(red, green, blue), 20)
+                            self.assertGreaterEqual(blue, red)
 
     def test_print_lockups_have_flat_ink_and_no_transparency(self):
         from PIL import Image
@@ -154,7 +180,10 @@ class BrandingTests(unittest.TestCase):
         self.assertEqual(root.find("{http://www.w3.org/2000/svg}title").text, "PayPamin Flow logotyp")
         self.assertIn(APP_AUTHOR, ET.tostring(root, encoding="unicode"))
         with Image.open(ASSETS / "paypamin_logo.png") as logo:
-            self.assertEqual(logo.size, (256, 64))
+            # The header lockup keeps the artwork's own 739.88:180 ratio; a
+            # rounded, stretched height makes the wordmark look soft.
+            self.assertEqual(logo.size, (256, 62))
+            self.assertAlmostEqual(logo.size[0] / logo.size[1], 739.88 / 180, places=1)
             self.assertEqual(logo.info.get("Title"), APP_NAME)
             self.assertEqual(logo.info.get("Author"), APP_AUTHOR)
             self.assertEqual(logo.info.get("Copyright"), APP_COPYRIGHT)

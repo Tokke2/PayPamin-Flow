@@ -1,3 +1,4 @@
+import logging
 import sys
 import tempfile
 import types
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import tray
+from PIL import Image
 from test_database import load_headless_app
 
 
@@ -490,6 +492,40 @@ class WindowCloseTests(unittest.TestCase):
         self.app.ReminderApp.quit_app(fake)
         self.assertEqual(events, ["cache cleaned", "tray stopped", "destroyed"])
         self.assertTrue(fake._quitting)
+
+
+class TrayIconSizeTests(unittest.TestCase):
+    """The tray must get an icon at the size the OS actually draws."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.app = load_headless_app(Path(self.temporary.name))
+        # The module copy lives in the temporary folder; use the real artwork.
+        self.app.ICON_DIR = Path(__file__).resolve().parents[1] / "assets"
+        self.addCleanup(self._close)
+
+    def _close(self):
+        for logger_name in (self.app.APP_SLUG, self.app.ACTIVITY_LOGGER_NAME):
+            logger = logging.getLogger(logger_name)
+            for handler in logger.handlers[:]:
+                logger.removeHandler(handler)
+                handler.close()
+
+    def test_windows_uses_the_simplified_small_icon(self):
+        path = self.app.tray_icon_path("win32")
+        self.assertEqual(path.name, "paypamin_flow_32.png")
+        with Image.open(path) as image:
+            self.assertEqual(image.size, (32, 32))
+
+    def test_macos_and_linux_use_the_48_pixel_icon(self):
+        for platform_name in ("darwin", "linux"):
+            with self.subTest(platform=platform_name):
+                self.assertEqual(self.app.tray_icon_path(platform_name).name, "paypamin_flow_48.png")
+
+    def test_missing_platform_bitmap_falls_back_to_the_large_icon(self):
+        with patch.object(self.app, "ICON_DIR", Path(self.temporary.name) / "empty"):
+            self.assertEqual(self.app.tray_icon_path("win32").name, "paypamin_flow_256.png")
 
 
 if __name__ == "__main__":

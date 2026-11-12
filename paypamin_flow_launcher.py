@@ -10,19 +10,28 @@ import shutil
 import subprocess
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PayPamin Flow"
 
 
 def _write_startup_log(details: str) -> Path | None:
-    """Write import/start failures before the application logger exists."""
-    path = Path.home() / ".paminnelseapp" / "logs" / "startup.log"
+    """Write import/start failures before the application logger exists.
+
+    The record goes into the same ``app.log`` the application uses, in the
+    application's own record format, so a running day still has exactly three
+    log files: app.log, activity.log and the consolidated errors.log.
+    """
+    path = Path.home() / ".paminnelseapp" / "logs" / "app.log"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+        lines = details.rstrip().splitlines() or ["Unknown startup error"]
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(f"\n[{datetime.now(timezone.utc).isoformat()}]\n{details.rstrip()}\n")
+            handle.write(f"\n{stamp} ERROR Startup failed before the application was ready\n")
+            for line in lines:
+                handle.write(f"{line}\n")
         return path
     except OSError:
         return None

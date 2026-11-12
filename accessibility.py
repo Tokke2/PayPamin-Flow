@@ -20,16 +20,18 @@ FONT_SCALE_CHOICES = (0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0)
 BACKGROUND = "#F3F5F8"
 TEXT = "#1F2A3D"
 MUTED_TEXT = "#475467"
-TITLE_TEXT = "#263A62"
-ACCENT = "#304B79"
-ACCENT_ACTIVE = "#263D64"
+# The UI ink is the same navy as the brand mark, so a button, a heading and the
+# icon read as one design instead of slightly different dark blues.
+TITLE_TEXT = "#0F2F63"
+ACCENT = "#0F2F63"
+ACCENT_ACTIVE = "#0B2447"
 FOCUS = "#005A9C"
 FOCUS_BACKGROUND = "#DCEAFF"
 SELECTED_BACKGROUND = "#C7DDF5"
 SELECTED_TEXT = "#102A43"
 FIELD_BACKGROUND = "#FFFFFF"
 CLASSIC_FOCUS_BACKGROUND = "#B8C4D2"
-CANVAS_BACKGROUND = "#DFE3EA"
+CANVAS_BACKGROUND = "#E4E9F0"
 
 # A deliberate, platform-independent high-contrast palette.  It is used when
 # the operating system reports that high contrast is enabled; normal app
@@ -168,9 +170,9 @@ def contrast_palette(high_contrast=False):
         "field_background": FIELD_BACKGROUND,
         "classic_focus_background": CLASSIC_FOCUS_BACKGROUND,
         "canvas_background": CANVAS_BACKGROUND,
-        "heading_background": "#E8EDF4",
-        "heading_text": "#344054",
-        "trough_background": "#E8EDF4",
+        "heading_background": "#E6EBF3",
+        "heading_text": "#0F2F63",
+        "trough_background": "#E6EBF3",
     }
 
 
