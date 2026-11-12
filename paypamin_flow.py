@@ -199,17 +199,35 @@ logger = logging.getLogger(APP_SLUG)
 logger.setLevel(logging.INFO)
 activity_logger = logging.getLogger(ACTIVITY_LOGGER_NAME)
 activity_logger.setLevel(logging.INFO)
-# Activity events belong in their own file; they must not duplicate into app.log.
-activity_logger.propagate = False
+# Activity records are a child of the application logger, so both files are
+# owned by the same logger. That keeps one place to close on exit, and an
+# activity event never duplicates into app.log because each handler filters on
+# the record name.
+activity_logger.propagate = True
 _LOG_FORMAT = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+
+
+class _ActivityRecordFilter(logging.Filter):
+    """Send activity records to activity.log and technical records to app.log."""
+
+    def __init__(self, activity):
+        super().__init__()
+        self.activity = activity
+
+    def filter(self, record):
+        is_activity = record.name == ACTIVITY_LOGGER_NAME
+        return is_activity if self.activity else not is_activity
+
+
 if not logger.handlers:
-    log_handler=DailySizeRotatingFileHandler(LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8')
+    log_handler=DailySizeRotatingFileHandler(LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8',delay=True)
     log_handler.setFormatter(_LOG_FORMAT)
+    log_handler.addFilter(_ActivityRecordFilter(activity=False))
     logger.addHandler(log_handler)
-if not activity_logger.handlers:
-    activity_handler=DailySizeRotatingFileHandler(ACTIVITY_LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8')
+    activity_handler=DailySizeRotatingFileHandler(ACTIVITY_LOG_PATH,maxBytes=5_000_000,backupCount=5,encoding='utf-8',delay=True)
     activity_handler.setFormatter(_LOG_FORMAT)
-    activity_logger.addHandler(activity_handler)
+    activity_handler.addFilter(_ActivityRecordFilter(activity=True))
+    logger.addHandler(activity_handler)
 
 
 def _merge_legacy_side_logs():
@@ -247,10 +265,9 @@ for _source_name,_source_path in _legacy_side_logs:
 
 def _archive_previous_day_logs():
     """Roll idle logs at midnight, then archive and prune earlier days."""
-    for active_logger in (logger,activity_logger):
-        for handler in active_logger.handlers:
-            if isinstance(handler,DailySizeRotatingFileHandler):
-                handler.rollover_for_new_day()
+    for handler in logger.handlers:
+        if isinstance(handler,DailySizeRotatingFileHandler):
+            handler.rollover_for_new_day()
     return archive_old_logs(LOG_DIR,retention_days=RETENTION_DAYS)
 
 
