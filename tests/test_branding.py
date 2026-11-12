@@ -65,12 +65,58 @@ class BrandingTests(unittest.TestCase):
         from PIL import Image
 
         icons = sorted(ASSETS.rglob("*.png"))
-        self.assertEqual(len(icons), 69)
+        self.assertEqual(len(icons), 72)
         for path in icons:
             with self.subTest(icon=path.relative_to(ASSETS)), Image.open(path) as icon:
                 self.assertEqual(icon.info.get("Title"), APP_NAME)
                 self.assertEqual(icon.info.get("Author"), APP_AUTHOR)
                 self.assertEqual(icon.info.get("Copyright"), APP_COPYRIGHT)
+
+    def test_vector_masters_are_print_ready_and_font_free(self):
+        """Every logo is self-contained: no <text>, no filters, no linked fonts."""
+        for name in (
+            "paypamin_flow.svg",
+            "paypamin_flow_small.svg",
+            "paypamin_logo.svg",
+            "paypamin_logo_print.svg",
+            "paypamin_logo_print_mono.svg",
+        ):
+            with self.subTest(svg=name):
+                text = (ASSETS / name).read_text(encoding="utf-8")
+                self.assertNotIn("<text", text)
+                self.assertNotIn("font-family", text)
+                self.assertNotIn("<filter", text)
+                self.assertNotIn("xlink:href", text)
+                self.assertIn("Copyright ©", text)
+                self.assertIn(APP_AUTHOR, text)
+                root = ET.fromstring(text)
+                self.assertTrue(root.get("viewBox"))
+                self.assertGreaterEqual(len(root), 2)
+
+    def test_small_icon_variant_is_a_separate_simplified_master(self):
+        small = (ASSETS / "paypamin_flow_small.svg").read_text(encoding="utf-8")
+        large = (ASSETS / "paypamin_flow.svg").read_text(encoding="utf-8")
+        self.assertNotEqual(small, large)
+        # The 16-32 px variant drops the gradient and the thin white ring.
+        self.assertNotIn("linearGradient", small)
+        self.assertIn("stroke-width=\"76\"", small)
+        # ...while the detailed master keeps the gradient for larger sizes.
+        self.assertIn("linearGradient", large)
+
+    def test_print_lockups_have_flat_ink_and_no_transparency(self):
+        from PIL import Image
+
+        for name in ("paypamin_logo_print.png", "paypamin_logo_print_mono.png"):
+            with self.subTest(image=name), Image.open(ASSETS / name) as image:
+                self.assertEqual(image.mode, "RGB")
+                self.assertEqual(image.size, (2400, 582))
+                # White paper at the edges proves the artwork is on paper.
+                self.assertEqual(image.getpixel((0, 0)), (255, 255, 255))
+                self.assertEqual(image.getpixel((2399, 0)), (255, 255, 255))
+
+        mono = (ASSETS / "paypamin_logo_print_mono.svg").read_text(encoding="utf-8")
+        self.assertIn('fill="#000000"', mono)
+        self.assertNotIn("#0F2F63", mono)
 
     def test_horizontal_logo_has_vector_raster_and_creator_metadata(self):
         from PIL import Image

@@ -125,11 +125,28 @@ Välj **Visa samlad fellogg** i knappraden eller **Hjälp → Visa samlad fellog
 När du stänger eller minimerar huvudfönstret döljs det i systemfältet. Appen fortsätter då med bland annat schemalagda uppdateringskontroller.
 
 - Klicka på PayPamin Flow-ikonen eller välj **Öppna PayPamin Flow** i systemfältet för att visa fönstret igen.
+- Den översta raden i menyn visar arbetsläget direkt, till exempel **PayPamin Flow · 3 väntar P1 · 1 väntar P2**, och samma text visas som verktygstips när du håller musen över ikonen.
+- **Skanna importmapp nu** och **Öppna exportmapp** finns i menyn, så de vanligaste åtgärderna nås utan att öppna fönstret.
 - Högerklicka och välj **Uppdatera appen** för att visa fönstret och starta samma manuella uppdateringskontroll som i Hjälp-menyn. Valet visar även **Uppdatering tillgänglig**, **Söker…** eller **Uppdaterar…** när något pågår.
 - Välj **Arkiv → Dölj till systemfältet** för att dölja det utan musens stängknapp.
 - Välj **Arkiv → Avsluta helt** eller **Avsluta helt** i systemfältet för att avsluta bakgrundsaktiviteten och stänga appen.
+- Första gången fönstret döljs visas en kort förklaring om att appen fortsätter i systemfältet. Den visas bara en gång.
 
-Om skrivbordsmiljön inte har ett fungerande systemfält lämnas fönstret synligt och appen erbjuder ett tydligt val att avsluta i stället för att gömmas oåtkomlig. På Linux kan skrivbordets AppIndicator-/systemfältsstöd behöva aktiveras.
+### Windows, macOS och Linux
+
+| | Minimera | Stäng | Öppna igen | Avsluta helt |
+|---|---|---|---|---|
+| **Windows** | döljs i systemfältet | döljs i systemfältet | ikonen i systemfältet, eller starta appen igen | systemfältets meny eller **Arkiv → Avsluta helt** |
+| **macOS** | döljs i menyraden | döljs i menyraden | menyradsikonen, Dock-ikonen eller starta appen igen | **Cmd+Q**, menyraden eller **Arkiv → Avsluta helt** |
+| **Linux** | döljs i systemfältet | döljs i systemfältet | systemfältets ikon eller starta appen igen | systemfältets meny eller **Arkiv → Avsluta helt** |
+
+På macOS återöppnar ett klick på Dock-ikonen fönstret även när det är dolt, och **Cmd+Q** avslutar appen helt i stället för att bara gömma fönstret.
+
+Om skrivbordsmiljön inte har ett fungerande systemfält lämnas fönstret synligt och appen erbjuder ett tydligt val att avsluta i stället för att gömmas oåtkomlig. Orsaken skrivs till loggen tillsammans med åtgärden:
+
+- **Linux:** systemfältet kräver AppIndicator-stöd (`gir1.2-ayatanaappindicator3-0.1` eller `libappindicator3-1`) och en panel som visar statusikoner. Under Wayland behövs dessutom tillägget AppIndicator/KStatusNotifierItem i skrivbordsmiljön.
+- **Windows:** appen måste startas i en vanlig skrivbordssession, inte som tjänst.
+- **macOS:** appen kräver en grafisk inloggningssession.
 
 På Windows använder appen en egen app-identitet för aktivitetsfältets PayPamin Flow-ikon. Huvudfönstret och alla sekundära fönster får dessutom både stor och liten PayPamin Flow-ikon direkt via det **yttersta Windows-rot- och ägarfönstret**, som aktivitetsfältet, Alt+Tab och Aktivitetshanterarens appvy använder. Ikonen appliceras både under fönsteruppbyggnaden och igen efter att fönstret har mappats; huvudfönstret får den även på nytt när det återställs från systemfältet. Systemfältsikonen kan placeras under **^ / Dolda ikoner** av Windows; dra den till det synliga fältet om du vill ha den framme hela tiden. Start- och ikonfel loggas i `%USERPROFILE%\.paminnelseapp\logs\app.log`.
 

@@ -59,6 +59,17 @@ class TranslationTests(unittest.TestCase):
         set_language("en")
         self.assertEqual(format_long_date(day), "23 October 2026")
 
+    def test_english_dictionary_has_no_duplicate_keys(self):
+        """A duplicated key silently overrides the earlier translation."""
+        import re
+        from collections import Counter
+
+        source = (ROOT / "i18n.py").read_text(encoding="utf-8")
+        keys = re.findall(r'^    "((?:[^"\\]|\\.)*)":', source, re.MULTILINE)
+        duplicates = {key: count for key, count in Counter(keys).items() if count > 1}
+        self.assertEqual(duplicates, {})
+        self.assertEqual(len(keys), len(i18n.translation_keys()))
+
     def test_every_literal_translation_call_has_an_english_entry(self):
         missing = []
         for path in TRANSLATED_MODULES:

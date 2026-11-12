@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
-"""Generate PayPamin Flow's product logo, desktop icons and UI icons.
+"""Generate PayPamin Flow's desktop icons and UI icons from the vector masters.
 
 Run from the repository root:
     python assets/build_icons.py
 
-Editable vector originals are assets/paypamin_flow.svg and
-assets/paypamin_logo.svg. The small UI icons use a common 24-unit grid and
-are rendered at 16 px with transparent backgrounds and light variants.
+The vector files are the single source of truth:
+
+* ``assets/paypamin_flow.svg``       – product mark, detail version (48 px and up)
+* ``assets/paypamin_flow_small.svg`` – simplified mark for 16–32 px
+* ``assets/paypamin_logo.svg``       – screen lockup (wordmark as outlines)
+* ``assets/paypamin_logo_print.svg`` – flat print lockup, CMYK-safe colours
+* ``assets/paypamin_logo_print_mono.svg`` – one-colour print lockup
+
+Every PNG, ICO and ICNS file is rasterised from those files, so a change to
+the artwork only has to be made once. The small UI icons use a common
+24-unit grid and are rendered at 16 px with transparent backgrounds and
+light variants.
 """
 from __future__ import annotations
 
 import math
 from pathlib import Path
 import sys
+import tempfile
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, PngImagePlugin
+from PIL import Image, ImageDraw, PngImagePlugin
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -35,148 +45,86 @@ ACTION_ICONS = (
 )
 
 
-def point(x: float, y: float) -> tuple[int, int]:
-    return round(x * SCALE), round(y * SCALE)
+SVG_SOURCES = {
+    "icon": ASSETS / "paypamin_flow.svg",
+    "icon_small": ASSETS / "paypamin_flow_small.svg",
+    "logo": ASSETS / "paypamin_logo.svg",
+    "logo_print": ASSETS / "paypamin_logo_print.svg",
+    "logo_print_mono": ASSETS / "paypamin_logo_print_mono.svg",
+}
+
+# Below this size the detailed mark turns into mush, so the simplified
+# artwork is used instead. Windows uses 16/24/32 px in the taskbar and tray.
+SMALL_ICON_LIMIT = 40
+RASTER_OVERSAMPLE = 4
 
 
-def cubic(start, control1, control2, end, steps=24):
-    points = []
-    for index in range(1, steps + 1):
-        t = index / steps
-        u = 1 - t
-        points.append((
-            u**3 * start[0] + 3 * u**2 * t * control1[0] + 3 * u * t**2 * control2[0] + t**3 * end[0],
-            u**3 * start[1] + 3 * u**2 * t * control1[1] + 3 * u * t**2 * control2[1] + t**3 * end[1],
-        ))
-    return points
+def rasterise_svg(path: Path, width: int, height: int | None = None) -> Image.Image:
+    """Render an SVG file to a PIL image at the requested pixel size.
+
+    svglib produces a vector PDF and PyMuPDF rasterises it, so the result uses
+    the same crisp geometry as the SVG instead of a re-drawn approximation.
+    Rendering happens at 4x and is downsampled, which gives clean edges at the
+    16-32 px sizes used by the tray and the taskbar.
+    """
+    import fitz
+    from reportlab.graphics import renderPDF
+    from svglib.svglib import svg2rlg
+
+    drawing = svg2rlg(str(path))
+    if drawing is None or not drawing.width or not drawing.height:
+        raise SystemExit(f"Could not read SVG artwork: {path}")
+    aspect = drawing.height / drawing.width
+    height = height or max(1, round(width * aspect))
+    scale_x = (width * RASTER_OVERSAMPLE) / drawing.width
+    scale_y = (height * RASTER_OVERSAMPLE) / drawing.height
+    drawing.width *= scale_x
+    drawing.height *= scale_y
+    drawing.scale(scale_x, scale_y)
+    with tempfile.TemporaryDirectory() as folder:
+        pdf_path = Path(folder) / "artwork.pdf"
+        renderPDF.drawToFile(drawing, str(pdf_path))
+        with fitz.open(str(pdf_path)) as document:
+            page = document[0]
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=True)
+            raw = pixmap.samples
+            mode = "RGBA" if pixmap.alpha else "RGB"
+            image = Image.frombytes(mode, (pixmap.width, pixmap.height), raw)
+    return image.resize((width, height), Image.Resampling.LANCZOS)
 
 
-def scaled(points):
-    return [point(x, y) for x, y in points]
+def create_icon(size: int = SIZE) -> Image.Image:
+    """Return the product mark at the given size, using the right artwork."""
+    source = SVG_SOURCES["icon_small" if size <= SMALL_ICON_LIMIT else "icon"]
+    return rasterise_svg(source, size, size)
 
 
-def rounded_line(draw, points, *, fill, width):
-    points = scaled(points)
-    draw.line(points, fill=fill, width=width * SCALE, joint="curve")
-    radius = width * SCALE / 2
-    for x, y in points:
-        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=fill)
+def create_horizontal_logo(width: int = 512) -> Image.Image:
+    """Return the screen lockup with the outlined wordmark."""
+    drawing_width, drawing_height = 555.0, 135.0
+    height = round(width * drawing_height / drawing_width)
+    return rasterise_svg(SVG_SOURCES["logo"], width, height)
 
 
-def document_points():
-    points = [(148, 64), (316, 64), (384, 132), (384, 388)]
-    points += cubic(points[-1], (384, 410), (370, 424), (346, 424))
-    points.append((148, 424))
-    points += cubic(points[-1], (128, 424), (112, 410), (112, 388))
-    points.append((112, 104))
-    points += cubic(points[-1], (112, 80), (128, 64), (148, 64))
-    return points
+def create_print_logo(path: Path, width: int = 1600, mono: bool = False) -> Path:
+    """Write a high-resolution print lockup on white paper.
+
+    Print previews have no transparency: they show what the printer puts on
+    paper, so the artwork is composited on white instead of turning the
+    transparent pixels black.
+    """
+    source = SVG_SOURCES["logo_print_mono" if mono else "logo_print"]
+    height = round(width * 180 / 742)
+    image = rasterise_svg(source, width, height).convert("RGBA")
+    paper = Image.new("RGBA", image.size, (255, 255, 255, 255))
+    return image, paper
 
 
-def mix(start, end, amount):
-    return tuple(round(a + (b - a) * amount) for a, b in zip(start, end))
-
-
-def create_icon():
-    """Create the invoice/P/check product mark at high resolution."""
-    image = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-    gradient = Image.new("RGBA", image.size)
-    draw = ImageDraw.Draw(gradient)
-    for y in range(CANVAS):
-        color = mix((16, 28, 61), (31, 102, 193), y / (CANVAS - 1))
-        draw.line((0, y, CANVAS, y), fill=(*color, 255))
-    background_mask = Image.new("L", image.size)
-    ImageDraw.Draw(background_mask).rounded_rectangle(
-        (*point(16, 16), *point(496, 496)), radius=116 * SCALE, fill=255
-    )
-    image.paste(gradient, (0, 0), background_mask)
-
-    glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    glow_draw = ImageDraw.Draw(glow)
-    glow_draw.ellipse((*point(270, -100), *point(600, 230)), fill=(70, 220, 210, 52))
-    glow = glow.filter(ImageFilter.GaussianBlur(48 * SCALE))
-    image = Image.alpha_composite(image, glow)
-
-    flow = Image.new("RGBA", image.size)
-    flow_points = [(48, 388)]
-    flow_points += cubic(flow_points[-1], (140, 462), (272, 454), (360, 394), 48)
-    flow_points += cubic(flow_points[-1], (416, 358), (448, 320), (466, 274), 32)
-    rounded_line(ImageDraw.Draw(flow), flow_points, fill=(133, 225, 224, 38), width=22)
-    image = Image.alpha_composite(image, flow)
-
-    # A subtle light rim keeps the product tile recognisable on dark taskbars.
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle(
-        (*point(24, 24), *point(488, 488)),
-        radius=108 * SCALE,
-        outline=(255, 255, 255, 46),
-        width=8 * SCALE,
-    )
-
-    doc_points = scaled(document_points())
-    shadow_mask = Image.new("L", image.size)
-    ImageDraw.Draw(shadow_mask).polygon([(x, y + 14 * SCALE) for x, y in doc_points], fill=78)
-    shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(14 * SCALE))
-    shadow = Image.new("RGBA", image.size, (7, 20, 44, 0))
-    shadow.putalpha(shadow_mask)
-    image = Image.alpha_composite(image, shadow)
-
-    draw = ImageDraw.Draw(image)
-    draw.polygon(doc_points, fill="#FFFFFF")
-    draw.polygon(scaled([(316, 64), (316, 112), (332, 132), (384, 132)]), fill="#D8E7F5")
-
-    # Geometric P: recognisable as PayPamin even without the wordmark.
-    rounded_line(draw, [(174, 148), (174, 288)], fill="#173F8F", width=24)
-    bowl = [(174, 148), (238, 148)]
-    bowl += cubic(bowl[-1], (272, 148), (286, 160), (286, 182), 20)
-    bowl += cubic(bowl[-1], (286, 204), (272, 216), (238, 216), 20)
-    bowl.append((174, 216))
-    rounded_line(draw, bowl, fill="#173F8F", width=24)
-    rounded_line(draw, [(174, 326), (278, 326)], fill="#7C9CBF", width=15)
-    rounded_line(draw, [(174, 360), (238, 360)], fill="#7C9CBF", width=15)
-
-    # Paid/reminder completion badge.
-    draw.ellipse((*point(268, 264), *point(444, 440)), fill="#FFFFFF")
-    badge_mask = Image.new("L", image.size)
-    ImageDraw.Draw(badge_mask).ellipse((*point(280, 276), *point(432, 428)), fill=255)
-    badge = Image.new("RGBA", image.size)
-    badge_draw = ImageDraw.Draw(badge)
-    for y in range(276 * SCALE, 429 * SCALE):
-        amount = (y / SCALE - 276) / 152
-        badge_draw.line((0, y, CANVAS, y), fill=(*mix((52, 211, 153), (15, 159, 149), amount), 255))
-    image.paste(badge, (0, 0), badge_mask)
-    draw = ImageDraw.Draw(image)
-    rounded_line(draw, [(312, 350), (342, 380), (400, 318)], fill="#FFFFFF", width=18)
-    return image.resize((SIZE, SIZE), Image.Resampling.LANCZOS)
-
-
-def font_path(bold=False):
-    candidates = (
-        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        ("C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/segoeui.ttf"),
-        ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf"),
-    )
-    for bold_path, regular_path in candidates:
-        path = Path(bold_path if bold else regular_path)
-        if path.is_file():
-            return str(path)
-    return None
-
-
-def create_horizontal_logo(icon):
-    """Create a transparent horizontal wordmark for the app header/about."""
-    image = Image.new("RGBA", (576, 128), (0, 0, 0, 0))
-    symbol = icon.resize((104, 104), Image.Resampling.LANCZOS)
-    image.alpha_composite(symbol, (4, 12))
-    draw = ImageDraw.Draw(image)
-    bold = font_path(bold=True)
-    regular = font_path(bold=False)
-    title_font = ImageFont.truetype(bold, 48) if bold else ImageFont.load_default(size=48)
-    flow_font = ImageFont.truetype(regular, 48) if regular else title_font
-    draw.text((122, 64), "PayPamin", font=title_font, fill="#1D355E", anchor="lm")
-    width = draw.textlength("PayPamin", font=title_font)
-    draw.text((122 + width + 13, 64), "Flow", font=flow_font, fill="#11998F", anchor="lm")
-    return image.crop((0, 0, 512, 128)).resize((256, 64), Image.Resampling.LANCZOS)
+def save_print_logo(path: Path, width: int = 1600, mono: bool = False, data=None) -> Path:
+    image, paper = create_print_logo(path, width=width, mono=mono)
+    paper.alpha_composite(image)
+    paper.convert("RGB").save(path, format="PNG", pnginfo=data, optimize=True)
+    return path
 
 
 class IconCanvas:
@@ -323,21 +271,46 @@ def metadata():
     return data
 
 
-def main():
-    icon = create_icon()
+def main(output_dir: Path | None = None):
+    target = Path(output_dir) if output_dir else ASSETS
+    target.mkdir(parents=True, exist_ok=True)
+    ui_target = target / "icons" if output_dir else UI_ASSETS
     data = metadata()
+    icons = {}
+    for size in (16, 24, 32, 40, 48, 64, 128, 256, 512, 1024):
+        icons[size] = create_icon(size)
+
     for size in (16, 32, 48, 256, 512):
-        resized = icon if size == SIZE else icon.resize((size, size), Image.Resampling.LANCZOS)
-        resized.save(ASSETS / f"paypamin_flow_{size}.png", pnginfo=data, optimize=True)
-    icon.resize((256, 256), Image.Resampling.LANCZOS).save(ASSETS / "paypamin_flow.png", pnginfo=data, optimize=True)
-    create_horizontal_logo(icon).save(ASSETS / "paypamin_logo.png", pnginfo=data, optimize=True)
-    icon.save(ASSETS / "paypamin_flow.ico", format="ICO", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-    icon.save(ASSETS / "paypamin_flow.icns", format="ICNS", sizes=[(16, 16), (32, 32), (64, 64), (128, 128), (256, 256), (512, 512)])
-    UI_ASSETS.mkdir(exist_ok=True)
+        icons[size].save(target / f"paypamin_flow_{size}.png", pnginfo=data, optimize=True)
+    icons[256].save(target / "paypamin_flow.png", pnginfo=data, optimize=True)
+
+    logo = create_horizontal_logo(555)
+    logo.resize((256, 64), Image.Resampling.LANCZOS).save(
+        target / "paypamin_logo.png", pnginfo=data, optimize=True,
+    )
+    logo.save(target / "paypamin_logo_1024.png", pnginfo=data, optimize=True)
+
+    for name, mono in (("paypamin_logo_print.png", False), ("paypamin_logo_print_mono.png", True)):
+        save_print_logo(target / name, width=2400, mono=mono, data=data)
+
+    # Windows: every size Windows may request, small sizes from the simple mark.
+    ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+    icons[256].save(
+        target / "paypamin_flow.ico", format="ICO", sizes=ico_sizes, append_images=[
+            icons[16], icons[24], icons[32], icons[48], icons[64], icons[128],
+        ],
+    )
+    # macOS: the full icon ladder incl. @2x for Retina.
+    icons[512].save(
+        target / "paypamin_flow.icns", format="ICNS",
+        sizes=[(16, 16), (32, 32), (64, 64), (128, 128), (256, 256), (512, 512), (1024, 1024)],
+    )
+
+    ui_target.mkdir(parents=True, exist_ok=True)
     for name in ACTION_ICONS:
-        draw_action_icon(name, "#344054").save(UI_ASSETS / f"{name}.png", pnginfo=data, optimize=True)
-        draw_action_icon(name, "#FFFFFF").save(UI_ASSETS / f"{name}_light.png", pnginfo=data, optimize=True)
-    print(f"Generated product branding and {len(ACTION_ICONS) * 2} UI icons in {ASSETS}")
+        draw_action_icon(name, "#344054").save(ui_target / f"{name}.png", pnginfo=data, optimize=True)
+        draw_action_icon(name, "#FFFFFF").save(ui_target / f"{name}_light.png", pnginfo=data, optimize=True)
+    print(f"Generated product branding from vector masters and {len(ACTION_ICONS) * 2} UI icons in {target}")
 
 
 if __name__ == "__main__":

@@ -25,13 +25,16 @@ class FakeImage:
 
 
 class FakeMenuItem:
-    def __init__(self, text, action, default=False):
+    def __init__(self, text, action, default=False, enabled=True):
         self.text = text
         self.action = action
         self.default = default
+        self.enabled = enabled
 
 
 class FakeMenu:
+    SEPARATOR = FakeMenuItem("- - - -", None)
+
     def __init__(self, *items):
         self.items = items
 
@@ -63,6 +66,10 @@ class FakeIcon:
 
     def update_menu(self):
         self.refreshed = True
+
+    def notify(self, message, title=None):
+        self.notified = getattr(self, "notified", [])
+        self.notified.append((title, message))
 
 
 class TrayControllerTests(unittest.TestCase):
@@ -109,10 +116,13 @@ class TrayControllerTests(unittest.TestCase):
         self.assertTrue(icon.detached)
         self.assertTrue(icon.visible)
         self.assertFalse(icon.started)
-        self.assertEqual(icon.menu.items[0].text(icon.menu.items[0]), "Open")
-        self.assertEqual(icon.menu.items[1].text(icon.menu.items[1]), "Update app")
-        self.assertEqual(icon.menu.items[2].text(icon.menu.items[2]), "Exit")
-        for item in icon.menu.items:
+        # Minimal controller: open, update, separator, exit.
+        actions = [item for item in icon.menu.items if item.action is not None]
+        self.assertEqual(
+            [item.text(item) for item in actions],
+            ["Open", "Update app", "Exit"],
+        )
+        for item in actions:
             item.action(icon, item)
         self.assertEqual((opened, updated, exited), ([], [], []))
         self.assertEqual(len(scheduled), 3)
@@ -144,6 +154,97 @@ class TrayControllerTests(unittest.TestCase):
         self.assertEqual(len(scheduled), 1)
         scheduled[0]()
         self.assertEqual(str(errors[0]), "native tray failed")
+
+
+class TrayMenuAndNotificationTests(unittest.TestCase):
+    """The richer tray menu, the tooltip and the optional balloon message."""
+
+    setUp = TrayControllerTests.setUp
+    controller = TrayControllerTests.controller
+
+    def controller_with_extras(self, scheduled, opened, exited, *, status=None):
+        controller = self.controller(scheduled, opened, exited)
+        controller.on_scan = lambda: None
+        controller.on_export = lambda: None
+        controller.scan_label = lambda: "Scan now"
+        controller.export_label = lambda: "Open export folder"
+        controller.status_label = status or (lambda: "PayPamin Flow · 2 awaiting P1")
+        return controller
+
+    def test_menu_order_shows_status_open_scan_export_update_separator_exit(self):
+        controller = self.controller_with_extras([], [], [])
+        controller.start()
+        menu = FakeIcon.instances[-1].menu
+
+        labels = [
+            "- - - -" if item is FakeMenu.SEPARATOR and not callable(item.text) else item.text(item)
+            for item in menu.items
+        ]
+        self.assertEqual(
+            labels,
+            [
+                "PayPamin Flow · 2 awaiting P1",
+                "Open",
+                "Scan now",
+                "Open export folder",
+                "Update app",
+                "- - - -",
+                "Exit",
+            ],
+        )
+        # The status line is informational and must not look clickable.
+        self.assertFalse(menu.items[0].enabled)
+        # Opening the window stays the double-click default.
+        self.assertTrue(menu.items[1].default)
+
+    def test_status_line_keeps_working_when_the_label_fails(self):
+        def broken():
+            raise RuntimeError("no database")
+
+        controller = self.controller_with_extras([], [], [], status=broken)
+        controller.start()
+        menu = FakeIcon.instances[-1].menu
+        self.assertEqual(menu.items[0].text(menu.items[0]), "PayPamin Flow")
+
+    def test_tray_notification_is_optional_and_never_raises(self):
+        controller = self.controller([], [], [])
+        self.assertFalse(controller.notify("hello"))
+        controller.start()
+        icon = FakeIcon.instances[-1]
+        self.assertTrue(controller.notify("hello", "Title"))
+        self.assertEqual(icon.notified, [("Title", "hello")])
+
+        def broken_notify(*_args, **_kwargs):
+            raise NotImplementedError("backend without balloons")
+
+        icon.notify = broken_notify
+        self.assertFalse(controller.notify("hello"))
+        controller.set_title("PayPamin Flow · 3 awaiting P2")
+        self.assertEqual(icon.name, "PayPamin Flow")
+        self.assertEqual(icon.title, "PayPamin Flow · 3 awaiting P2")
+
+    def test_unavailable_backend_explains_the_platform_remedy(self):
+        import tray as tray_module
+
+        with patch.object(tray_module.sys, "platform", "linux"):
+            hint = tray_module.backend_hint(RuntimeError("no appindicator"))
+        self.assertIn("AppIndicator", hint)
+        self.assertIn("Wayland", hint)
+        self.assertIn("no appindicator", hint)
+
+        with patch.object(tray_module.sys, "platform", "win32"):
+            self.assertIn("Windows", tray_module.backend_hint(RuntimeError("boom")))
+        with patch.object(tray_module.sys, "platform", "darwin"):
+            self.assertIn("macOS", tray_module.backend_hint(RuntimeError("boom")))
+
+    def test_failed_start_reports_the_platform_hint_to_the_caller(self):
+        controller = self.controller([], [], [])
+        with patch.object(self.fake_pystray, "Icon", side_effect=OSError("no native tray")):
+            with self.assertRaises(tray.TrayUnavailable) as raised:
+                controller.start()
+        self.assertIsInstance(raised.exception.hint, str)
+        self.assertTrue(raised.exception.hint)
+        self.assertIsNone(controller.icon)
 
 
 class WindowCloseTests(unittest.TestCase):
@@ -223,6 +324,55 @@ class WindowCloseTests(unittest.TestCase):
         self.app.ReminderApp._on_main_window_unmap(fake, SimpleNamespace(widget=fake))
         self.app.ReminderApp._on_main_window_unmap(fake, SimpleNamespace(widget=object()))
         self.assertEqual(scheduled, [callback])
+
+    def test_tray_status_text_summarises_the_workload(self):
+        import i18n
+
+        fake = SimpleNamespace()
+        rows = [
+            {"ignored": 1, "paid": 0, "reviewed": 1, "p1_date": "", "p2_date": "",
+             "due_date": "2020-01-01", "fee": "150", "amount": 1000},
+        ]
+        counts = self.app.ReminderApp._tray_counts_from_row(rows)
+        self.assertEqual(counts, {"Ignorerad": 1})
+
+        # An empty workload yields just the product name.
+        self.app._tray_counts_from_row = staticmethod(lambda _rows: {})
+        self.assertEqual(self.app.ReminderApp.tray_status_text(fake), "PayPamin Flow")
+
+        # The English strings exist and interpolate the counts.
+        i18n.set_language("en")
+        try:
+            self.assertEqual(i18n._("{count} väntar P1", count=2), "2 awaiting P1")
+            self.assertEqual(i18n._("{count} väntar P2", count=1), "1 awaiting P2")
+            self.assertEqual(i18n._("{count} att granska", count=3), "3 to review")
+        finally:
+            i18n.set_language("sv")
+
+    def test_first_hide_explains_the_tray_only_once(self):
+        from unittest.mock import patch as mock_patch
+
+        notifications = []
+        fake = SimpleNamespace(
+            tray=SimpleNamespace(
+                running=True,
+                notify=lambda message, title=None: notifications.append((title, message)) or True,
+            ),
+        )
+        with mock_patch.object(self.app, "setting", return_value="0"), mock_patch.object(
+            self.app, "set_setting"
+        ) as saved:
+            self.app.ReminderApp._explain_tray_hide(fake)
+        self.assertEqual(len(notifications), 1)
+        self.assertIn("systemfältet", notifications[0][1])
+        saved.assert_called_once_with("tray_hint_shown", "1")
+
+        with mock_patch.object(self.app, "setting", return_value="1"), mock_patch.object(
+            self.app, "set_setting"
+        ) as saved_again:
+            self.app.ReminderApp._explain_tray_hide(fake)
+        self.assertEqual(len(notifications), 1)
+        saved_again.assert_not_called()
 
     def test_minimized_window_is_restored_if_system_tray_is_unavailable(self):
         events = []

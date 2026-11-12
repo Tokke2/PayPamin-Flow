@@ -66,6 +66,10 @@ class WorkflowGuardTests(unittest.TestCase):
             "CONTRIBUTING.md must explain the session-branch CI rule",
         )
 
+    def test_branding_is_verified_from_the_vector_masters(self):
+        self.assertIn("python assets/verify_branding.py", self.workflow)
+        self.assertTrue((ROOT / "assets" / "verify_branding.py").is_file())
+
     def test_workflow_only_publishes_for_releases(self):
         publish_block = self.workflow.split("publish-python-package:", 1)[1]
         requirement = re.search(r"^    if: .*$", publish_block, re.MULTILINE)

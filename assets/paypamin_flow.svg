@@ -1,36 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
-  <title id="title">PayPamin Flow</title>
-  <desc id="description">Ett vitt fakturadokument med blått P-märke och en turkos bock för genomförd betalningspåminnelse på mörkblå bakgrund.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="ppf-title ppf-desc">
+  <title id="ppf-title">PayPamin Flow</title>
+  <desc id="ppf-desc">Ett stiliserat fakturadokument som P-märke med en turkos bock för genomförd betalningspåminnelse på mörkblå bakgrund, ritat som ren vektor.</desc>
   <metadata>Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.</metadata>
   <defs>
-    <linearGradient id="background" x1="70" y1="40" x2="440" y2="480" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#101C3D"/>
-      <stop offset="1" stop-color="#1F66C1"/>
+    <linearGradient id="ppf-bg" x1="96" y1="24" x2="448" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B2447"/>
+      <stop offset="0.62" stop-color="#0F2F63"/>
+      <stop offset="1" stop-color="#1B5AA8"/>
     </linearGradient>
-    <linearGradient id="completion" x1="300" y1="286" x2="414" y2="424" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#34D399"/>
-      <stop offset="1" stop-color="#0F9F95"/>
+    <linearGradient id="ppf-badge" x1="340" y1="336" x2="470" y2="470" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#25C4B4"/>
+      <stop offset="1" stop-color="#0E918B"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(426 66) rotate(135) scale(240)">
-      <stop offset="0" stop-color="#46DCD2" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#46DCD2" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="shadow" x="80" y="40" width="360" height="440" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#07142C" flood-opacity="0.30"/>
-    </filter>
   </defs>
-  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#background)"/>
-  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#glow)"/>
-  <path d="M48 388C140 462 272 454 360 394C416 358 448 320 466 274" fill="none" stroke="#85E1E0" stroke-opacity="0.15" stroke-width="22" stroke-linecap="round"/>
-  <rect x="24" y="24" width="464" height="464" rx="108" fill="none" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="8"/>
-  <g filter="url(#shadow)">
-    <path d="M148 64H316L384 132V388C384 410 370 424 346 424H148C128 424 112 410 112 388V104C112 80 128 64 148 64Z" fill="#FFFFFF"/>
-    <path d="M316 64V112L332 132H384L316 64Z" fill="#D8E7F5"/>
-  </g>
-  <path d="M174 288V148H238C272 148 286 160 286 182C286 204 272 216 238 216H174" fill="none" stroke="#173F8F" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M174 326H278M174 360H238" fill="none" stroke="#7C9CBF" stroke-width="15" stroke-linecap="round"/>
-  <circle cx="356" cy="352" r="88" fill="#FFFFFF"/>
-  <circle cx="356" cy="352" r="76" fill="url(#completion)"/>
-  <path d="M312 350L342 380L400 318" fill="none" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#ppf-bg)"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"><path d="M150 116V368"/><path d="M150 116H246A74 74 0 0 1 246 264H150"/></g>
+  <circle cx="396" cy="396" r="83" fill="#FFFFFF"/><circle cx="396" cy="396" r="70" fill="url(#ppf-badge)"/><path d="M362 397L385 420L433 368" fill="none" stroke="#FFFFFF" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

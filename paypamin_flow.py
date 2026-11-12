@@ -447,7 +447,7 @@ def init_db():
         for column in ('org_number','bankgiro_number'):
             if column not in vendor_logo_columns:
                 db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
 
@@ -1338,6 +1338,7 @@ class ReminderApp(tk.Tk):
         self.after(SYSTEM_CONTRAST_POLL_INTERVAL_MS,self._poll_system_contrast)
         self.protocol('WM_DELETE_WINDOW',self.hide_to_tray)
         self.bind('<Unmap>',self._on_main_window_unmap,add='+')
+        self._configure_macos_desktop_events()
         self.start_tray()
         self.after(100,self.sync_autostart)
         # Startup only recovers missing dependencies; upgrades are user-confirmed.
@@ -1359,18 +1360,79 @@ class ReminderApp(tk.Tk):
         )
 
     def start_tray(self):
-        """Start the tray icon lazily so unsupported desktops can still run the app."""
+        """Start the tray icon lazily so unsupported desktops can still run the app.
+
+        The tray is the only permanent entry point on all three platforms, so a
+        failure is logged with the platform-specific remedy instead of only the
+        backend exception.
+        """
         if self.tray is not None and self.tray.running:return
         self.tray=TrayController(
             name=APP_NAME,identifier=APP_SLUG,icon_path=ICON_DIR/'paypamin_flow_256.png',
             scheduler=lambda callback:self.after(0,callback),on_open=self.show_from_tray,
             on_update=self.update_from_tray,on_exit=self.quit_app,
+            on_scan=self.scan_import_folder,
+            on_export=self.open_export_folder,
+            scan_label=lambda:_('Skanna importmapp nu'),
+            export_label=lambda:_('Öppna exportmapp'),
+            status_label=self.tray_status_text,
             open_label=lambda:_('Öppna {app_name}',app_name=APP_NAME),
             update_label=self._update_tray_label,exit_label=lambda:_('Avsluta helt'),on_error=self.handle_tray_error)
         try:
-            self.tray.start();self._configure_macos_dock_icon();logger.info('System tray icon started')
+            self.tray.start();self._configure_macos_dock_icon();logger.info('System tray icon started (%s)',sys.platform)
+            self.tray.set_title(self.tray_status_text())
         except TrayUnavailable as exc:
             logger.warning('System tray is unavailable: %s',exc)
+            hint=getattr(exc,'hint','')
+            if hint:logger.warning('System tray remedy: %s',hint)
+            log_activity('tray','unavailable','failed',error=str(exc),platform=sys.platform)
+
+    def tray_status_text(self,row=None):
+        """Return the tray tooltip and menu header for the current workload.
+
+        The text is short on purpose: Windows truncates tooltips around 128
+        characters and macOS around 64, so the counts come first and the app
+        name is only added when nothing is pending.
+        """
+        if row is not None:
+            counts=self._tray_counts_from_row(row)
+        else:
+            try:
+                with connect() as db:
+                    rows=db.execute('SELECT * FROM invoices').fetchall()
+                counts={}
+                for item in rows:
+                    stage=next_stage(item)
+                    counts[stage]=counts.get(stage,0)+1
+            except Exception:
+                logger.exception('Could not compute the tray status text')
+                return APP_NAME
+        p1=counts.get('P1 att skapa',0)
+        p2=counts.get('P2 att skapa',0)
+        review=counts.get('Kronofogden – granska',0)
+        parts=[]
+        if p1:parts.append(_('{count} väntar P1',count=p1))
+        if p2:parts.append(_('{count} väntar P2',count=p2))
+        if review:parts.append(_('{count} att granska',count=review))
+        return f"{APP_NAME} · "+' · '.join(parts) if parts else APP_NAME
+
+    @staticmethod
+    def _tray_counts_from_row(row):
+        counts={}
+        for item in row:
+            stage=next_stage(item)
+            counts[stage]=counts.get(stage,0)+1
+        return counts
+
+    def refresh_tray(self):
+        """Push the latest workload into the tray without rebuilding it."""
+        tray_icon=getattr(self,'tray',None)
+        if tray_icon is None or not tray_icon.running:return
+        try:
+            tray_icon.refresh()
+            tray_icon.set_title(self.tray_status_text())
+        except Exception:
+            logger.exception('Could not refresh the system tray')
 
     def handle_tray_error(self,error):
         if self._quitting:return
@@ -1458,10 +1520,37 @@ class ReminderApp(tk.Tk):
             try:
                 if self.state()=='iconic':self.deiconify()
             except tk.TclError:pass
-            if messagebox.askyesno(_('Systemfältet är inte tillgängligt'),_('Fönstret kan inte döljas i systemfältet på den här datorn. Vill du avsluta appen helt?'),parent=self):self.quit_app()
+            hint=''
+            try:
+                from tray import backend_hint
+                hint=backend_hint(RuntimeError(''))
+            except Exception:
+                hint=''
+            if messagebox.askyesno(_('Systemfältet är inte tillgängligt'),_('Fönstret kan inte döljas i systemfältet på den här datorn. Vill du avsluta appen helt?')+(('\n\n'+hint) if hint else ''),parent=self):self.quit_app()
             return
         self.withdraw();logger.info('Main window hidden to system tray')
         log_activity('tray','window_hidden','completed')
+        explain=getattr(self,'_explain_tray_hide',None)
+        if callable(explain):explain()
+
+    def _explain_tray_hide(self):
+        """Tell a first-time user where the window went, once per install.
+
+        A balloon message is used when the backend supports it; otherwise the
+        fact is written to the activity log so support can see it. The hint is
+        never shown again after the first acknowledged hide.
+        """
+        if setting('tray_hint_shown')=='1':return
+        message=_('{app_name} fortsätter i systemfältet. Högerklicka på ikonen för att öppna fönstret eller avsluta helt.',app_name=APP_NAME)
+        tray_icon=getattr(self,'tray',None)
+        shown=False
+        if tray_icon is not None and hasattr(tray_icon,'notify'):
+            try:shown=bool(tray_icon.notify(message,_('Fönstret ligger i systemfältet')))
+            except Exception:shown=False
+        try:set_setting('tray_hint_shown','1')
+        except Exception:pass
+        logger.info('First hide to system tray explained; balloon shown=%s',shown)
+        log_activity('tray','first_hide_hint','completed',balloon=shown)
 
     def quit_app(self):
         """Exit the whole application rather than only hiding its window."""
@@ -1676,6 +1765,19 @@ class ReminderApp(tk.Tk):
         except Exception:pass
         try:self.minsize(min(940,width),min(560,height))
         except Exception:pass
+
+    def _configure_macos_desktop_events(self):
+        """Match macOS conventions without changing the cross-platform flow.
+
+        Clicking the Dock icon must bring back a window that was closed to the
+        menu bar, and Cmd+Q must be a real exit. Both are native Tk commands
+        that only exist on Aqua; elsewhere the methods are simply not called.
+        """
+        if sys.platform!='darwin':return
+        for command,callback in (('tk::mac::ReopenApplication',self.show_from_tray),('tk::mac::Quit',self.quit_app)):
+            try:self.createcommand(command,callback)
+            except Exception:
+                logger.info('macOS desktop event %s is not available in this Tk build',command)
 
     def _configure_macos_dock_icon(self):
         if sys.platform!='darwin':return
@@ -2407,6 +2509,10 @@ class ReminderApp(tk.Tk):
             color_tag=invoice_row_color_tag(r,stage)
             self.tree.insert('', 'end',iid=str(r['id']),values=(r['invoice_no'],r['customer'],r['due_date'],money(float(r['amount'] or 0),r['currency']),money(remain,r['currency']),p1_display,p2_display,reminder_email_status(r),stage_display,fee),tags=(color_tag,) if color_tag else ())
         self.show_detail()
+        # Tray refresh is best effort: a missing or stopped tray must never
+        # stop the invoice list from updating.
+        refresh_tray=getattr(self,'refresh_tray',None)
+        if callable(refresh_tray):refresh_tray()
 
     def selected(self):
         sel=self.tree.selection()

@@ -65,6 +65,9 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "assets/paypamin_flow_512.png",
     "assets/paypamin_logo.png",
     "assets/paypamin_logo.svg",
+    "assets/paypamin_logo_print.svg",
+    "assets/paypamin_logo_print_mono.svg",
+    "assets/paypamin_flow_small.svg",
 )
 SUPPORTED_PLATFORMS = "Windows · macOS · Linux"
 
