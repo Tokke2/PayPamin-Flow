@@ -3,7 +3,7 @@ PayPamin Flow – tryckfiler / print files
 
 Den här mappen följer med appens releasepaket. Du behöver inte ladda ner
 något separat: filerna finns redan i den installerade appen under assets/print/
-och kan öppnas direkt från appen via Hjälp → Öppna tryckfiler.
+och kan öppnas direkt från appen via Arkiv → Öppna tryckfiler.
 
 Innehåll
 --------
@@ -22,8 +22,7 @@ Rekommendation till tryckeriet
 - PDF:en är 98 x 29,9 mm inklusive 4 mm fritt utrymme runt märket.
   Skala proportionellt; ändra aldrig höjd och bredd separat.
 - Minsta bredd för tryck: 25 mm. Under det blir bockens kontur otydlig.
-- Fritt utrymme runt logotypen: minst 4 mm (motsvarar P-märkets inre
-  höjd) på alla sidor.
+- Fritt utrymme runt logotypen: minst 4 mm på alla sidor.
 - Färger (RGB i originalet, konverteras till CMYK av tryckeriet):
     Mörkblå   #0F2F63
     Ljusblå   #1B5AA8
