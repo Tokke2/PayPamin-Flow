@@ -478,7 +478,7 @@ class AccessibilityAppIntegrationTests(unittest.TestCase):
         with patch.object(self.app, "set_setting") as save, patch.object(self.app, "refresh_json_journal") as journal:
             result = self.app.ReminderApp.set_font_scale(fake, 1.5)
         self.assertEqual(result, 1.5)
-        fake._accessibility_style.apply.assert_called_once_with(1.5, high_contrast=False)
+        fake._accessibility_style.apply.assert_called_once_with(1.5, high_contrast=False, pixel_scale=1.0)
         save.assert_called_once_with(self.app.FONT_SCALE_SETTING, "1.5")
         journal.assert_called_once_with(parent=fake)
 

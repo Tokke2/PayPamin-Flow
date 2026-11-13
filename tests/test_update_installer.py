@@ -2,6 +2,7 @@ import hashlib
 import io
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from app_info import PYTHON_PACKAGE_REQUIRED_FILES, PYTHON_RELEASE_ASSET, finger
 from update_checker import ReleaseAsset, ReleaseInfo
 from update_installer import (
     UpdateInstallError,
+    _download_asset,
     _validate_package_build,
     cleanup_update,
     install_update,
@@ -313,6 +315,79 @@ class UpdateInstallerTests(unittest.TestCase):
         )
         with self.assertRaises(UpdateInstallError):
             stage_update(unsafe, platform="linux", target_path=self.target, opener=opener_for(responses))
+
+
+class DownloadRetryTests(unittest.TestCase):
+    """GitHub answers 504 until a freshly uploaded asset is ready to serve."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.destination = Path(self.temporary.name) / "asset.zip"
+        self.asset = ReleaseAsset(PYTHON_RELEASE_ASSET, PACKAGE_URL)
+        self.waits = []
+
+    def download(self, opener, retries=None):
+        kwargs = {"sleep": self.waits.append}
+        if retries is not None:
+            kwargs["retries"] = retries
+        return _download_asset(self.asset, self.destination, opener=opener, **kwargs)
+
+    def test_repeated_gateway_timeouts_are_retried_until_the_asset_arrives(self):
+        calls = []
+
+        def opener(request, timeout):
+            calls.append(request.full_url)
+            if len(calls) < 3:
+                raise urllib.error.HTTPError(request.full_url, 504, "Gateway Timeout", {}, None)
+            return FakeResponse(request.full_url, b"package bytes")
+
+        digest = self.download(opener)
+        self.assertEqual(digest, hashlib.sha256(b"package bytes").hexdigest())
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(self.waits, [1.5, 3.0])
+        self.assertEqual(self.destination.read_bytes(), b"package bytes")
+
+    def test_gateway_timeout_reported_as_a_response_status_is_also_retried(self):
+        calls = []
+
+        def opener(request, timeout):
+            calls.append(request.full_url)
+            if len(calls) == 1:
+                class Timeout(FakeResponse):
+                    pass
+                response = Timeout(request.full_url, b"")
+                response.status = 504
+                return response
+            return FakeResponse(request.full_url, b"package bytes")
+
+        self.download(opener)
+        self.assertEqual(len(calls), 2)
+
+    def test_permanent_http_errors_are_reported_without_retrying(self):
+        calls = []
+
+        def opener(request, timeout):
+            calls.append(request.full_url)
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+        with self.assertRaisesRegex(UpdateInstallError, "HTTP 404"):
+            self.download(opener)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.waits, [])
+
+    def test_a_network_outage_is_retried_then_reported(self):
+        calls = []
+
+        def opener(request, timeout):
+            calls.append(request.full_url)
+            raise urllib.error.URLError("timed out")
+
+        with self.assertRaises(UpdateInstallError) as raised:
+            self.download(opener, retries=2)
+        self.assertIn("timed out", str(raised.exception))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.waits, [1.5])
 
 
 if __name__ == "__main__":

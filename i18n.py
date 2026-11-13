@@ -126,7 +126,7 @@ _ENGLISH = {
     "Uppdatera lista": "Refresh list",
     "Öppna SVG-mapp": "Open SVG folder",
     "Importera PDF eller lägg till en faktura manuellt.": "Import a PDF or add an invoice manually.",
-    "Startvärden: P1 +5 dagar · P2 +5 dagar · Kronofogden-granskning +5 dagar · 60 kr för privatpersoner, 450 kr för företag · ränta 23%": "Defaults: P1 +5 days · P2 +5 days · Kronofogden review +5 days · SEK 60 for private individuals, SEK 450 for businesses · 23% interest",
+    "Startvärden: P1 +{p1} dagar · P2 +{p2} dagar · Kronofogden-granskning +{p3} dagar · {fee} för privatpersoner, {compensation} för företag · ränta {interest} %": "Defaults: P1 +{p1} days · P2 +{p2} days · Kronofogden review +{p3} days · {fee} for private individuals, {compensation} for businesses · {interest}% interest",
     "Redigera faktura": "Edit invoice",
     "Redigera kund": "Edit customer",
     "E-postadresser": "Email addresses",
@@ -539,7 +539,6 @@ _ENGLISH = {
     "Kunde inte rensa cache": "Could not clear cache",
     "Tillfälliga filer rensade: {files}\nFrigjort utrymme: {bytes} byte\nFel: {errors}\n\nFakturor, importmapp, inställningar och säkerhetskopior har inte rörts.": "Temporary files removed: {files}\nSpace freed: {bytes} bytes\nErrors: {errors}\n\nInvoices, the import folder, settings and backups were not touched.",
     "Avsluta helt": "Exit completely",
-    "Dölj till systemfältet": "Hide to system tray",
     "Fönstret kan inte döljas i systemfältet på den här datorn. Vill du avsluta appen helt?": "The window cannot be hidden to the system tray on this computer. Do you want to exit the app completely?",
     "Hjälp": "Help",
     "Inställningar, fakturor, påminnelser och logotyper har kopierats till:\n{path}": "Settings, invoices, reminders and logos have been backed up to:\n{path}",
@@ -728,6 +727,9 @@ _ENGLISH = {
     "Räntan kan inte vara negativ.": "The interest cannot be negative.",
     "Räntan {rate} % är högre än taket {cap} % för privatpersoner.": "The interest {rate}% is above the {cap}% ceiling for private individuals.",
     "Räntan {rate} % är högre än den lagstadgade {statutory} % och kräver avtal när skulden uppstod.": "The interest {rate}% is above the statutory {statutory}% and requires an agreement made when the debt arose.",
+    "Dölj i systemfältet": "Hide to the system tray",
+    "Avsluta {app_name} helt?\n\nAppen stängs även i systemfältet. Använd Dölj i systemfältet om den ska fortsätta bevaka importmappen i bakgrunden.": "Exit {app_name} completely?\n\nThe app closes in the system tray as well. Use Hide to the system tray if it should keep watching the import folder in the background.",
+    "Releasen saknar Python-paket eller SHA-256-kontrollsumma för den här plattformen. Saknas: {files}": "The release is missing the Python package or SHA-256 checksum for this platform. Missing: {files}",
 }
 
 

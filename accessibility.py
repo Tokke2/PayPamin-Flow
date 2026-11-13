@@ -276,8 +276,20 @@ class AccessibleStyle:
         else:
             self.font_family = "TkDefaultFont"
 
-    def apply(self, scale, high_contrast=False):
+    def apply(self, scale, high_contrast=False, pixel_scale=1.0):
+        """Restyle the whole toolkit.
+
+        ``scale`` zooms the text and ``pixel_scale`` converts a 96-DPI design
+        pixel to the physical pixels of the current display. Fonts are sized in
+        points and are already scaled by Tk from the screen DPI, so they must
+        not be multiplied twice; paddings, row heights and focus rings are
+        pixels and do need it. The two are kept apart for exactly that reason.
+        """
         scale = normalize_font_scale(scale)
+        try:
+            pixels = max(1.0, float(pixel_scale))
+        except (TypeError, ValueError):
+            pixels = 1.0
         self.high_contrast = bool(high_contrast)
         palette = contrast_palette(self.high_contrast)
         for name, font in self.fonts.items():
@@ -285,10 +297,13 @@ class AccessibleStyle:
                 font.configure(size=scaled_number(self.base_sizes[name], scale))
             except Exception:
                 continue
-        size = lambda value: scaled_number(value, scale)
+        # Pixel metrics are not point sizes, so they skip the font clamp and
+        # take the display scale as well.
+        pixel_factor = scale * pixels
+        size = lambda value: max(1, int(round(abs(float(value)) * pixel_factor)))
         font = lambda points, weight=None: (
-            (self.font_family, size(points)) if weight is None
-            else (self.font_family, size(points), weight)
+            (self.font_family, scaled_number(points, scale)) if weight is None
+            else (self.font_family, scaled_number(points, scale), weight)
         )
         configure = self.style.configure
         configure("TFrame", background=palette["background"])

@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -38,6 +40,12 @@ from i18n import _
 from update_checker import ReleaseInfo
 
 DOWNLOAD_TIMEOUT = 90
+# GitHub answers 502/503/504 while a release asset is still being generated,
+# so a download is retried a few times before it is reported as a failure.
+DOWNLOAD_RETRIES = 3
+DOWNLOAD_RETRY_DELAY = 1.5
+RETRYABLE_HTTP_CODES = frozenset({408, 425, 429, 500, 502, 503, 504, 522, 524})
+TRANSIENT_DOWNLOAD_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException)
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 _LOG_ERROR_MARKERS = re.compile(
     r"fail|error|could not|invalid|mismatch|cancel|rolled back", re.IGNORECASE
@@ -51,6 +59,10 @@ UPDATE_RESTART_TIMEOUT_SECONDS = 20.0
 
 class UpdateInstallError(RuntimeError):
     """Raised when an update cannot be downloaded, installed, or restarted."""
+
+
+class TransientDownloadError(UpdateInstallError):
+    """A download failure that is worth retrying, such as HTTP 504."""
 
 
 @dataclass
@@ -126,7 +138,10 @@ def _download(url: str, destination: Path, max_bytes: int = MAX_DOWNLOAD_BYTES, 
             if get_url:_github_https_url(get_url())
             status = getattr(response, 'status', 200)
             if status != 200:
-                raise UpdateInstallError(_("Nedladdningen misslyckades med HTTP {code}.", code=status))
+                message = _("Nedladdningen misslyckades med HTTP {code}.", code=status)
+                if status in RETRYABLE_HTTP_CODES:
+                    raise TransientDownloadError(message)
+                raise UpdateInstallError(message)
             with destination.open("wb") as target:
                 while True:
                     block = response.read(1024 * 1024)
@@ -142,15 +157,56 @@ def _download(url: str, destination: Path, max_bytes: int = MAX_DOWNLOAD_BYTES, 
     return digest.hexdigest()
 
 
-def _download_asset(asset, destination: Path, max_bytes: int = MAX_DOWNLOAD_BYTES, opener=None) -> str:
-    try:
-        return _download(asset.url, destination, max_bytes=max_bytes, opener=opener)
-    except UpdateInstallError:
-        raise
-    except Exception as exc:
-        raise UpdateInstallError(
-            _("Uppdateringspaketet kunde inte laddas ner: {error}", error=exc)
-        ) from exc
+def _download_asset(
+    asset,
+    destination: Path,
+    max_bytes: int = MAX_DOWNLOAD_BYTES,
+    opener=None,
+    retries: int | None = None,
+    sleep=None,
+) -> str:
+    """Download one release asset, retrying transient server and network errors.
+
+    GitHub returns 504 while a release asset is still being generated, and a
+    dropped connection is equally temporary. Permanent failures (unsafe URL,
+    too large package, HTTP 404) are reported immediately.
+    """
+    attempts = max(1, int(DOWNLOAD_RETRIES if retries is None else retries))
+    delay = DOWNLOAD_RETRY_DELAY
+    wait = sleep or time.sleep
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return _download(asset.url, destination, max_bytes=max_bytes, opener=opener)
+        except TransientDownloadError as exc:
+            last_error = exc
+        except urllib.error.HTTPError as exc:
+            if exc.code not in RETRYABLE_HTTP_CODES:
+                raise UpdateInstallError(
+                    _("Nedladdningen misslyckades med HTTP {code}.", code=exc.code)
+                ) from exc
+            last_error = exc
+        except UpdateInstallError:
+            raise
+        except TRANSIENT_DOWNLOAD_ERRORS as exc:
+            last_error = exc
+        except Exception as exc:
+            raise UpdateInstallError(
+                _("Uppdateringspaketet kunde inte laddas ner: {error}", error=exc)
+            ) from exc
+        if attempt >= attempts:
+            break
+        try:
+            destination.unlink()
+        except OSError:
+            pass
+        wait(delay)
+        delay *= 2
+    if isinstance(last_error, UpdateInstallError):
+        raise last_error
+    raise UpdateInstallError(
+        _("Uppdateringspaketet kunde inte laddas ner: {error}", error=last_error)
+    ) from last_error
 
 
 def _package_version(source_path: Path) -> str:
@@ -272,7 +328,19 @@ def stage_update(
     asset = assets.get(PYTHON_RELEASE_ASSET)
     checksum_asset = assets.get(PYTHON_RELEASE_ASSET + '.sha256')
     if asset is None or checksum_asset is None:
-        raise UpdateInstallError(_("Releasen saknar Python-paket eller SHA-256-kontrollsumma för den här plattformen."))
+        # Name the missing file so the log says whether the ZIP or the sidecar
+        # is still uploading on GitHub.
+        missing = [
+            name
+            for name, item in (
+                (PYTHON_RELEASE_ASSET, asset),
+                (PYTHON_RELEASE_ASSET + ".sha256", checksum_asset),
+            )
+            if item is None
+        ]
+        raise UpdateInstallError(
+            _("Releasen saknar Python-paket eller SHA-256-kontrollsumma för den här plattformen. Saknas: {files}", files=", ".join(missing))
+        )
 
     work_dir = Path(tempfile.mkdtemp(prefix="paypamin-flow-python-update-"))
     archive_path = work_dir / "update.zip"

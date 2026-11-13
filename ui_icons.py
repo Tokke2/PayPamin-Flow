@@ -25,7 +25,7 @@ LABEL_ICONS = {
     "Öppna importmapp": "folder_import",
     "Öppna SVG-mapp": "folder",
     "Rensa cache nu": "cache",
-    "Dölj till systemfältet": "tray",
+    "Dölj i systemfältet": "tray",
     "Avsluta helt": "power",
     "Visa samlad fellogg": "error",
     "Visa teknisk logg": "technical",

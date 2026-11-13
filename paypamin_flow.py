@@ -122,7 +122,6 @@ from accessibility import (
     monitor_work_area,
     normalize_font_scale,
     prepare_focus_tree,
-    scaled_number,
     stepped_font_scale,
     system_high_contrast,
 )
@@ -380,6 +379,57 @@ def ledger_receipt_text(report,plan):
         for update in partial_updates:
             lines.append(_('{invoice} – {customer} – {previous} → {new} – Belopp/Saldo i listan',invoice=update.invoice_no,customer=update.customer,previous=money(update.previous_paid,update.currency),new=money(update.new_paid,update.currency)))
     return '\n'.join(lines)
+
+
+def ui_is_alive(window):
+    """True while a window still exists and the application is not closing.
+
+    Tk raises TclError for every widget that has already been destroyed, so
+    long background work has to ask this before touching the UI. A plain
+    object without ``winfo_exists`` counts as alive, which keeps the pure
+    logic testable without a display.
+    """
+    if getattr(window,'_quitting',False):return False
+    exists=getattr(window,'winfo_exists',None)
+    if exists is None:return True
+    try:return bool(exists())
+    except Exception:return False
+
+
+def configure_windows_dpi_awareness():
+    """Render text and artwork at native resolution on a scaled Windows display.
+
+    A DPI-unaware process is told the screen is 96 DPI; Windows then paints the
+    window at that size and bitmap-stretches the finished image to the real
+    scale factor. That is what makes text, the logo and the icons look soft on
+    a 125-200 % display. Declaring awareness before Tk creates its interpreter
+    also makes Tk read the true DPI for ``tk scaling``. No-op elsewhere.
+    """
+    if not sys.platform.startswith('win'):return False
+    try:
+        import ctypes
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, Windows 10 1703 and later.
+        try:
+            set_context=ctypes.windll.user32.SetProcessDpiAwarenessContext
+            set_context.argtypes=[ctypes.c_void_p];set_context.restype=ctypes.c_bool
+            if set_context(ctypes.c_void_p(-4)):
+                logger.info('Windows DPI awareness enabled: per-monitor v2')
+                return True
+        except (AttributeError,OSError):pass
+        try:
+            # PROCESS_PER_MONITOR_DPI_AWARE, Windows 8.1 and later.
+            if ctypes.windll.shcore.SetProcessDpiAwareness(2)==0:
+                logger.info('Windows DPI awareness enabled: per-monitor')
+                return True
+        except (AttributeError,OSError):pass
+        try:
+            if ctypes.windll.user32.SetProcessDPIAware():
+                logger.info('Windows DPI awareness enabled: system')
+                return True
+        except (AttributeError,OSError):pass
+    except Exception:
+        logger.exception('Windows DPI awareness could not be enabled')
+    return False
 
 
 def configure_windows_app_identity():
@@ -1534,7 +1584,9 @@ def reminder_archive_customer_map():
 class ReminderApp(tk.Tk):
     def __init__(self):
         set_language(setting('language') or 'sv')
-        super().__init__(); self.title(APP_NAME); self._apply_initial_main_geometry()
+        super().__init__(); self.title(APP_NAME)
+        self.dpi_scale=self._display_scale()
+        self._apply_initial_main_geometry()
         self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
         self.invoice_sort_column='due_date';self.invoice_sort_reverse=False
         self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._available_update=None;self._update_helper_process=None;self.update_button=None
@@ -1719,6 +1771,35 @@ class ReminderApp(tk.Tk):
         except tk.TclError:return
         if minimized:self.hide_to_tray()
 
+    def _defaults_summary_text(self):
+        """Describe the current defaults without restating numbers that can drift."""
+        return _('Startvärden: P1 +{p1} dagar · P2 +{p2} dagar · Kronofogden-granskning +{p3} dagar · {fee} för privatpersoner, {compensation} för företag · ränta {interest} %',
+                 p1=setting('p1_days') or '5', p2=setting('p2_days') or '5', p3=setting('p3_days') or '5',
+                 fee=money(REMINDER_FEE_CAP), compensation=money(LATE_PAYMENT_COMPENSATION),
+                 interest=f'{LATE_PAYMENT_INTEREST:g}')
+
+    def _ui_alive(self):
+        """True while the main window still exists and the app is not closing."""
+        return ui_is_alive(self)
+
+    def _refresh_defaults_summary(self):
+        """Keep the footer defaults in step with the saved settings."""
+        summary=getattr(self,'_footer_summary',None)
+        if summary is None:return
+        text=self._defaults_summary_text()
+        try:
+            if str(summary.cget('text'))!=text:summary.configure(text=text)
+        except tk.TclError:pass
+
+    def confirm_quit(self):
+        """Ask once before the whole application, including the tray, exits."""
+        if getattr(self,'_quitting',False):return
+        if messagebox.askyesno(
+            _('Avsluta helt'),
+            _('Avsluta {app_name} helt?\n\nAppen stängs även i systemfältet. Använd Dölj i systemfältet om den ska fortsätta bevaka importmappen i bakgrunden.',app_name=APP_NAME),
+            parent=self,
+        ):self.quit_app()
+
     def hide_to_tray(self):
         """Close and minimize hide the window until the user chooses full exit."""
         if self._quitting:return
@@ -1825,19 +1906,58 @@ class ReminderApp(tk.Tk):
             logger.error('JSON journal import failed: %s',exc)
             messagebox.showerror(_('JSON-journalen kunde inte importeras'),str(exc),parent=self)
 
+    def _scaled_photo(self,source,target_width):
+        """Load ``source`` resized to the pixels this display actually draws.
+
+        Tk cannot rescale a PhotoImage smoothly, so a bitmap that is drawn at a
+        different size than its own is either stretched by the window manager
+        (soft) or subsampled by Tk (blocky). Downscaling once from the largest
+        master with a good filter is what keeps the wordmark crisp at 125-200 %.
+        """
+        try:scale=float(getattr(self,'dpi_scale',1.0))
+        except (TypeError,ValueError):scale=1.0
+        width=max(1,int(round(float(target_width)*scale)))
+        try:
+            from PIL import Image,ImageTk
+        except ImportError:
+            # Pillow is an optional add-on; the plain bitmap is still sharp at 100 %.
+            fallback=ICON_DIR/Path(source).name
+            try:return tk.PhotoImage(master=self,file=str(fallback))
+            except tk.TclError:return None
+        try:
+            with Image.open(source) as original:
+                source_width=max(1,original.width)
+                height=max(1,int(round(original.height*width/source_width)))
+                resized=original.convert('RGBA').resize((width,height),Image.LANCZOS)
+            return ImageTk.PhotoImage(resized,master=self)
+        except Exception:
+            logger.exception('Icon could not be scaled for the display: %s',source)
+            try:return tk.PhotoImage(master=self,file=str(source))
+            except tk.TclError:return None
+
     def _configure_icons(self):
         """Use the product identity for windows, OS icons and the header logo."""
         self._window_icons=[];self._header_icon=None;self._brand_logo=None;self._action_icons={}
         self._configure_macos_dock_icon()
+        scaled_photo=getattr(self,'_scaled_photo',None)
+        def load_photo(path,width):
+            """Downscale when the display scaling helper is available."""
+            if callable(scaled_photo):return scaled_photo(path,width)
+            return tk.PhotoImage(master=self,file=str(path))
         try:
             for size in (16,32,48,256):
                 path=ICON_DIR/f'paypamin_flow_{size}.png'
                 if path.is_file():self._window_icons.append(tk.PhotoImage(master=self,file=str(path)))
             if self._window_icons:self.iconphoto(True,*self._window_icons)
-            header_path=ICON_DIR/'paypamin_flow_48.png'
-            if header_path.is_file():self._header_icon=tk.PhotoImage(master=self,file=str(header_path))
-            logo_path=ICON_DIR/'paypamin_logo.png'
-            if logo_path.is_file():self._brand_logo=tk.PhotoImage(master=self,file=str(logo_path))
+            # Draw the header mark at 48 design pixels from the 256 px master,
+            # so a 150-200 % display still downsamples instead of upscaling.
+            header_master=ICON_DIR/'paypamin_flow_256.png'
+            header_path=header_master if header_master.is_file() else ICON_DIR/'paypamin_flow_48.png'
+            if header_path.is_file():self._header_icon=load_photo(header_path,48)
+            # The 1024 px master is downscaled, never a small bitmap upscaled.
+            logo_master=ICON_DIR/'paypamin_logo_1024.png'
+            logo_path=logo_master if logo_master.is_file() else ICON_DIR/'paypamin_logo.png'
+            if logo_path.is_file():self._brand_logo=load_photo(logo_path,256)
             # Keep the native Windows icon last so it is not replaced by the
             # generic pythonw.exe taskbar icon on older Tk/Windows versions.
             if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
@@ -1845,7 +1965,8 @@ class ReminderApp(tk.Tk):
                 configure_windows_window_icon(self)
                 # Reapply after the native top-level window has been mapped.
                 self.after_idle(lambda:configure_windows_window_icon(self))
-        except tk.TclError:
+        except Exception:
+            # A missing or unreadable icon must never stop the app from starting.
             logger.exception('Application icon could not be loaded')
 
     def _ui_icon(self,name,inverse=False):
@@ -1966,11 +2087,12 @@ class ReminderApp(tk.Tk):
             screen_height=max(1,int(self.winfo_screenheight()))
         except Exception:
             screen_width,screen_height=1180,700
-        width=min(1180,max(720,screen_width-80))
-        height=min(700,max(480,screen_height-120))
+        scale=getattr(self,'dpi_scale',1.0)
+        width=min(int(round(1180*scale)),max(720,screen_width-80))
+        height=min(int(round(700*scale)),max(480,screen_height-120))
         try:self.geometry(f'{width}x{height}')
         except Exception:pass
-        try:self.minsize(min(940,width),min(560,height))
+        try:self.minsize(min(int(round(940*scale)),width),min(int(round(560*scale)),height))
         except Exception:pass
 
     def _configure_macos_desktop_events(self):
@@ -2021,8 +2143,14 @@ class ReminderApp(tk.Tk):
         ttk.Button(form,text=_('Stäng'),command=w.destroy,style='Accent.TButton').pack(pady=(20,0))
 
     def _run_scheduled_update_check(self):
-        if setting('update_auto')=='1':self.check_for_updates(manual=False)
-        self.after(UPDATE_CHECK_INTERVAL_MS,self._run_scheduled_update_check)
+        if not ui_is_alive(self):return
+        try:
+            if setting('update_auto')=='1':self.check_for_updates(manual=False)
+        except tk.TclError:
+            logger.info('Scheduled update check stopped because the window closed')
+            return
+        try:self.after(UPDATE_CHECK_INTERVAL_MS,self._run_scheduled_update_check)
+        except tk.TclError:pass
 
     def _update_button_idle_text(self):
         return _('Uppdatering tillgänglig') if getattr(self,'_available_update',None) is not None else _('Uppdatera appen')
@@ -2087,6 +2215,9 @@ class ReminderApp(tk.Tk):
         self.after(200,lambda:self._poll_update_check(result_queue))
 
     def _poll_update_check(self,result_queue):
+        if not ui_is_alive(self):
+            logger.info('Update check result discarded because the window closed')
+            return
         try:status,manual,payload=result_queue.get_nowait()
         except queue.Empty:
             self.after(200,lambda:self._poll_update_check(result_queue));return
@@ -2154,6 +2285,9 @@ class ReminderApp(tk.Tk):
         if manual:self._show_update_install_error(release,error)
 
     def _poll_update_installation(self,result_queue):
+        if not ui_is_alive(self):
+            logger.info('Update installation result discarded because the window closed')
+            return
         try:status,manual,release,payload=result_queue.get_nowait()
         except queue.Empty:
             self.after(200,lambda:self._poll_update_installation(result_queue));return
@@ -2351,19 +2485,35 @@ class ReminderApp(tk.Tk):
         self.after(350,poll)
         return True
 
+    def _display_scale(self):
+        """Return how many physical pixels one 96-DPI design pixel occupies."""
+        try:dpi=float(self.winfo_fpixels('1i'))
+        except Exception:return 1.0
+        if dpi<=0:return 1.0
+        return max(1.0,min(4.0,round(dpi/96.0,2)))
+
+    def _px(self,value):
+        """Scale a 96-DPI design pixel to the display and the chosen text size."""
+        try:factor=float(self.dpi_scale)
+        except (AttributeError,TypeError):factor=1.0
+        try:text=float(self.ui_font_scale)
+        except (AttributeError,TypeError):text=1.0
+        return max(1,int(round(abs(float(value))*factor*text)))
+
     def _style(self):
         s=ttk.Style(self); s.theme_use('clam')
         self.font_family=tkfont.nametofont('TkDefaultFont').cget('family')
         self.ui_font_scale=normalize_font_scale(setting(FONT_SCALE_SETTING))
         self._high_contrast=system_high_contrast()
         self._accessibility_style=AccessibleStyle(s,tkfont,self.font_family)
-        self._accessibility_style.apply(self.ui_font_scale,high_contrast=self._high_contrast)
+        self._accessibility_style.apply(self.ui_font_scale,high_contrast=self._high_contrast,pixel_scale=self.dpi_scale)
 
     def _apply_accessibility_palette(self):
         """Re-style open windows after a desktop high-contrast change."""
         style=getattr(self,'_accessibility_style',None)
         high_contrast=getattr(self,'_high_contrast',False)
-        if style is not None:style.apply(getattr(self,'ui_font_scale',1.0),high_contrast=high_contrast)
+        if style is not None:
+            style.apply(getattr(self,'ui_font_scale',1.0),high_contrast=high_contrast,pixel_scale=getattr(self,'dpi_scale',1.0))
         tree=getattr(self,'tree',None)
         if tree is not None:configure_invoice_row_colors(tree,high_contrast)
         windows=[self]+[child for child in self.winfo_children() if child.winfo_class()=='Toplevel']
@@ -2404,11 +2554,11 @@ class ReminderApp(tk.Tk):
             set_setting(FONT_SCALE_SETTING,font_scale_storage(self.ui_font_scale))
             refresh_json_journal(parent=self)
         style=getattr(self,'_accessibility_style',None)
-        if style is not None:style.apply(self.ui_font_scale,high_contrast=getattr(self,'_high_contrast',False))
+        if style is not None:style.apply(self.ui_font_scale,high_contrast=getattr(self,'_high_contrast',False),pixel_scale=getattr(self,'dpi_scale',1.0))
         tree=getattr(self,'tree',None)
         if tree is not None:
             for column,width in getattr(self,'_invoice_column_widths',{}).items():
-                try:tree.column(column,width=scaled_number(width,self.ui_font_scale))
+                try:tree.column(column,width=self._px(width))
                 except tk.TclError:pass
         scale_var=getattr(self,'_font_scale_var',None)
         if scale_var is not None:
@@ -2565,7 +2715,7 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Öppna tryckfiler'),command=self.open_print_folder)
         file_menu.add_command(label=_('Rensa cache nu'),command=self.clear_cache_now)
         file_menu.add_separator()
-        file_menu.add_command(label=_('Dölj till systemfältet'),command=self.hide_to_tray)
+        file_menu.add_command(label=_('Dölj i systemfältet'),command=self.hide_to_tray)
         file_menu.add_command(label=_('Avsluta helt'),command=self.quit_app)
         menu.add_cascade(label=_('Arkiv'),menu=file_menu)
         help_menu=tk.Menu(menu,tearoff=0)
@@ -2639,7 +2789,7 @@ class ReminderApp(tk.Tk):
         self._invoice_column_widths=widths.copy()
         for c in cols:
             self.tree.heading(c,text=labels[c],command=lambda column=c:self.sort_invoice_column(column))
-            self.tree.column(c,width=scaled_number(widths[c],self.ui_font_scale),anchor='w')
+            self.tree.column(c,width=self._px(widths[c]),anchor='w')
         self.tree.pack(side='top',fill='both',expand=True); sb=ttk.Scrollbar(wrap,orient='vertical',command=self.tree.yview);sb.pack(side='right',fill='y');xsb=ttk.Scrollbar(wrap,orient='horizontal',command=self.tree.xview);xsb.pack(side='bottom',fill='x');self.tree.configure(yscrollcommand=sb.set,xscrollcommand=xsb.set)
         self.tree.bind('<<TreeviewSelect>>',lambda e:self.show_detail())
         self.tree.bind('<Delete>',lambda e:self.delete_invoice())
@@ -2667,13 +2817,37 @@ class ReminderApp(tk.Tk):
         self._instrument_menu_actions(self.row_menu)
         self.detail=ttk.Label(self,text=_('Importera PDF eller lägg till en faktura manuellt.'),padding=(24,4,24,16),style='Sub.TLabel');self.detail.pack(fill='x')
         foot=ttk.Frame(self,padding=(22,0,22,12));foot.pack(fill='x')
-        ttk.Label(foot,text=_('Startvärden: P1 +5 dagar · P2 +5 dagar · Kronofogden-granskning +5 dagar · 60 kr för privatpersoner, 450 kr för företag · ränta 23%'),style='Sub.TLabel').pack(side='left')
-        ttk.Button(foot,text=_('Ta bort vald'),command=self.delete_invoice).pack(side='right')
+        # Two rows keep every word readable: the defaults summary never has to
+        # fight the buttons for horizontal space, not even at the smallest
+        # allowed window size or the largest text zoom.
+        summary=ttk.Label(foot,text=self._defaults_summary_text(),style='Sub.TLabel',justify='left')
+        summary.pack(anchor='w',fill='x')
+        def wrap_summary(event):
+            """Wrap instead of clipping when the window is narrow."""
+            limit=max(240,event.width-4)
+            try:
+                if int(summary.cget('wraplength'))!=limit:summary.configure(wraplength=limit)
+            except (tk.TclError,ValueError):pass
+        summary.bind('<Configure>',wrap_summary)
+        row=ttk.Frame(foot);row.pack(fill='x',pady=(6,0))
+        ttk.Button(row,text=_('Ta bort vald'),command=self.delete_invoice).pack(side='left')
+        # Both ways out are visible here, so closing to the tray is a choice
+        # rather than something the user has to discover in a menu.
+        ttk.Button(row,text=_('Avsluta helt'),command=self.confirm_quit).pack(side='right')
+        ttk.Button(row,text=_('Dölj i systemfältet'),command=self.hide_to_tray).pack(side='right',padx=(0,7))
+        self._footer_summary=summary
         ttk.Label(self,text=_('{copyright} · Skapare: {author}',copyright=APP_COPYRIGHT,author=APP_AUTHOR),padding=(24,0,24,9),style='Sub.TLabel').pack(fill='x')
         self._finalize_window_actions(self,main_window=True)
 
     def refresh(self):
-        for i in self.tree.get_children():self.tree.delete(i)
+        if not ui_is_alive(self):
+            logger.info('Invoice list refresh skipped because the window is closing')
+            return
+        try:
+            for i in self.tree.get_children():self.tree.delete(i)
+        except tk.TclError:
+            logger.info('Invoice list refresh skipped because the tree view was destroyed')
+            return
         with connect() as db: rows=db.execute('SELECT * FROM invoices ORDER BY due_date').fetchall()
         flt=self.current_filter_key
         search_var=getattr(self,'invoice_search_var',None)
@@ -2718,6 +2892,8 @@ class ReminderApp(tk.Tk):
             color_tag=invoice_row_color_tag(r,stage)
             self.tree.insert('', 'end',iid=str(r['id']),values=(r['invoice_no'],r['customer'],r['due_date'],money(float(r['amount'] or 0),r['currency']),money(remain,r['currency']),p1_display,p2_display,reminder_email_status(r),stage_display,fee),tags=(color_tag,) if color_tag else ())
         self.show_detail()
+        refresh_summary=getattr(self,'_refresh_defaults_summary',None)
+        if callable(refresh_summary):refresh_summary()
         # Tray refresh is best effort: a missing or stopped tray must never
         # stop the invoice list from updating.
         refresh_tray=getattr(self,'refresh_tray',None)
@@ -3370,20 +3546,29 @@ class ReminderApp(tk.Tk):
 
     def _run_scheduled_import_scan(self):
         """Poll for stable PDFs, then reuse the reviewed manual import flow."""
-        if self._quitting:return
+        if not ui_is_alive(self):return
         try:
-            if setting('auto_import')=='1' and self._python_addons_ready and not self._import_scan_running:
+            if self._python_addons_ready and not self._import_scan_running and setting('auto_import')=='1':
                 files=self._import_monitor.poll()
                 if files:
                     logger.info('Automatic import detected %d stable PDF file(s)',len(files))
                     if self.state()=='withdrawn':self.deiconify()
                     self.scan_import_folder(automatic=True,paths=files)
+        except tk.TclError:
+            # Closing the window during a scan is a normal way to stop it, not
+            # a failure: Tk raises TclError for every widget that just went away.
+            logger.info('Automatic import scan stopped because the window closed')
         except Exception:
             logger.exception('Automatic import folder watch failed')
-        if not self._quitting:self.after(IMPORT_WATCH_INTERVAL_MS,self._run_scheduled_import_scan)
+        if not ui_is_alive(self):return
+        try:self.after(IMPORT_WATCH_INTERVAL_MS,self._run_scheduled_import_scan)
+        except tk.TclError:pass
 
     def scan_import_folder(self,automatic=False,paths=None):
         if getattr(self,'_import_scan_running',False):return
+        if not ui_is_alive(self):
+            logger.info('Import scan skipped because the window is closing')
+            return
         self._import_scan_running=True
         try:
             IMPORT_DIR.mkdir(exist_ok=True)
@@ -3394,10 +3579,16 @@ class ReminderApp(tk.Tk):
                 return
             imported=skipped=failed=duplicates=paid_skipped=0
             for path in files:
+                if not ui_is_alive(self):
+                    logger.info('Import scan stopped because the window closed: imported=%d remaining=%d',imported,len(files)-imported)
+                    break
                 try:
                     candidates=read_invoice_candidates(path)
                     logger.info('PDF import found %d invoice section(s): file=%s',len(candidates),path.name)
                     for section,guess,candidate_hash in candidates:
+                        if not ui_is_alive(self):
+                            logger.info('Import scan stopped before the next invoice section')
+                            break
                         try:
                             source=str(path.resolve())
                             duplicate=find_duplicate_invoice(guess.get('invoice_no',''),candidate_hash)
@@ -4715,6 +4906,7 @@ def main():
     instance=None
     try:
         configure_console_free_subprocesses()
+        configure_windows_dpi_awareness()
         configure_windows_app_identity()
         activation_requested=threading.Event()
         instance=SingleInstance(APP_DIR,on_activate=activation_requested.set)
