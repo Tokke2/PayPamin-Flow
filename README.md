@@ -274,7 +274,11 @@ Appen följer **lag (1981:739) om ersättning för inkassokostnader m.m.** och v
 | **Företag** | **450 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
 | **Myndighet** | **450 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
 
-**Beloppen är fasta.** De följer lagen och kan inte ändras i appen — det finns inget avgiftsfält i **Inställningar**, bara en rad som visar de två beloppen. Ett värde som en äldre version har sparat (till exempel 150 kr) läses aldrig och tas bort ur databasen vid start, så det kan inte följa med i en säkerhetskopia och se ut som en giltig inställning.
+**Beloppen är fasta.** De följer lagen och kan inte ändras i appen — det finns inga avgiftsfält i **Inställningar**, bara en rad som visar de tre talen. Ett värde som en äldre version har sparat (till exempel 150 kr) läses aldrig och tas bort ur databasen vid start, så det kan inte följa med i en säkerhetskopia och se ut som en giltig inställning.
+
+**Dröjsmålsränta: 10 % per år**, referensräntan 2,00 % plus 8 procentenheter enligt 6 § räntelagen. Räntan är fast av samma skäl: 23 %, som äldre versioner föreslog, ligger över taket i 19 a § konsumentkreditlagen (referensräntan + 20 procentenheter = 22 %) och hade krävt ett avtal vid skuldens uppkomst även under taket. Räntan räknas aldrig på avgiften.
+
+Referensräntan fastställs av Riksbanken den 1 januari och 1 juli. Ändras den behöver `REFERENCE_RATE` i `fee_rules.py` uppdateras; appen räknar då ut den nya räntan automatiskt. Appen beräknar inget räntebelopp — den skriver bara ut villkoret på påminnelsen.
 
 Två regler styr hela modellen:
 

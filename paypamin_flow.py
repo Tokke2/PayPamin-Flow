@@ -34,7 +34,7 @@ from fee_rules import (
     AGREEMENT_CONTRACT, AGREEMENT_INVOICE, AGREEMENT_NONE, AGREEMENT_OFFER,
     CUSTOMER_AUTHORITY, CUSTOMER_BUSINESS,
     CUSTOMER_PRIVATE, CUSTOMER_TYPES, LATE_PAYMENT_COMPENSATION, REMINDER_FEE_CAP,
-    assess_fee, chargeable_fee, fee_kind, fee_label_key, is_business,
+    LATE_PAYMENT_INTEREST, assess_fee, chargeable_fee, fee_kind, fee_label_key, is_business,
     legal_basis_key, normalize_agreement, normalize_customer_type,
 )
 from console_free import configure_console_free_subprocesses
@@ -541,13 +541,13 @@ def init_db():
                 db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
         # The fee amounts are fixed by law and deliberately absent from settings,
         # so a value stored by an older version can never change what is charged.
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
         # Remove only those three obsolete keys; nothing else in the database is
         # touched. They were editable amounts, and keeping them would let a stale
         # 150 kr travel on in journal exports as if it still meant something.
-        for obsolete in ('fee','compensation','fee_locked'):
+        for obsolete in ('fee','compensation','fee_locked','interest'):
             row=db.execute('SELECT value FROM settings WHERE key=?',(obsolete,)).fetchone()
             if row is not None:
                 db.execute('DELETE FROM settings WHERE key=?',(obsolete,))
@@ -1147,7 +1147,7 @@ def current_reminder_terms(fee,customer_type=CUSTOMER_PRIVATE,currency='SEK',agr
         'customer_type':customer_type,
         'currency':normalize_currency(currency),
         'fee_agreement':normalize_agreement(agreement),
-        'interest':str(setting('interest') or ''),
+        'interest':f'{LATE_PAYMENT_INTEREST:g}',
         'objection_days':str(setting('objection_days') or ''),
         'payment_deadline_days':str(setting('payment_deadline_days') or ''),
     }
@@ -4157,7 +4157,7 @@ class ReminderApp(tk.Tk):
                 log_activity('reminder','fee_frozen_above_cap','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],fee=fee)
             template_name=r['template_vendor'] or _('Ingen matchad mall')
             logo_path,logo_name=self.invoice_logo(r)
-            confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}\n{note}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee)),fee=money(fee,r['currency']),note=reminder_fee_note(r),interest=setting('interest'),template=template_name,logo=logo_name)
+            confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}\n{note}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee)),fee=money(fee,r['currency']),note=reminder_fee_note(r),interest=f'{LATE_PAYMENT_INTEREST:g}',template=template_name,logo=logo_name)
             for issue in assessment.warnings:
                 confirmation+='\n\n'+fee_issue_text(issue)
             if frozen_note:confirmation+='\n\n'+frozen_note
@@ -4573,7 +4573,6 @@ class ReminderApp(tk.Tk):
             ('Dagar efter förfallodatum till P1','p1_days'),
             ('Dagar efter P1 till P2','p2_days'),
             ('Dagar efter P2 till Kronofogden-granskning','p3_days'),
-            ('Dröjsmålsränta per år (%)','interest'),
             ('Anmärkningstid enligt fakturavillkor (dagar)','objection_days'),
             ('Betalningsfrist på påminnelsen (dagar)','payment_deadline_days'),
         ]
@@ -4583,11 +4582,13 @@ class ReminderApp(tk.Tk):
             entries[key]=cell(label,key)
         # The two amounts come from lag (1981:739) and are shown, never edited.
         grid.add_full(ttk.Label(
-            form,text=_('Påminnelseavgift: {fee} · Förseningsersättning: {compensation}',
-                        fee=money(REMINDER_FEE_CAP),compensation=money(LATE_PAYMENT_COMPENSATION)),
+            form,text=_('Påminnelseavgift: {fee} · Förseningsersättning: {compensation} · Dröjsmålsränta: {interest} %',
+                        fee=money(REMINDER_FEE_CAP),compensation=money(LATE_PAYMENT_COMPENSATION),
+                        interest=f'{LATE_PAYMENT_INTEREST:g}'),
             style='BodyBold.TLabel',
         ))
         hint('Beloppen är låsta av lag och kan inte ändras här. Privatpersoner får påminnelseavgift enligt 4 § och företag eller myndigheter förseningsersättning enligt 4 a §.')
+        hint('Dröjsmålsräntan är referensräntan plus 8 procentenheter enligt 6 § räntelagen. Räntan läggs aldrig på avgiften.')
         hint('Avgiften debiteras en gång per fordran, aldrig en gång per påminnelse.')
         agreement_var=tk.StringVar(value=_(AGREEMENT_LABELS[normalize_agreement(setting('fee_agreement'))]))
         agreement_frame=ttk.Frame(form)

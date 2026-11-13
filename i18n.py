@@ -513,7 +513,6 @@ _ENGLISH = {
     "Dagar efter P1 till P2": "Days after P1 to P2",
     "Dagar efter P2 till Kronofogden-granskning": "Days after P2 to Kronofogden review",
     "Påminnelseavgift per påminnelse (fakturans valuta)": "Reminder fee per reminder (invoice currency)",
-    "Dröjsmålsränta per år (%)": "Late payment interest per year (%)",
     "Anmärkningstid enligt fakturavillkor (dagar)": "Objection period under invoice terms (days)",
     "Betalningsfrist på påminnelsen (dagar)": "Payment deadline on reminder (days)",
     "Starta {app_name} automatiskt när jag loggar in": "Start {app_name} automatically when I log in",
@@ -722,9 +721,13 @@ _ENGLISH = {
     "Ingen avgift debiteras för den här fakturan.": "No fee is charged for this invoice.",
     "Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. Ingen påminnelseavgift debiteras. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.": "The goods remain our property until full payment has been made. Any objections to the invoice must be made within {days} days. No reminder fee is charged. Late payment is subject to {interest}% interest. Special-order parts cannot be returned.",
     "Avgiften {fee} debiterades redan med P1 och ligger över dagens tak. P2 lägger inte till något, men kontrollera fakturan.": "The fee {fee} was already charged with P1 and is above the current cap. P2 does not add anything, but review the invoice.",
-    "Påminnelseavgift: {fee} · Förseningsersättning: {compensation}": "Reminder fee: {fee} · Late-payment compensation: {compensation}",
+    "Påminnelseavgift: {fee} · Förseningsersättning: {compensation} · Dröjsmålsränta: {interest} %": "Reminder fee: {fee} · Late-payment compensation: {compensation} · Late-payment interest: {interest} %",
     "Beloppen är låsta av lag och kan inte ändras här. Privatpersoner får påminnelseavgift enligt 4 § och företag eller myndigheter förseningsersättning enligt 4 a §.": "The amounts are fixed by law and cannot be changed here. Private individuals get a reminder fee under section 4, businesses and authorities late-payment compensation under section 4 a.",
     "Påminnelseavgiften kräver att rätten till den avtalades senast när skulden uppstod. Företag och myndigheter får förseningsersättning i stället, utan avtal.": "The reminder fee requires that the right to it was agreed no later than when the debt arose. Businesses and authorities receive late-payment compensation instead, with no agreement.",
+    "Dröjsmålsräntan är referensräntan plus 8 procentenheter enligt 6 § räntelagen. Räntan läggs aldrig på avgiften.": "The late-payment interest is the reference rate plus eight percentage points under section 6 of the Interest Act. Interest is never added to the fee.",
+    "Räntan kan inte vara negativ.": "The interest cannot be negative.",
+    "Räntan {rate} % är högre än taket {cap} % för privatpersoner.": "The interest {rate}% is above the {cap}% ceiling for private individuals.",
+    "Räntan {rate} % är högre än den lagstadgade {statutory} % och kräver avtal när skulden uppstod.": "The interest {rate}% is above the statutory {statutory}% and requires an agreement made when the debt arose.",
 }
 
 

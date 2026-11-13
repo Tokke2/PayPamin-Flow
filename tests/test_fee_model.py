@@ -80,6 +80,26 @@ class FeeModelTests(unittest.TestCase):
         self.app.set_setting("fee", "150")
         self.assertEqual(self.app.reminder_fee_for(row), 60.0)
 
+    def test_interest_is_the_statutory_ten_percent(self):
+        """Räntelagen 6 §: the reference rate 2,00 % plus eight points."""
+        self.assertEqual(self.app.LATE_PAYMENT_INTEREST, 10.0)
+        self.assertEqual(self.app.setting("interest"), "")
+        with self.app.connect() as db:
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('interest','23')")
+        self.app.init_db()
+        self.assertEqual(self.app.setting("interest"), "")
+        self.assertEqual(self.app.current_reminder_terms(60.0, "private", "SEK")["interest"], "10")
+
+    def test_a_consumer_rate_above_the_ceiling_is_refused(self):
+        """19 a § konsumentkreditlagen caps a consumer at the reference rate + 20."""
+        import fee_rules
+
+        problems = fee_rules.assess_interest("private", 23)
+        self.assertEqual([issue.level for issue in problems], ["error"])
+        self.assertEqual(fee_rules.assess_interest("private", 10), ())
+        self.assertEqual(fee_rules.assess_interest("business", 15, "contract"), ())
+        self.assertEqual([issue.level for issue in fee_rules.assess_interest("business", 15)], ["warning"])
+
     def test_obsolete_fee_settings_are_removed_from_the_database(self):
         with self.app.connect() as db:
             db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('fee','150')")

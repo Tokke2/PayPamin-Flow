@@ -176,7 +176,7 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertEqual(fee, 150.0)
         for key, value in {
             "fee": 150.0,
-            "interest": "23",
+            "interest": "10",
             "objection_days": "5",
             "payment_deadline_days": "5",
             "customer_type": "private",
@@ -237,7 +237,7 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertEqual(kwargs["output_path"], original_path)
         for key, value in {
             "fee": 150.0,
-            "interest": "23",
+            "interest": "10",
             "objection_days": "5",
             "payment_deadline_days": "5",
             "customer_type": "private",

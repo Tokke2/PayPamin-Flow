@@ -201,7 +201,7 @@ class SettingsDialogTests(unittest.TestCase):
         self.app.ttk = FakeTtk(self.registry)
         self.values = {
             "p1_days": "5", "p2_days": "5", "p3_days": "5", "fee_agreement": "",
-            "interest": "23", "objection_days": "5", "payment_deadline_days": "5",
+            "objection_days": "5", "payment_deadline_days": "5",
             "autostart": "1", "update_auto": "1", "auto_import": "1",
             "ledger_friday_reminder": "1", "cache_auto": "1", "language": "sv",
             "start_minimized": "1", "learning_enabled": "1",
@@ -250,18 +250,24 @@ class SettingsDialogTests(unittest.TestCase):
         self.build()
 
         entries = self.widgets("Entry")
-        self.assertEqual(len(entries), 6)
-        self.assertEqual(sorted(entry.text for entry in entries), ["23", "5", "5", "5", "5", "5"])
+        self.assertEqual(len(entries), 5)
+        self.assertEqual(sorted(entry.text for entry in entries), ["5", "5", "5", "5", "5"])
 
     def test_fee_amounts_are_shown_as_fixed_and_have_no_entry_field(self):
         self.build()
 
         labels = [widget.options.get("text") or "" for widget in self.widgets("Label")]
-        self.assertIn("Påminnelseavgift: 60,00 kr · Förseningsersättning: 450,00 kr", labels)
+        self.assertIn(
+            "Påminnelseavgift: 60,00 kr · Förseningsersättning: 450,00 kr · Dröjsmålsränta: 10 %",
+            labels,
+        )
         # Nothing in the dialog can change the amounts.
         entries = self.widgets("Entry")
         self.assertNotIn("60", [entry.text for entry in entries])
         self.assertNotIn("450", [entry.text for entry in entries])
+        # The interest is fixed at the statutory rate and has no field either.
+        self.assertNotIn("10", [entry.text for entry in entries])
+        self.assertNotIn("23", [entry.text for entry in entries])
 
     def test_all_checkboxes_and_the_learning_button_are_present(self):
         self.build()

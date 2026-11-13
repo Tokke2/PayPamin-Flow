@@ -46,6 +46,17 @@ LATE_PAYMENT_COMPENSATION = 450.0
 KIND_REMINDER_FEE = "reminder_fee"
 KIND_COMPENSATION = "compensation"
 
+# Late-payment interest, räntelagen (1975:635) 6 §: the reference rate set by
+# Riksbanken plus eight percentage points. Above that an agreement is needed,
+# and 19 a § konsumentkreditlagen caps a consumer at the reference rate plus
+# twenty points. The reference rate is fixed twice a year (1 January and
+# 1 July); 2.00 % applies from 1 July 2026 (SFS 2026:1490) and must be updated
+# here when Riksbanken changes it.
+REFERENCE_RATE = 2.0
+STATUTORY_INTEREST_SURCHARGE = 8.0
+LATE_PAYMENT_INTEREST = REFERENCE_RATE + STATUTORY_INTEREST_SURCHARGE
+CONSUMER_INTEREST_CEILING = REFERENCE_RATE + 20.0
+
 SEK = "SEK"
 
 AGREEMENT_NONE = ""
@@ -159,6 +170,34 @@ def legal_basis_key(customer_type, fee) -> str:
     if fee_kind(customer_type, fee) == KIND_COMPENSATION:
         return "Förseningsersättning enligt 4 a § lagen (1981:739)."
     return "Påminnelseavgift enligt 4 § lagen (1981:739), högst 60 kr."
+
+
+def assess_interest(customer_type, rate, agreement=AGREEMENT_NONE) -> tuple:
+    """Check a late-payment interest rate and report what the user must decide.
+
+    The app prints one rate on every reminder, so anything above the statutory
+    rate needs an agreement made when the debt arose, and a consumer can never
+    be charged above the ceiling in 19 a § konsumentkreditlagen. The ceiling is
+    reported as an error, because such a term is not enforceable at all.
+    """
+    ctype = normalize_customer_type(customer_type)
+    value = _amount(rate)
+    issues: list[FeeIssue] = []
+    if value < 0:
+        issues.append(FeeIssue(LEVEL_ERROR, "Räntan kan inte vara negativ."))
+    elif ctype == CUSTOMER_PRIVATE and value > CONSUMER_INTEREST_CEILING + MONEY_EPSILON:
+        issues.append(FeeIssue(
+            LEVEL_ERROR,
+            "Räntan {rate} % är högre än taket {cap} % för privatpersoner.",
+            (("rate", _money(value)), ("cap", _money(CONSUMER_INTEREST_CEILING))),
+        ))
+    elif value > LATE_PAYMENT_INTEREST + MONEY_EPSILON and normalize_agreement(agreement) == AGREEMENT_NONE:
+        issues.append(FeeIssue(
+            LEVEL_WARNING,
+            "Räntan {rate} % är högre än den lagstadgade {statutory} % och kräver avtal när skulden uppstod.",
+            (("rate", _money(value)), ("statutory", _money(LATE_PAYMENT_INTEREST))),
+        ))
+    return tuple(issues)
 
 
 def chargeable_fee(customer_type, fee) -> float:
