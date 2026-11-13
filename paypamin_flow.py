@@ -4142,7 +4142,11 @@ class ReminderApp(tk.Tk):
             fee=reminder_fee_for_level(r,level)
             locked=setting('fee_locked')=='1'
             assessment=assess_fee(invoice_customer_type(r),fee,invoice_currency(r),invoice_fee_agreement(r))
-            if assessment.blocked:
+            # A fee already charged with P1 stays fixed. P2 repeats it and does
+            # not increase the claim, so an old, too high amount is reported
+            # instead of blocking the second reminder the customer is waiting for.
+            frozen=level=='P2' and bool(read_reminder_snapshot(row_value(r,'p1_snapshot','')))
+            if assessment.blocked and not frozen:
                 problem=fee_issue_text(assessment.problems[0])
                 logger.warning('Reminder blocked by the fee rules: invoice=%s level=%s fee=%s problem=%s',r['id'],level,fee,problem)
                 log_activity('reminder','fee_blocked','failed',invoice_id=r['id'],invoice_no=r['invoice_no'],level=level,fee=fee)
@@ -4152,11 +4156,17 @@ class ReminderApp(tk.Tk):
                     parent=self,
                 )
                 break
+            frozen_note=''
+            if assessment.blocked:
+                frozen_note=_('Avgiften {fee} debiterades redan med P1 och ligger över dagens tak. P2 lägger inte till något, men kontrollera fakturan.',fee=money(fee,r['currency']))
+                logger.warning('P2 keeps a fee above the cap that was already charged with P1: invoice=%s fee=%s',r['id'],fee)
+                log_activity('reminder','fee_frozen_above_cap','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],fee=fee)
             template_name=r['template_vendor'] or _('Ingen matchad mall')
             logo_path,logo_name=self.invoice_logo(r)
             confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}{locked}\n{note}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee)),fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',note=reminder_fee_note(r),interest=setting('interest'),template=template_name,logo=logo_name)
             for issue in assessment.warnings:
                 confirmation+='\n\n'+fee_issue_text(issue)
+            if frozen_note:confirmation+='\n\n'+frozen_note
             if ledger_fallback_used and level=='P1':
                 confirmation+='\n\n'+_('Underlag: reskontraimporten. Original-PDF-kontrollen har kringgåtts efter ditt godkännande.')
             if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):

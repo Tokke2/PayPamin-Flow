@@ -730,6 +730,7 @@ _ENGLISH = {
     "Kundtyp: {type} · {note}": "Customer type: {type} · {note}",
     "Ingen avgift debiteras för den här fakturan.": "No fee is charged for this invoice.",
     "Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. Ingen påminnelseavgift debiteras. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.": "The goods remain our property until full payment has been made. Any objections to the invoice must be made within {days} days. No reminder fee is charged. Late payment is subject to {interest}% interest. Special-order parts cannot be returned.",
+    "Avgiften {fee} debiterades redan med P1 och ligger över dagens tak. P2 lägger inte till något, men kontrollera fakturan.": "The fee {fee} was already charged with P1 and is above the current cap. P2 does not add anything, but review the invoice.",
 }
 
 

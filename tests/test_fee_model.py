@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import date, timedelta
 from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -186,6 +187,32 @@ class FeeModelTests(unittest.TestCase):
         self.assertNotIn("Förseningsersättning (påminnelse 2)", text)
         self.assertEqual(text.count("Förseningsersättning (påminnelse 1)"), 1)
         self.assertIn("1 450,00 kr", text)
+
+    def test_legacy_p2_with_a_too_high_p1_fee_is_warned_but_not_blocked(self):
+        row = self.save_invoice()
+        p1_date = (date.today() - timedelta(days=5)).isoformat()
+        # An invoice reminded before the fee rules existed: P1 already carried 150 kr.
+        snapshot = self.app.capture_p1_snapshot(row, 150.0, p1_date)
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=1 WHERE id=?",
+                (p1_date, snapshot, row["id"]),
+            )
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.app.reminder_file_path(row, "P1", date.fromisoformat(p1_date)).write_bytes(b"existing P1")
+        self.app.set_setting("p2_days", "0")
+        self.app.set_setting("payment_deadline_days", "0")
+        owner = self.owner_for(row, Mock(return_value=self.workspace / "p2.pdf"))
+        with (
+            patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm,
+            patch.object(self.app.messagebox, "showerror", create=True) as error,
+        ):
+            self.app.ReminderApp.make_reminder(owner)
+
+        error.assert_not_called()
+        owner.write_letter.assert_called_once()
+        self.assertEqual(owner.write_letter.call_args.args[1:3], ("P2", 150.0))
+        self.assertIn("ligger över dagens tak", confirm.call_args.args[1])
 
     def test_a_waived_compensation_prints_no_fee_at_all(self):
         row = self.save_invoice(customer_type="business")
