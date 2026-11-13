@@ -69,9 +69,30 @@ class FeeModelTests(unittest.TestCase):
         owner.update_reminder_logo = MethodType(self.app.ReminderApp.update_reminder_logo, owner)
         return owner
 
-    def test_new_databases_start_with_the_lawful_amounts(self):
-        self.assertEqual(float(self.app.setting("fee")), 60.0)
-        self.assertEqual(float(self.app.setting("compensation")), 450.0)
+    def test_amounts_are_fixed_and_not_settings(self):
+        """The two amounts come from the law, so they are not editable settings."""
+        row = self.save_invoice()
+        self.assertEqual(self.app.REMINDER_FEE_CAP, 60.0)
+        self.assertEqual(self.app.LATE_PAYMENT_COMPENSATION, 450.0)
+        self.assertEqual(self.app.setting("fee"), "")
+        self.assertEqual(self.app.setting("compensation"), "")
+        # A value left by an older version, or written by hand, changes nothing.
+        self.app.set_setting("fee", "150")
+        self.assertEqual(self.app.reminder_fee_for(row), 60.0)
+
+    def test_obsolete_fee_settings_are_removed_from_the_database(self):
+        with self.app.connect() as db:
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('fee','150')")
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('compensation','999')")
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('fee_locked','1')")
+        self.app.init_db()
+        with self.app.connect() as db:
+            left = [row["key"] for row in db.execute(
+                "SELECT key FROM settings WHERE key IN ('fee','compensation','fee_locked')"
+            )]
+            p1_days = db.execute("SELECT value FROM settings WHERE key='p1_days'").fetchone()["value"]
+        self.assertEqual(left, [])
+        self.assertEqual(p1_days, "5")
 
     def test_consumer_invoice_gets_sixty_kronor(self):
         row = self.save_invoice()
@@ -91,11 +112,12 @@ class FeeModelTests(unittest.TestCase):
         row = self.save_invoice(customer_type="authority")
         self.assertEqual(self.app.reminder_fee_for(row), 450.0)
 
-    def test_an_unlawful_stored_fee_blocks_the_reminder(self):
+    def test_a_fee_above_the_cap_still_blocks_the_reminder(self):
+        """The guard stays in place even though the app itself cannot set the amount."""
         row = self.save_invoice()
-        self.app.set_setting("fee", "150")
         owner = self.owner_for(row, Mock(return_value=self.workspace / "p1.pdf"))
         with (
+            patch.object(self.app, "reminder_fee_for", return_value=150.0, create=True),
             patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm,
             patch.object(self.app.messagebox, "showerror", create=True) as error,
         ):
@@ -214,11 +236,9 @@ class FeeModelTests(unittest.TestCase):
         self.assertEqual(owner.write_letter.call_args.args[1:3], ("P2", 150.0))
         self.assertIn("ligger över dagens tak", confirm.call_args.args[1])
 
-    def test_a_waived_compensation_prints_no_fee_at_all(self):
+    def test_a_legacy_zero_fee_prints_no_fee_at_all(self):
+        """A historical reminder without a fee still renders without a fee row."""
         row = self.save_invoice(customer_type="business")
-        self.app.set_setting("compensation", "0")
-        self.assertEqual(self.app.reminder_fee_for(row), 0.0)
-        self.assertEqual(self.app.reminder_fee_note(row), "Ingen avgift debiteras för den här fakturan.")
         pdf = self.workspace / "no-fee.pdf"
         owner = SimpleNamespace(
             invoice_logo=lambda _row: ("", ""),

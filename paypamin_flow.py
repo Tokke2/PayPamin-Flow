@@ -539,18 +539,19 @@ def init_db():
         for column in ('org_number','bankgiro_number'):
             if column not in vendor_logo_columns:
                 db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'60','compensation':'450','fee_agreement':'','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
+        # The fee amounts are fixed by law and deliberately absent from settings,
+        # so a value stored by an older version can never change what is charged.
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
-        # Older databases kept a single reminder fee, often 150 kr, which is
-        # above the 60 kr cap in 4 § lag 1981:739. Never change the value here:
-        # the user decides in the reminder dialogue or in Settings.
-        try:
-            stored=float(db.execute("SELECT value FROM settings WHERE key='fee'").fetchone()['value'])
-        except (TypeError,ValueError,sqlite3.Error):
-            stored=None
-        if stored is not None and stored>REMINDER_FEE_CAP:
-            logger.warning('Stored reminder fee %s kr is above the legal cap of %s kr',stored,REMINDER_FEE_CAP)
+        # Remove only those three obsolete keys; nothing else in the database is
+        # touched. They were editable amounts, and keeping them would let a stale
+        # 150 kr travel on in journal exports as if it still meant something.
+        for obsolete in ('fee','compensation','fee_locked'):
+            row=db.execute('SELECT value FROM settings WHERE key=?',(obsolete,)).fetchone()
+            if row is not None:
+                db.execute('DELETE FROM settings WHERE key=?',(obsolete,))
+                logger.info('Removed obsolete setting %s=%s; the fee amounts are fixed by law',obsolete,row['value'])
 
 
 def setting(key):
@@ -1078,27 +1079,21 @@ def invoice_fee_agreement(row):
     return normalize_agreement(row_value(row,'fee_agreement','') or setting('fee_agreement'))
 
 
-def setting_amount(key,default=0.0):
-    """Read a money setting without ever raising on bad input."""
-    try:return float(setting(key) or default)
-    except (TypeError,ValueError):return float(default)
-
-
 def invoice_currency(row):
     return normalize_currency(row_value(row,'currency','SEK'))
 
 
 def reminder_fee_for(row):
-    """Return the one fee this invoice may be charged; 0 means none.
+    """Return the one fixed fee this invoice is charged.
 
-    Consumers get the reminder fee from Settings, capped at 60 kr by 4 §.
-    Businesses and authorities get late-payment compensation under 4 a §
-    instead; the reminder fee then becomes 0, because 5 § 2 st. does not allow
-    both for the same claim.
+    The amounts are fixed by law and cannot be changed in the app. Consumers
+    get the 60 kr reminder fee of 4 §; businesses and authorities get the
+    450 kr late-payment compensation of 4 a § instead. The two are never
+    combined, because 5 § 2 st. does not allow both for the same claim.
     """
     if is_business(invoice_customer_type(row)):
-        return setting_amount('compensation',LATE_PAYMENT_COMPENSATION)
-    return setting_amount('fee',REMINDER_FEE_CAP)
+        return LATE_PAYMENT_COMPENSATION
+    return REMINDER_FEE_CAP
 
 
 def invoice_fee_assessment(row,fee=None):
@@ -1256,8 +1251,8 @@ def build_reminder_email_content(row,level,recipients):
     if snapshot:
         email_row.update(snapshot['row'])
         terms=snapshot['terms']
-    try:fee=float(terms.get('fee') if terms.get('fee') is not None else setting('fee') or 0)
-    except (TypeError,ValueError):fee=float(setting('fee') or 0)
+    try:fee=float(terms.get('fee') if terms.get('fee') is not None else reminder_fee_for(row))
+    except (TypeError,ValueError):fee=reminder_fee_for(row)
     customer_type=normalize_customer_type(terms.get('customer_type') or invoice_customer_type(email_row))
     fee_label=_(fee_label_key(customer_type,fee))
     fee_text=f'{fee_label}: {money(fee,email_row["currency"])}'
@@ -3747,7 +3742,7 @@ class ReminderApp(tk.Tk):
             return AGREEMENT_NONE
         def update_fee_hint(*_args):
             ctype=chosen_type()
-            fee=setting_amount('compensation',LATE_PAYMENT_COMPENSATION) if is_business(ctype) else setting_amount('fee',REMINDER_FEE_CAP)
+            fee=LATE_PAYMENT_COMPENSATION if is_business(ctype) else REMINDER_FEE_CAP
             currency=normalize_currency(entries['currency'].get() if 'currency' in entries else 'SEK')
             if is_business(ctype):
                 agreement_combo.configure(state='disabled')
@@ -4140,7 +4135,6 @@ class ReminderApp(tk.Tk):
                         )
                         return latest[2] if latest else None
             fee=reminder_fee_for_level(r,level)
-            locked=setting('fee_locked')=='1'
             assessment=assess_fee(invoice_customer_type(r),fee,invoice_currency(r),invoice_fee_agreement(r))
             # A fee already charged with P1 stays fixed. P2 repeats it and does
             # not increase the claim, so an old, too high amount is reported
@@ -4163,7 +4157,7 @@ class ReminderApp(tk.Tk):
                 log_activity('reminder','fee_frozen_above_cap','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],fee=fee)
             template_name=r['template_vendor'] or _('Ingen matchad mall')
             logo_path,logo_name=self.invoice_logo(r)
-            confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}{locked}\n{note}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee)),fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',note=reminder_fee_note(r),interest=setting('interest'),template=template_name,logo=logo_name)
+            confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}\n{note}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee)),fee=money(fee,r['currency']),note=reminder_fee_note(r),interest=setting('interest'),template=template_name,logo=logo_name)
             for issue in assessment.warnings:
                 confirmation+='\n\n'+fee_issue_text(issue)
             if frozen_note:confirmation+='\n\n'+frozen_note
@@ -4579,8 +4573,6 @@ class ReminderApp(tk.Tk):
             ('Dagar efter förfallodatum till P1','p1_days'),
             ('Dagar efter P1 till P2','p2_days'),
             ('Dagar efter P2 till Kronofogden-granskning','p3_days'),
-            ('Påminnelseavgift för privatpersoner (högst 60 kr, fakturans valuta)','fee'),
-            ('Förseningsersättning för företag och myndigheter (SEK)','compensation'),
             ('Dröjsmålsränta per år (%)','interest'),
             ('Anmärkningstid enligt fakturavillkor (dagar)','objection_days'),
             ('Betalningsfrist på påminnelsen (dagar)','payment_deadline_days'),
@@ -4589,7 +4581,14 @@ class ReminderApp(tk.Tk):
         entries={}
         for label,key in fields:
             entries[key]=cell(label,key)
-            if key=='fee' and setting('fee_locked')=='1':entries[key].configure(state='disabled')
+        # The two amounts come from lag (1981:739) and are shown, never edited.
+        grid.add_full(ttk.Label(
+            form,text=_('Påminnelseavgift: {fee} · Förseningsersättning: {compensation}',
+                        fee=money(REMINDER_FEE_CAP),compensation=money(LATE_PAYMENT_COMPENSATION)),
+            style='BodyBold.TLabel',
+        ))
+        hint('Beloppen är låsta av lag och kan inte ändras här. Privatpersoner får påminnelseavgift enligt 4 § och företag eller myndigheter förseningsersättning enligt 4 a §.')
+        hint('Avgiften debiteras en gång per fordran, aldrig en gång per påminnelse.')
         agreement_var=tk.StringVar(value=_(AGREEMENT_LABELS[normalize_agreement(setting('fee_agreement'))]))
         agreement_frame=ttk.Frame(form)
         agreement_label=ttk.Label(agreement_frame,text=_('Var avtalas påminnelseavgiften som standard?'),style='Sub.TLabel',justify='left')
@@ -4599,16 +4598,7 @@ class ReminderApp(tk.Tk):
             values=[_(label) for label in AGREEMENT_LABELS.values()],
         ).grid(row=1,column=0,sticky='w',pady=(2,0))
         grid.add_cell(agreement_frame,label=agreement_label)
-        locked=tk.BooleanVar(value=setting('fee_locked')=='1')
-        def toggle_lock():
-            entries['fee'].configure(state='disabled' if locked.get() else 'normal')
-        grid.add_full(ttk.Checkbutton(
-            form,text=_('Lås påminnelseavgiften (förhindra oavsiktlig ändring)'),
-            variable=locked,command=toggle_lock,
-        ))
-        hint('Låset skyddar inställningen i appen; lås upp här för att ändra avgiften.')
-        hint('Påminnelseavgiften är högst 60 kr och kräver avtal senast när skulden uppstod. Företag och myndigheter får 450 kr i förseningsersättning i stället.')
-        hint('Avgiften debiteras en gång per fordran, aldrig en gång per påminnelse.')
+        hint('Påminnelseavgiften kräver att rätten till den avtalades senast när skulden uppstod. Företag och myndigheter får förseningsersättning i stället, utan avtal.')
         hint('Taket gäller i SEK. På en faktura i annan valuta kontrollerar appen inte beloppet automatiskt.')
         heading('Start och uppdateringar')
         autostart_var=tk.BooleanVar(value=setting('autostart')=='1')
@@ -4682,15 +4672,9 @@ class ReminderApp(tk.Tk):
                 for k,e in entries.items():
                     v=e.get().strip()
                     if k in ('p1_days','p2_days','p3_days','objection_days','payment_deadline_days') and int(v)<0:raise ValueError()
-                    if k in ('fee','compensation','interest') and float(v.replace(',','.'))<0:raise ValueError()
-                fee_value=float(entries['fee'].get().strip().replace(',','.'))
-                compensation_value=float(entries['compensation'].get().strip().replace(',','.'))
+                    if k=='interest' and float(v.replace(',','.'))<0:raise ValueError()
             except (ValueError,TypeError):
                 messagebox.showerror(_('Ogiltigt värde'),_('Ange positiva siffror i inställningarna.'),parent=w);return
-            if fee_value>REMINDER_FEE_CAP:
-                messagebox.showerror(_('Avgiften är för hög'),_('Påminnelseavgiften får vara högst 60 kr enligt 4 § lagen (1981:739). Ett högre villkor är ogiltigt enligt 6 §.',),parent=w);return
-            if compensation_value not in (0.0,LATE_PAYMENT_COMPENSATION):
-                messagebox.showerror(_('Förseningsersättningen är felaktig'),_('Förseningsersättningen är 450 kr enligt 4 a § lagen (1981:739), eller 0 kr om ni avstår från den.'),parent=w);return
             try:
                 set_autostart(autostart_var.get())
             except AutostartError as exc:
@@ -4700,7 +4684,6 @@ class ReminderApp(tk.Tk):
                 if _(label)==agreement_var.get():set_setting('fee_agreement',code)
             new_language=language_code(language_var.get())
             language_changed=new_language!=get_language()
-            set_setting('fee_locked','1' if locked.get() else '0')
             set_setting('autostart','1' if autostart_var.get() else '0')
             set_setting('update_auto','1' if automatic_updates_var.get() else '0')
             set_setting('auto_import','1' if automatic_import_var.get() else '0')
@@ -4714,7 +4697,7 @@ class ReminderApp(tk.Tk):
             self.set_font_scale(new_font_scale,persist=False)
             set_language(new_language)
             refresh_json_journal(parent=w)
-            logger.info('Settings saved; fee_locked=%s autostart=%s start_minimized=%s learning=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s',bool(locked.get()),bool(autostart_var.get()),bool(start_minimized_var.get()),bool(learning_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language)
+            logger.info('Settings saved; autostart=%s start_minimized=%s learning=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s',bool(autostart_var.get()),bool(start_minimized_var.get()),bool(learning_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language)
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()

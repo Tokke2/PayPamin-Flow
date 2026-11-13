@@ -19,6 +19,12 @@ Two consequences shape this module:
    arose** (2 §). A condition printed only on the overdue invoice is normally
    too late, so that case is reported instead of being treated as valid.
 
+Both amounts are **fixed**. They are set by law, not by preference, so the app
+never lets anyone type a different number: a higher reminder fee is void (6 §)
+and the compensation is exactly 450 kr. A stored or restored setting from an
+older version is therefore ignored, and only a historical snapshot can still
+carry another amount.
+
 Every amount is in SEK. The law sets the cap in kronor, so an invoice in
 another currency cannot be verified automatically; it is reported as
 unverified rather than converted at a guessed rate.
@@ -32,7 +38,8 @@ CUSTOMER_BUSINESS = "business"
 CUSTOMER_AUTHORITY = "authority"
 CUSTOMER_TYPES = (CUSTOMER_PRIVATE, CUSTOMER_BUSINESS, CUSTOMER_AUTHORITY)
 
-# 4 § 1 and 4 a § of lag (1981:739).
+# 4 § 1 and 4 a § of lag (1981:739). These are the only amounts the app uses
+# and they are intentionally not configurable.
 REMINDER_FEE_CAP = 60.0
 LATE_PAYMENT_COMPENSATION = 450.0
 

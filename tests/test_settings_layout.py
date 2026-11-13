@@ -200,12 +200,11 @@ class SettingsDialogTests(unittest.TestCase):
         )
         self.app.ttk = FakeTtk(self.registry)
         self.values = {
-            "p1_days": "5", "p2_days": "5", "p3_days": "5", "fee": "150",
-            "compensation": "450", "fee_agreement": "",
+            "p1_days": "5", "p2_days": "5", "p3_days": "5", "fee_agreement": "",
             "interest": "23", "objection_days": "5", "payment_deadline_days": "5",
             "autostart": "1", "update_auto": "1", "auto_import": "1",
             "ledger_friday_reminder": "1", "cache_auto": "1", "language": "sv",
-            "start_minimized": "1", "learning_enabled": "1", "fee_locked": "0",
+            "start_minimized": "1", "learning_enabled": "1",
         }
 
     def _close_handlers(self):
@@ -251,8 +250,18 @@ class SettingsDialogTests(unittest.TestCase):
         self.build()
 
         entries = self.widgets("Entry")
-        self.assertEqual(len(entries), 8)
-        self.assertEqual(sorted(entry.text for entry in entries), ["150", "23", "450", "5", "5", "5", "5", "5"])
+        self.assertEqual(len(entries), 6)
+        self.assertEqual(sorted(entry.text for entry in entries), ["23", "5", "5", "5", "5", "5"])
+
+    def test_fee_amounts_are_shown_as_fixed_and_have_no_entry_field(self):
+        self.build()
+
+        labels = [widget.options.get("text") or "" for widget in self.widgets("Label")]
+        self.assertIn("Påminnelseavgift: 60,00 kr · Förseningsersättning: 450,00 kr", labels)
+        # Nothing in the dialog can change the amounts.
+        entries = self.widgets("Entry")
+        self.assertNotIn("60", [entry.text for entry in entries])
+        self.assertNotIn("450", [entry.text for entry in entries])
 
     def test_all_checkboxes_and_the_learning_button_are_present(self):
         self.build()
@@ -265,7 +274,6 @@ class SettingsDialogTests(unittest.TestCase):
             "Bevaka importmappen och importera nya PDF:er automatiskt",
             "Påminn om att importera kundreskontralista varje fredag",
             "Rensa appcache automatiskt en gång per dygn samt vid avslut",
-            "Lås påminnelseavgiften (förhindra oavsiktlig ändring)",
             "Lär sig av sparade fakturor och leverantörsval (endast lokalt)",
         ):
             self.assertIn(expected, texts)

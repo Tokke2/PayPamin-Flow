@@ -270,9 +270,11 @@ Appen följer **lag (1981:739) om ersättning för inkassokostnader m.m.** och v
 
 | Kundtyp på fakturan | Belopp | Vad det är | Krav |
 |---|---|---|---|
-| **Privatperson** | högst **60 kr** | påminnelseavgift enligt 4 § | avtal senast när skulden uppstod (2 §) |
-| **Företag** | **450 kr** eller **0 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
-| **Myndighet** | **450 kr** eller **0 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
+| **Privatperson** | **60 kr** | påminnelseavgift enligt 4 § | avtal senast när skulden uppstod (2 §) |
+| **Företag** | **450 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
+| **Myndighet** | **450 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
+
+**Beloppen är fasta.** De följer lagen och kan inte ändras i appen — det finns inget avgiftsfält i **Inställningar**, bara en rad som visar de två beloppen. Ett värde som en äldre version har sparat (till exempel 150 kr) läses aldrig och tas bort ur databasen vid start, så det kan inte följa med i en säkerhetskopia och se ut som en giltig inställning.
 
 Två regler styr hela modellen:
 
@@ -283,9 +285,9 @@ Två regler styr hela modellen:
 
 **Skydden i praktiken:**
 
-- Ett belopp över taket **stoppar** påminnelsen med en förklaring i stället för att skrivas ut. 6 § gör ett högre villkor ogiltigt, så det går inte att avtala bort taket.
-- Inställningarna accepterar högst **60 kr** som påminnelseavgift och **450 kr eller 0 kr** som förseningsersättning.
-- En databas från en äldre version får en **kundtyp** som standard **Privatperson**, eftersom 60 kr är lagligt i alla relationer. En sparad avgift över taket ändras aldrig automatiskt; påminnelsen stoppas och du ändrar själv.
+- Ett belopp över taket **stoppar** påminnelsen med en förklaring i stället för att skrivas ut. 6 § gör ett högre villkor ogiltigt, så det går inte att avtala bort taket. Sedan beloppen blev fasta kan appen inte längre hamna där av misstag — kontrollen finns kvar som skydd mot en handredigerad databas.
+- En databas från en äldre version får en **kundtyp** som standard **Privatperson**, eftersom 60 kr är lagligt i alla relationer.
+- En påminnelse som redan skickats med ett äldre belopp behåller sitt historiska belopp. P2 lägger ändå inte till något, och dialogen upplyser om att beloppet ligger över dagens tak.
 - Avgiften är **momsfri** och dröjsmålsräntan räknas aldrig på avgiften.
 
 ## Autostart
