@@ -20,11 +20,12 @@ FONT_SCALE_CHOICES = (0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0)
 BACKGROUND = "#F3F5F8"
 TEXT = "#1F2A3D"
 MUTED_TEXT = "#475467"
-# The UI ink is the same navy as the brand mark, so a button, a heading and the
-# icon read as one design instead of slightly different dark blues.
-TITLE_TEXT = "#0F2F63"
-ACCENT = "#0F2F63"
-ACCENT_ACTIVE = "#0B2447"
+# The UI ink is the exact navy of the brand mark (#0B2447), and the pressed
+# state goes one step darker (#06152C), so a button, a heading and the icon
+# read as one design instead of three slightly different dark blues.
+TITLE_TEXT = "#0B2447"
+ACCENT = "#0B2447"
+ACCENT_ACTIVE = "#06152C"
 FOCUS = "#005A9C"
 FOCUS_BACKGROUND = "#DCEAFF"
 SELECTED_BACKGROUND = "#C7DDF5"
@@ -170,8 +171,8 @@ def contrast_palette(high_contrast=False):
         "field_background": FIELD_BACKGROUND,
         "classic_focus_background": CLASSIC_FOCUS_BACKGROUND,
         "canvas_background": CANVAS_BACKGROUND,
-        "heading_background": "#E6EBF3",
-        "heading_text": "#0F2F63",
+        "heading_background": "#E3E9F2",
+        "heading_text": "#0B2447",
         "trough_background": "#E6EBF3",
     }
 

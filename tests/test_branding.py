@@ -77,6 +77,7 @@ class BrandingTests(unittest.TestCase):
         for name in (
             "paypamin_flow.svg",
             "paypamin_flow_small.svg",
+            "paypamin_flow_tiny.svg",
             "paypamin_logo.svg",
             "print/paypamin_logo_print.svg",
             "print/paypamin_logo_print_mono.svg",
@@ -96,18 +97,24 @@ class BrandingTests(unittest.TestCase):
     def test_small_icon_variant_is_a_separate_simplified_master(self):
         small = (ASSETS / "paypamin_flow_small.svg").read_text(encoding="utf-8")
         large = (ASSETS / "paypamin_flow.svg").read_text(encoding="utf-8")
-        self.assertNotEqual(small, large)
-        # Both masters are flat: a gradient turns muddy in a 16 px tray icon
+        tiny = (ASSETS / "paypamin_flow_tiny.svg").read_text(encoding="utf-8")
+        self.assertEqual(len({small, large, tiny}), 3)
+        # Every master is flat: a gradient turns muddy in a 16 px tray icon
         # and complicates print, so every colour is a single ink.
-        for text in (small, large):
+        for text in (small, large, tiny):
             self.assertNotIn("linearGradient", text)
             self.assertNotIn("url(#", text)
-        # The 16-40 px variant uses a thicker stroke and a smaller badge so the
-        # mark stays readable when it is only a few pixels wide.
-        self.assertIn('stroke-width="80"', small)
-        self.assertIn('r="86"', small)
-        self.assertIn('stroke-width="64"', large)
-        self.assertIn('r="96"', large)
+        # The 24-40 px variant uses a thicker stroke and a larger badge, and the
+        # 16 px variant drops the badge entirely so the P stays a P.
+        self.assertIn('stroke-width="84"', small)
+        # The badge must sit inside the rounded corner, otherwise its circle
+        # pokes out of the silhouette and gains a dark fringe at 32 px.
+        self.assertIn('r="100"', small)
+        self.assertIn('rx="112"', small)
+        self.assertIn('stroke-width="98"', tiny)
+        self.assertNotIn("<circle", tiny)
+        self.assertIn('stroke-width="66"', large)
+        self.assertIn('r="104"', large)
 
     def test_small_icons_have_no_grey_halo_at_tray_sizes(self):
         """Partial-alpha edge pixels must carry the icon's own colour.
@@ -135,14 +142,16 @@ class BrandingTests(unittest.TestCase):
         for name in ("print/paypamin_logo_print.png", "print/paypamin_logo_print_mono.png"):
             with self.subTest(image=name), Image.open(ASSETS / name) as image:
                 self.assertEqual(image.mode, "RGB")
-                self.assertEqual(image.size, (2400, 582))
+                self.assertEqual(image.size, (2400, 402))
                 # White paper at the edges proves the artwork is on paper.
                 self.assertEqual(image.getpixel((0, 0)), (255, 255, 255))
                 self.assertEqual(image.getpixel((2399, 0)), (255, 255, 255))
 
         mono = (ASSETS / "print" / "paypamin_logo_print_mono.svg").read_text(encoding="utf-8")
         self.assertIn('fill="#000000"', mono)
-        self.assertNotIn("#0F2F63", mono)
+        # One ink only: no brand navy or teal may survive in the mono lockup.
+        self.assertNotIn("#0B2447", mono)
+        self.assertNotIn("#0E8C82", mono)
 
     def test_print_pdfs_are_vector_and_sized_for_a_printer(self):
         import pymupdf
@@ -154,9 +163,11 @@ class BrandingTests(unittest.TestCase):
                     page = document[0]
                     self.assertEqual(page.get_images(), [])
                     self.assertGreater(len(page.get_drawings()), 0)
-                    # 90 mm artwork plus 4 mm clear space on every side.
+                    # 90 mm artwork plus 4 mm clear space on every side. The
+                    # lockup is cropped to the art (788.33:132), so the page is
+                    # 98 x 23 mm instead of the old padded 98 x 29.9 mm.
                     self.assertAlmostEqual(page.rect.width / 72 * 25.4, 98.0, delta=0.5)
-                    self.assertAlmostEqual(page.rect.height / 72 * 25.4, 29.9, delta=0.5)
+                    self.assertAlmostEqual(page.rect.height / 72 * 25.4, 23.1, delta=0.5)
                     self.assertIn(APP_AUTHOR, document.metadata.get("author", ""))
 
     def test_print_folder_is_self_contained_and_documented(self):
@@ -180,10 +191,11 @@ class BrandingTests(unittest.TestCase):
         self.assertEqual(root.find("{http://www.w3.org/2000/svg}title").text, "PayPamin Flow logotyp")
         self.assertIn(APP_AUTHOR, ET.tostring(root, encoding="unicode"))
         with Image.open(ASSETS / "paypamin_logo.png") as logo:
-            # The header lockup keeps the artwork's own 739.88:180 ratio; a
-            # rounded, stretched height makes the wordmark look soft.
-            self.assertEqual(logo.size, (256, 62))
-            self.assertAlmostEqual(logo.size[0] / logo.size[1], 739.88 / 180, places=1)
+            # The header lockup keeps the artwork's own 788.33:132 ratio; a
+            # rounded, stretched height makes the wordmark look soft. The
+            # viewBox is cropped to the art, so no dead space is rendered.
+            self.assertEqual(logo.size, (256, 43))
+            self.assertAlmostEqual(logo.size[0] / logo.size[1], 788.33 / 132, places=1)
             self.assertEqual(logo.info.get("Title"), APP_NAME)
             self.assertEqual(logo.info.get("Author"), APP_AUTHOR)
             self.assertEqual(logo.info.get("Copyright"), APP_COPYRIGHT)

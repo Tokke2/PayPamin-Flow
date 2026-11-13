@@ -66,6 +66,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "assets/paypamin_logo.png",
     "assets/paypamin_logo.svg",
     "assets/paypamin_flow_small.svg",
+    "assets/paypamin_flow_tiny.svg",
     "assets/print/paypamin_logo_print.svg",
     "assets/print/paypamin_logo_print_mono.svg",
     "assets/print/paypamin_logo_print.pdf",

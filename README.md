@@ -277,20 +277,21 @@ Stäng av eller aktivera via **Inställningar → Starta PayPamin Flow automatis
 
 ## Logotyp och appikon
 
-Huvudikonen föreställer ett vitt fakturadokument med blått **P-märke** och en grönturkos **bock** på mörkblå bakgrund. Alla färger är plana – inga tonövergångar – eftersom en gradient blir grumlig i systemfältets 16–32 px. Den är ritad för att vara tydlig även i små storlekar och används i stället för Pythons ikon. Samma motiv används för huvudfönster, sekundära fönster, systemfält, aktivitetsfält, Aktivitetshanterarens appvy, macOS Dock, Linux och Windows-autostartgenväg.
+Huvudikonen föreställer ett vitt **P-märke** – ett fakturadokument sett från sidan – med en grönturkos **bock** i en vit rundel, på mörkblå bakgrund med ett diagonalt turkost svep i nedre vänstra hörnet. Alla färger är plana – inga tonövergångar – eftersom en gradient blir grumlig i systemfältets 16–32 px. Den är ritad för att vara tydlig även i små storlekar och används i stället för Pythons ikon. Samma motiv används för huvudfönster, sekundära fönster, systemfält, aktivitetsfält, Aktivitetshanterarens appvy, macOS Dock, Linux och Windows-autostartgenväg.
 
 Den horisontella logotypen kombinerar symbolen med PayPamin Flow-ordmärket och används i sidhuvudet och Om-fönstret. Arkiv-/Hjälpmenyer, högerklicksmeny, verktygsrader och dialogknappar använder **endast text**, utan funktionsikoner. Textetiketterna, snabbkommandona och funktionerna är oförändrade.
 
 Original och skrivbordsformat ligger i `assets/`:
 
 - `paypamin_flow.svg` – redigerbart vektororiginal för appikonen.
+- `paypamin_flow_small.svg` och `paypamin_flow_tiny.svg` – förenklade original för 24–40 px respektive 16–24 px; den minsta varianten har ingen bock, eftersom den bara blir en grå fläck i 16 px.
 - `paypamin_logo.svg` och `paypamin_logo.png` – horisontell logotyp.
 - `paypamin_flow.png` och storleksvarianter – Tkinter, systemfält och Linux.
 - `paypamin_flow.ico` – Windows, flera inbäddade storlekar.
 - `paypamin_flow.icns` – macOS-ikonkälla.
 - `icons/` – funktionsikoner med normal och `_light`-variant för varje symbol, ritade i samma mörkblå som märket.
 
-Systemfältet får den storlek operativsystemet faktiskt ritar: den förenklade 32 px-varianten på Windows och 48 px på macOS och Linux menyrad. Nedskalningen sker med förmultiplicerad alpha, så kanterna behåller ikonens färg i stället för att bli grå.
+Systemfältet får den storlek operativsystemet faktiskt ritar: den förenklade 32 px-varianten på Windows och 48 px på macOS och Linux menyrad. Varje storlek rastreras från den master som är ritad för den – detaljerad från 40 px, förenklad 24–40 px och minst 16–24 px. Nedskalningen sker med förmultiplicerad alpha, så kanterna behåller ikonens färg i stället för att bli grå.
 
 Tryckfilerna ligger i `assets/print/` och **följer med releasepaketet** – de behöver aldrig laddas ner separat. Öppna mappen direkt från appen med **Arkiv → Öppna tryckfiler**.
 
@@ -299,7 +300,7 @@ Tryckfilerna ligger i `assets/print/` och **följer med releasepaketet** – de 
 - `paypamin_logo_print*.png` – förhandsvisningar på vit botten.
 - `README.txt` – mått, färger, fritt utrymme och rekommendationer till tryckeriet.
 
-PDF:erna är 98 × 29,9 mm inklusive 4 mm fritt utrymme, innehåller bara vektor och har metadata med skapare och copyright.
+PDF:erna är 98 × 23,1 mm inklusive 4 mm fritt utrymme, innehåller bara vektor och har metadata med skapare och copyright. Logotypen är beskuren till konsten (788,33:132), så ingen tom yta följer med till tryckeriet.
 
 Generera om logotyp, raster-/skrivbordsikoner, tryck-PDF:er och samtliga funktionsikoner med Pillow installerat:
 

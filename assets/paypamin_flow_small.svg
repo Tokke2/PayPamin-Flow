@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="ppf-title ppf-desc">
   <title id="ppf-title">PayPamin Flow</title>
-  <desc id="ppf-desc">Ett stiliserat fakturadokument som P-märke med en turkos bock för genomförd betalningspåminnelse på mörkblå bakgrund, ritat som ren vektor. Förenklad, kraftigare variant för små ikoner.</desc>
+  <desc id="ppf-desc">Förenklad variant för ikoner mellan 24 och 40 px: P-märke med bock på mörkblå bakgrund med ett turkost svep.</desc>
   <metadata>Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.</metadata>
-  <rect x="0" y="0" width="512" height="512" rx="104" fill="#0F2F63"/>
-  <g fill="none" stroke="#FFFFFF" stroke-width="80" stroke-linecap="round" stroke-linejoin="round"><path d="M146 92V380"/><path d="M146 92H254A80 80 0 0 1 254 252H146"/></g>
-  <circle cx="398" cy="398" r="86" fill="#0E9189"/>
-  <path d="M356 400L386 430L444 366" fill="none" stroke="#FFFFFF" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect width="512" height="512" rx="112" fill="#0B2447"/>
+  <path d="M0 512V236A276 276 0 0 0 276 512Z" fill="#0E8C82"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="84" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M140 86V386"/>
+    <path d="M140 86H254A86 86 0 0 1 254 244H140"/>
+  </g>
+  <circle cx="392" cy="392" r="100" fill="#FFFFFF"/>
+  <circle cx="392" cy="392" r="86" fill="#12B3A6"/>
+  <path d="M352 392L378 418L434 358" fill="none" stroke="#FFFFFF" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

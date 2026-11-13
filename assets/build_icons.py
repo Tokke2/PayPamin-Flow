@@ -6,8 +6,9 @@ Run from the repository root:
 
 The vector files are the single source of truth:
 
-* ``assets/paypamin_flow.svg``       – product mark, detail version (48 px and up)
-* ``assets/paypamin_flow_small.svg`` – simplified mark for 16–32 px
+* ``assets/paypamin_flow.svg``       – product mark, detail version (40 px and up)
+* ``assets/paypamin_flow_small.svg`` – simplified mark for 24–40 px
+* ``assets/paypamin_flow_tiny.svg``  – smallest mark for 16–24 px, without the tick
 * ``assets/paypamin_logo.svg``       – screen lockup (wordmark as outlines)
 * ``assets/print/paypamin_logo_print.svg`` – flat print lockup
 * ``assets/print/paypamin_logo_print_mono.svg`` – one-colour print lockup
@@ -51,6 +52,7 @@ PRINT_ASSETS = ASSETS / "print"
 SVG_SOURCES = {
     "icon": ASSETS / "paypamin_flow.svg",
     "icon_small": ASSETS / "paypamin_flow_small.svg",
+    "icon_tiny": ASSETS / "paypamin_flow_tiny.svg",
     "logo": ASSETS / "paypamin_logo.svg",
     "logo_print": PRINT_ASSETS / "paypamin_logo_print.svg",
     "logo_print_mono": PRINT_ASSETS / "paypamin_logo_print_mono.svg",
@@ -66,7 +68,10 @@ MM_TO_POINT = 72 / 25.4
 
 # Below this size the detailed mark turns into mush, so the simplified
 # artwork is used instead. Windows uses 16/24/32 px in the taskbar and tray.
+# At 16 px even the tick inside the badge becomes a smudge, so the smallest
+# master drops it and keeps only the P and the teal sweep.
 SMALL_ICON_LIMIT = 40
+TINY_ICON_LIMIT = 24
 RASTER_OVERSAMPLE = 4
 # Menu and button glyphs are 16 px in Tk; drawing them at 4x and reducing them
 # keeps the strokes solid instead of grey.
@@ -102,28 +107,39 @@ def rasterise_svg(path: Path, width: int, height: int | None = None) -> Image.Im
             page = document[0]
             pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=True)
             raw = pixmap.samples
-            mode = "RGBA" if pixmap.alpha else "RGB"
+            if pixmap.alpha:
+                # PyMuPDF stores the samples premultiplied; the "RGBa" mode is
+                # Pillow's name for exactly that. Reading them as straight RGBA
+                # and multiplying by alpha again darkens every soft edge.
+                mode = "RGBa"
+            else:
+                mode = "RGB"
             image = Image.frombytes(mode, (pixmap.width, pixmap.height), raw)
-    if image.mode != "RGBA":
+    if image.mode != "RGBa":
         return image.resize((width, height), Image.Resampling.LANCZOS)
-    # Downsample in premultiplied alpha. Resizing straight RGBA blends the
-    # colour of fully transparent pixels (black) into the edge, which shows up
-    # as a grey halo around the icon - the "muddy" look at 16-48 px.
-    return image.convert("RGBa").resize(
-        (width, height), Image.Resampling.LANCZOS
-    ).convert("RGBA")
+    # Resample in premultiplied alpha and only then divide by alpha. Resizing
+    # straight RGBA blends the colour of fully transparent pixels (black) into
+    # the edge, which shows up as a grey halo around the icon - the "muddy"
+    # look at 16-48 px.
+    return image.resize((width, height), Image.Resampling.LANCZOS).convert("RGBA")
 
 
 def create_icon(size: int = SIZE) -> Image.Image:
     """Return the product mark at the given size, using the right artwork."""
-    source = SVG_SOURCES["icon_small" if size <= SMALL_ICON_LIMIT else "icon"]
-    return rasterise_svg(source, size, size)
+    if size <= TINY_ICON_LIMIT:
+        name = "icon_tiny"
+    elif size <= SMALL_ICON_LIMIT:
+        name = "icon_small"
+    else:
+        name = "icon"
+    return rasterise_svg(SVG_SOURCES[name], size, size)
 
 
-# The lockup's own aspect ratio (viewBox 739.88 x 180). Deriving the height
+# The lockup's own aspect ratio (viewBox 788.33 x 132). Deriving the height
 # from it keeps the wordmark from being stretched, which looks soft even when
-# the pixels themselves are sharp.
-LOGO_ASPECT = 739.88 / 180
+# the pixels themselves are sharp. The viewBox is cropped to the artwork, so
+# there is no dead space above or below the mark.
+LOGO_ASPECT = 788.33 / 132
 
 
 def logo_height(width: int) -> int:
@@ -139,7 +155,7 @@ def create_horizontal_logo(width: int = 512) -> Image.Image:
 def create_print_logo(path: Path, width: int = 1600, mono: bool = False):
     """Rasterise a print lockup and put it on white paper."""
     source = SVG_SOURCES["logo_print_mono" if mono else "logo_print"]
-    height = round(width * 180 / 742)
+    height = round(width / LOGO_ASPECT)
     image = rasterise_svg(source, width, height).convert("RGBA")
     paper = Image.new("RGBA", image.size, (255, 255, 255, 255))
     paper.alpha_composite(image)
@@ -380,7 +396,7 @@ def main(output_dir: Path | None = None):
     for name in ACTION_ICONS:
         # The same navy as the brand ink keeps menus and buttons crisp instead
         # of a washed-out grey on the light background.
-        draw_action_icon(name, "#0F2F63").save(ui_target / f"{name}.png", pnginfo=data, optimize=True)
+        draw_action_icon(name, "#0B2447").save(ui_target / f"{name}.png", pnginfo=data, optimize=True)
         draw_action_icon(name, "#FFFFFF").save(ui_target / f"{name}_light.png", pnginfo=data, optimize=True)
     print(f"Generated product branding from vector masters and {len(ACTION_ICONS) * 2} UI icons in {target}")
 

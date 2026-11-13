@@ -19,20 +19,20 @@ Rekommendation till tryckeriet
 ------------------------------
 - Skicka PDF-filen. Den är ren vektor: inga rasterbilder, inga inbäddade
   typsnitt och ingen genomskinlighet.
-- PDF:en är 98 x 29,9 mm inklusive 4 mm fritt utrymme runt märket.
+- PDF:en är 98 x 23,1 mm inklusive 4 mm fritt utrymme runt märket.
   Skala proportionellt; ändra aldrig höjd och bredd separat.
 - Minsta bredd för tryck: 25 mm. Under det blir bockens kontur otydlig.
 - Fritt utrymme runt logotypen: minst 4 mm på alla sidor.
 - Färger (RGB i originalet, konverteras till CMYK av tryckeriet):
-    Mörkblå   #0F2F63   (märke och "PayPamin")
-    Turkos    #0E9189   (bock)
-    Mörkgrön  #0A6E68   ("Flow")
+    Mörkblå   #0B2447   (märke och "PayPamin")
+    Turkos    #0E8C82   (svep och "Flow")
+    Ljus turkos #12B3A6 (bockens rundel)
     Vit       #FFFFFF
   Alla färger är plana, utan tonövergångar. Kontrollera alltid en färgproof
   före större upplagor; turkos kan ligga utanför CMYK-gamut och då behöver
   tryckeriet justera mättnaden.
-- Enfärgsversionen används när bara en färg är tillgänglig. Den fungerar
-  som svart på vitt och inverterad (vit på mörk botten).
+- Enfärgsversionen är helsvart: fyllt märke med utsparad bock och svart
+  ordmärke. Den fungerar som svart på vitt och inverterad (vit på mörk botten).
 
 Typografi
 ---------

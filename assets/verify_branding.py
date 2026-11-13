@@ -75,9 +75,9 @@ def compare_print_pdf(path: Path) -> list[str]:
                 problems.append(f"{path.name}: contains no vector artwork")
             width_mm = page.rect.width / 72 * 25.4
             height_mm = page.rect.height / 72 * 25.4
-            if not (97.0 <= width_mm <= 99.0 and 29.0 <= height_mm <= 31.0):
+            if not (97.0 <= width_mm <= 99.0 and 22.3 <= height_mm <= 23.9):
                 problems.append(
-                    f"{path.name}: page is {width_mm:.1f} x {height_mm:.1f} mm, expected 98 x 29.9 mm"
+                    f"{path.name}: page is {width_mm:.1f} x {height_mm:.1f} mm, expected 98 x 23.1 mm"
                 )
     except Exception as exc:  # a corrupt PDF must fail the check, not crash it
         problems.append(f"{path.name}: unreadable ({exc})")
