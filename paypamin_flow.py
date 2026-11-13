@@ -1778,10 +1778,6 @@ class ReminderApp(tk.Tk):
                  fee=money(REMINDER_FEE_CAP), compensation=money(LATE_PAYMENT_COMPENSATION),
                  interest=f'{LATE_PAYMENT_INTEREST:g}')
 
-    def _ui_alive(self):
-        """True while the main window still exists and the app is not closing."""
-        return ui_is_alive(self)
-
     def _refresh_defaults_summary(self):
         """Keep the footer defaults in step with the saved settings."""
         summary=getattr(self,'_footer_summary',None)
