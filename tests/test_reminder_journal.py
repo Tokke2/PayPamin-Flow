@@ -223,7 +223,7 @@ class ReminderJournalTests(unittest.TestCase):
             db.execute("INSERT INTO pdf_zone_samples(vendor,field,page_index,x0,y0,x1,y1,created) VALUES('supplier ab','amount',0,1,2,3,4,'2026-10-20')")
         record_reminder(
             self.app.DB_PATH, self.app.JOURNAL_PATH, row["id"], "P1", "2026-10-20",
-            175.0, {"fee": 175.0, "interest": "23", "objection_days": "5", "payment_deadline_days": "5"},
+            175.0, {"fee": 175.0, "objection_days": "5", "payment_deadline_days": "5"},
             "en", "supplier.svg", "reminder-1001.pdf",
         )
 

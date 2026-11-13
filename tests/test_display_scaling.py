@@ -162,8 +162,10 @@ class QuitConfirmationTests(unittest.TestCase):
         self.assertIn("+11 dagar", text)
         self.assertIn(self.app.money(self.app.REMINDER_FEE_CAP), text)
         self.assertIn(self.app.money(self.app.LATE_PAYMENT_COMPENSATION), text)
-        self.assertIn("10 %", text)
-        self.assertNotIn("23", text)
+        # The footer states no interest at all.
+        self.assertNotIn("ränta", text.casefold())
+        self.assertNotIn("interest", text.casefold())
+        self.assertNotIn("%", text)
         with patch.object(self.app, "setting", return_value=""):
             fallback = self.app.ReminderApp._defaults_summary_text(fake)
         self.assertIn("+5 dagar", fallback)

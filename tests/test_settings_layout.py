@@ -257,17 +257,14 @@ class SettingsDialogTests(unittest.TestCase):
         self.build()
 
         labels = [widget.options.get("text") or "" for widget in self.widgets("Label")]
-        self.assertIn(
-            "Påminnelseavgift: 60,00 kr · Förseningsersättning: 450,00 kr · Dröjsmålsränta: 10 %",
-            labels,
-        )
+        self.assertIn("Påminnelseavgift: 60,00 kr · Förseningsersättning: 450,00 kr", labels)
         # Nothing in the dialog can change the amounts.
         entries = self.widgets("Entry")
         self.assertNotIn("60", [entry.text for entry in entries])
         self.assertNotIn("450", [entry.text for entry in entries])
-        # The interest is fixed at the statutory rate and has no field either.
-        self.assertNotIn("10", [entry.text for entry in entries])
-        self.assertNotIn("23", [entry.text for entry in entries])
+        # Interest is not part of this app at all, so there is no rate to show.
+        self.assertFalse([text for text in labels if "ränta" in text.casefold()])
+        self.assertFalse([text for text in labels if "interest" in text.casefold()])
 
     def test_all_checkboxes_and_the_learning_button_are_present(self):
         self.build()

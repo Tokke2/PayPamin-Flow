@@ -154,7 +154,6 @@ class ReminderEditingTests(unittest.TestCase):
             )
             row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
         self.app.set_setting("fee", "999")
-        self.app.set_setting("interest", "99")
         self.app.set_setting("objection_days", "30")
         self.app.set_setting("payment_deadline_days", "30")
         self.app.set_language("en")
@@ -176,7 +175,6 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertEqual(fee, 150.0)
         for key, value in {
             "fee": 150.0,
-            "interest": "10",
             "objection_days": "5",
             "payment_deadline_days": "5",
             "customer_type": "private",
@@ -212,7 +210,6 @@ class ReminderEditingTests(unittest.TestCase):
             )
             row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
         self.app.set_setting("fee", "999")
-        self.app.set_setting("interest", "99")
         self.app.set_setting("objection_days", "30")
         self.app.set_setting("payment_deadline_days", "30")
         self.app.set_language("en")
@@ -237,7 +234,6 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertEqual(kwargs["output_path"], original_path)
         for key, value in {
             "fee": 150.0,
-            "interest": "10",
             "objection_days": "5",
             "payment_deadline_days": "5",
             "customer_type": "private",
@@ -385,9 +381,28 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertIn("Konsulttjänst", self.pdf_text(with_note))
         self.assertLess(self.specification_y(empty), self.specification_y(with_note))
 
+    def test_reminder_pdf_states_no_interest_at_all(self):
+        """Interest is outside this app, so no reminder may mention a rate."""
+        row, _ = self.save_p1()
+        cases = (("fee", 60.0, "sv"), ("no-fee", 0.0, "sv"), ("english", 60.0, "en"))
+        for name, fee, language in cases:
+            with self.subTest(case=name):
+                self.app.set_language(language)
+                path = self.workspace / f"no-interest-{name}.pdf"
+                self.app.ReminderApp.write_pdf(
+                    self.owner, path, dict(row), "P1", fee, self.original_date,
+                    1000.0, 1000.0 + fee, "", "",
+                )
+                text = self.pdf_text(path).casefold()
+                self.assertNotIn("ränta", text)
+                self.assertNotIn("interest", text)
+                self.assertNotIn("dröjsmål", text)
+                self.assertNotIn("%", text)
+        self.app.set_language("sv")
+
     def test_write_letter_passes_snapshot_terms_to_pdf_writer(self):
         row, original_path = self.save_p1()
-        terms = {"fee": 150.0, "interest": "12", "objection_days": "7", "payment_deadline_days": "9"}
+        terms = {"fee": 150.0, "objection_days": "7", "payment_deadline_days": "9"}
         fake = SimpleNamespace(write_pdf=Mock(side_effect=lambda path, *args: Path(path).write_bytes(b"replacement PDF")))
         with patch.object(self.app, "open_path"):
             result = self.app.ReminderApp.write_letter(

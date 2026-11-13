@@ -80,35 +80,33 @@ class FeeModelTests(unittest.TestCase):
         self.app.set_setting("fee", "150")
         self.assertEqual(self.app.reminder_fee_for(row), 60.0)
 
-    def test_interest_is_the_statutory_ten_percent(self):
-        """Räntelagen 6 §: the reference rate 2,00 % plus eight points."""
-        self.assertEqual(self.app.LATE_PAYMENT_INTEREST, 10.0)
-        self.assertEqual(self.app.setting("interest"), "")
+    def test_the_app_carries_no_interest_at_all(self):
+        """Interest is outside this app: no rate, no setting, no reminder term."""
+        self.assertFalse(hasattr(self.app, "LATE_PAYMENT_INTEREST"))
+        import fee_rules
+
+        self.assertFalse(hasattr(fee_rules, "assess_interest"))
+        self.assertFalse(any("INTEREST" in name for name in dir(fee_rules)))
+        terms = self.app.current_reminder_terms(60.0, "private", "SEK")
+        self.assertNotIn("interest", terms)
+        self.assertNotIn("ränta", " ".join(str(value) for value in terms.values()).casefold())
+
+    def test_a_stored_interest_setting_is_removed_at_start(self):
         with self.app.connect() as db:
             db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('interest','23')")
         self.app.init_db()
         self.assertEqual(self.app.setting("interest"), "")
-        self.assertEqual(self.app.current_reminder_terms(60.0, "private", "SEK")["interest"], "10")
-
-    def test_a_consumer_rate_above_the_ceiling_is_refused(self):
-        """19 a § konsumentkreditlagen caps a consumer at the reference rate + 20."""
-        import fee_rules
-
-        problems = fee_rules.assess_interest("private", 23)
-        self.assertEqual([issue.level for issue in problems], ["error"])
-        self.assertEqual(fee_rules.assess_interest("private", 10), ())
-        self.assertEqual(fee_rules.assess_interest("business", 15, "contract"), ())
-        self.assertEqual([issue.level for issue in fee_rules.assess_interest("business", 15)], ["warning"])
 
     def test_obsolete_fee_settings_are_removed_from_the_database(self):
         with self.app.connect() as db:
             db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('fee','150')")
             db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('compensation','999')")
             db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('fee_locked','1')")
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('interest','23')")
         self.app.init_db()
         with self.app.connect() as db:
             left = [row["key"] for row in db.execute(
-                "SELECT key FROM settings WHERE key IN ('fee','compensation','fee_locked')"
+                "SELECT key FROM settings WHERE key IN ('fee','compensation','fee_locked','interest')"
             )]
             p1_days = db.execute("SELECT value FROM settings WHERE key='p1_days'").fetchone()["value"]
         self.assertEqual(left, [])

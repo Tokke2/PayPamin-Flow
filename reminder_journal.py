@@ -187,7 +187,6 @@ def _legacy_events(invoices, settings):
     """Represent pre-journal P1/P2 dates without changing the old database."""
     default_terms = {
         "fee": _float(settings.get("fee")),
-        "interest": str(settings.get("interest") or ""),
         "objection_days": str(settings.get("objection_days") or ""),
         "payment_deadline_days": str(settings.get("payment_deadline_days") or ""),
     }

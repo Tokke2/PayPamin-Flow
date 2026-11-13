@@ -34,7 +34,7 @@ from fee_rules import (
     AGREEMENT_CONTRACT, AGREEMENT_INVOICE, AGREEMENT_NONE, AGREEMENT_OFFER,
     CUSTOMER_AUTHORITY, CUSTOMER_BUSINESS,
     CUSTOMER_PRIVATE, CUSTOMER_TYPES, LATE_PAYMENT_COMPENSATION, REMINDER_FEE_CAP,
-    LATE_PAYMENT_INTEREST, assess_fee, chargeable_fee, fee_kind, fee_label_key, is_business,
+    assess_fee, chargeable_fee, fee_kind, fee_label_key, is_business,
     legal_basis_key, normalize_agreement, normalize_customer_type,
 )
 from console_free import configure_console_free_subprocesses
@@ -594,9 +594,10 @@ def init_db():
         defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
-        # Remove only those three obsolete keys; nothing else in the database is
-        # touched. They were editable amounts, and keeping them would let a stale
-        # 150 kr travel on in journal exports as if it still meant something.
+        # Remove only these obsolete keys; nothing else in the database is
+        # touched. They were editable amounts or a rate, and keeping them would
+        # let a stale 150 kr or 23 % travel on in journal exports as if it still
+        # meant something.
         for obsolete in ('fee','compensation','fee_locked','interest'):
             row=db.execute('SELECT value FROM settings WHERE key=?',(obsolete,)).fetchone()
             if row is not None:
@@ -1197,7 +1198,6 @@ def current_reminder_terms(fee,customer_type=CUSTOMER_PRIVATE,currency='SEK',agr
         'customer_type':customer_type,
         'currency':normalize_currency(currency),
         'fee_agreement':normalize_agreement(agreement),
-        'interest':f'{LATE_PAYMENT_INTEREST:g}',
         'objection_days':str(setting('objection_days') or ''),
         'payment_deadline_days':str(setting('payment_deadline_days') or ''),
     }
@@ -1773,10 +1773,9 @@ class ReminderApp(tk.Tk):
 
     def _defaults_summary_text(self):
         """Describe the current defaults without restating numbers that can drift."""
-        return _('Startvärden: P1 +{p1} dagar · P2 +{p2} dagar · Kronofogden-granskning +{p3} dagar · {fee} för privatpersoner, {compensation} för företag · ränta {interest} %',
+        return _('Startvärden: P1 +{p1} dagar · P2 +{p2} dagar · Kronofogden-granskning +{p3} dagar · {fee} för privatpersoner, {compensation} för företag',
                  p1=setting('p1_days') or '5', p2=setting('p2_days') or '5', p3=setting('p3_days') or '5',
-                 fee=money(REMINDER_FEE_CAP), compensation=money(LATE_PAYMENT_COMPENSATION),
-                 interest=f'{LATE_PAYMENT_INTEREST:g}')
+                 fee=money(REMINDER_FEE_CAP), compensation=money(LATE_PAYMENT_COMPENSATION))
 
     def _refresh_defaults_summary(self):
         """Keep the footer defaults in step with the saved settings."""
@@ -4344,7 +4343,7 @@ class ReminderApp(tk.Tk):
                 log_activity('reminder','fee_frozen_above_cap','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],fee=fee)
             template_name=r['template_vendor'] or _('Ingen matchad mall')
             logo_path,logo_name=self.invoice_logo(r)
-            confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}\n{note}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee)),fee=money(fee,r['currency']),note=reminder_fee_note(r),interest=f'{LATE_PAYMENT_INTEREST:g}',template=template_name,logo=logo_name)
+            confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}\n{note}\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee)),fee=money(fee,r['currency']),note=reminder_fee_note(r),template=template_name,logo=logo_name)
             for issue in assessment.warnings:
                 confirmation+='\n\n'+fee_issue_text(issue)
             if frozen_note:confirmation+='\n\n'+frozen_note
@@ -4611,9 +4610,9 @@ class ReminderApp(tk.Tk):
         payment_text=f"<b>{_('Betalning')}</b><br/>Bankgiro: 5660-4200 · Swish: 123 188 42 87<br/>{_('Betalningsmottagare')}: Tadega AB. {_('Ange fakturanumret vid betalning.')}<br/>IBAN: SE26 6000 0000 0005 3862 3322 · BIC: HANDSESS"
         story.append(Paragraph(payment_text,styles['SmallText']))
         if fee>0:
-            terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. {label}: {fee}, högst en gång per fordran. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(str(effective_terms.get('objection_days') or '')),label=escape(fee_label),fee=money(fee,currency),interest=escape(str(effective_terms.get('interest') or '')))
+            terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. {label}: {fee}, högst en gång per fordran. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(str(effective_terms.get('objection_days') or '')),label=escape(fee_label),fee=money(fee,currency))
         else:
-            terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. Ingen påminnelseavgift debiteras. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(str(effective_terms.get('objection_days') or '')),interest=escape(str(effective_terms.get('interest') or '')))
+            terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. Ingen påminnelseavgift debiteras. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(str(effective_terms.get('objection_days') or '')))
         story += [Spacer(1,2*mm),HRFlowable(width='100%',thickness=.4,color=colors.HexColor('#999999')),Spacer(1,2*mm),Paragraph(terms,styles['SmallText'])]
         doc.build(story)
     def _confirm_learned_suggestions(self,suggestions,parent=None):
@@ -4769,13 +4768,11 @@ class ReminderApp(tk.Tk):
             entries[key]=cell(label,key)
         # The two amounts come from lag (1981:739) and are shown, never edited.
         grid.add_full(ttk.Label(
-            form,text=_('Påminnelseavgift: {fee} · Förseningsersättning: {compensation} · Dröjsmålsränta: {interest} %',
-                        fee=money(REMINDER_FEE_CAP),compensation=money(LATE_PAYMENT_COMPENSATION),
-                        interest=f'{LATE_PAYMENT_INTEREST:g}'),
+            form,text=_('Påminnelseavgift: {fee} · Förseningsersättning: {compensation}',
+                        fee=money(REMINDER_FEE_CAP),compensation=money(LATE_PAYMENT_COMPENSATION)),
             style='BodyBold.TLabel',
         ))
         hint('Beloppen är låsta av lag och kan inte ändras här. Privatpersoner får påminnelseavgift enligt 4 § och företag eller myndigheter förseningsersättning enligt 4 a §.')
-        hint('Dröjsmålsräntan är referensräntan plus 8 procentenheter enligt 6 § räntelagen. Räntan läggs aldrig på avgiften.')
         hint('Avgiften debiteras en gång per fordran, aldrig en gång per påminnelse.')
         agreement_var=tk.StringVar(value=_(AGREEMENT_LABELS[normalize_agreement(setting('fee_agreement'))]))
         agreement_frame=ttk.Frame(form)
@@ -4860,7 +4857,6 @@ class ReminderApp(tk.Tk):
                 for k,e in entries.items():
                     v=e.get().strip()
                     if k in ('p1_days','p2_days','p3_days','objection_days','payment_deadline_days') and int(v)<0:raise ValueError()
-                    if k=='interest' and float(v.replace(',','.'))<0:raise ValueError()
             except (ValueError,TypeError):
                 messagebox.showerror(_('Ogiltigt värde'),_('Ange positiva siffror i inställningarna.'),parent=w);return
             try:
