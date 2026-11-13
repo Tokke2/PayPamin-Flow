@@ -257,11 +257,21 @@ class SettingsDialogTests(unittest.TestCase):
         self.build()
 
         labels = [widget.options.get("text") or "" for widget in self.widgets("Label")]
-        self.assertIn("Påminnelseavgift: 60,00 kr · Förseningsersättning: 450,00 kr", labels)
+        # 150 kr per reminder is the selected model.
+        self.assertIn("Avgift per påminnelse: 150,00 kr", labels)
+        # The statutory model and its amounts stay one choice away.
+        self.assertIn("Avgiftsmodell", labels)
+        model_values = [
+            value
+            for combo in self.widgets("Combobox")
+            for value in (combo.options.get("values") or [])
+        ]
+        self.assertIn("150 kr per påminnelse (enligt avtal)", model_values)
+        self.assertIn("Lagstadgad avgift: 60 kr privatperson, 450 kr företag (4 §, 4 a §)", model_values)
         # Nothing in the dialog can change the amounts.
         entries = self.widgets("Entry")
-        self.assertNotIn("60", [entry.text for entry in entries])
-        self.assertNotIn("450", [entry.text for entry in entries])
+        for amount in ("60", "150", "450"):
+            self.assertNotIn(amount, [entry.text for entry in entries])
         # Interest is not part of this app at all, so there is no rate to show.
         self.assertFalse([text for text in labels if "ränta" in text.casefold()])
         self.assertFalse([text for text in labels if "interest" in text.casefold()])

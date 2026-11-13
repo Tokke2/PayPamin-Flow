@@ -17,6 +17,8 @@ class InvoiceLogoTests(unittest.TestCase):
         self.app.SVG_DIR.mkdir(exist_ok=True)
         self.app.set_language("sv")
         self.app.init_db()
+        # Logo editing is checked against the statutory amounts.
+        self.app.set_setting("fee_model", "statutory")
         for filename in ("invoice.svg", "vendor.svg", "global.svg"):
             (self.app.SVG_DIR / filename).write_text(f"<svg>{filename}</svg>", encoding="utf-8")
         self.app.set_setting("logo_file", "global.svg")

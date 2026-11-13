@@ -21,6 +21,8 @@ class ReminderWorkflowTests(unittest.TestCase):
         self.app.EXPORT_DIR.mkdir(exist_ok=True)
         self.app.SVG_DIR.mkdir(exist_ok=True)
         self.app.init_db()
+        # The workflow amounts below are the statutory ones.
+        self.app.set_setting("fee_model", "statutory")
         self.app.set_language("sv")
 
         def cleanup():

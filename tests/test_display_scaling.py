@@ -160,8 +160,9 @@ class QuitConfirmationTests(unittest.TestCase):
         self.assertIn("+7 dagar", text)
         self.assertIn("+9 dagar", text)
         self.assertIn("+11 dagar", text)
-        self.assertIn(self.app.money(self.app.REMINDER_FEE_CAP), text)
-        self.assertIn(self.app.money(self.app.LATE_PAYMENT_COMPENSATION), text)
+        # The footer states the selected fee model, not a stale sentence.
+        self.assertIn(self.app.money(self.app.PER_REMINDER_FEE), text)
+        self.assertIn("per påminnelse", text)
         # The footer states no interest at all.
         self.assertNotIn("ränta", text.casefold())
         self.assertNotIn("interest", text.casefold())

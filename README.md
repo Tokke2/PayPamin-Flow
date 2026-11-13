@@ -267,7 +267,16 @@ PDF-importen föreslår valuta när en kod finns vid **ATT BETALA**, efter **Val
 
 ## Påminnelseavgift och förseningsersättning
 
-Appen följer **lag (1981:739) om ersättning för inkassokostnader m.m.** och väljer belopp efter vem fakturan gäller.
+Appen har **två fasta avgiftsmodeller**, och du väljer mellan dem i **Inställningar → Avgiftsmodell**. Inget belopp skrivs in för hand i någon av dem.
+
+### 150 kr per påminnelse (förvald)
+
+**150 kr** debiteras per påminnelse, samma belopp som fakturatexten anger. Det är den modell appen använder tills du väljer något annat.
+
+- Mot **företag och myndigheter** är 150 kr lagligt: det ligger under den lagstadgade förseningsersättningen 450 kr enligt 4 a §, och den lägre ersättningen får alltid krävas.
+- Mot en **privatperson** gäller 4 § med ett tak på **60 kr**. 6 § gör ett vidare villkor ogiltigt, så 150 kr **kan inte krävas in** av en privatperson. Appen stoppar dig inte — du har uttryckligen valt modellen — men varje påminnelse till en privatperson visar en varning om taket i bekräftelsedialogen, och **den lagstadgade modellen finns ett klick bort** för just de fakturorna.
+
+### Lagstadgad avgift enligt 4 § och 4 a § (val)
 
 | Kundtyp på fakturan | Belopp | Vad det är | Krav |
 |---|---|---|---|
@@ -275,7 +284,7 @@ Appen följer **lag (1981:739) om ersättning för inkassokostnader m.m.** och v
 | **Företag** | **450 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
 | **Myndighet** | **450 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
 
-**Beloppen är fasta.** De följer lagen och kan inte ändras i appen — det finns inga avgiftsfält i **Inställningar**, bara en rad som visar de två beloppen. Ett värde som en äldre version har sparat (till exempel 150 kr) läses aldrig och tas bort ur databasen vid start, så det kan inte följa med i en säkerhetskopia och se ut som en giltig inställning.
+**Beloppen är fasta i båda modellerna.** De kan inte ändras i appen — det finns inga avgiftsfält i **Inställningar**, bara en väljare och en rad som visar det belopp som gäller. Ett avgiftsbelopp som en äldre version har sparat (till exempel 150 kr som *inställning*) läses aldrig och tas bort ur databasen vid start; modellvalet är det enda som sparas.
 
 **Fakturatexten sparas ordagrant, men upprepas aldrig med gamla villkor.** Texten på fakturan (**Avser**) behåller sin ursprungliga lydelse, till exempel *"Avgift per påminnelse: 150:-. Försenad betalning debiteras 23% ränta."* Påminnelsen skriver inte ut den meningen: den anger i stället den lagstadgade avgiften en gång med sin paragraf och ingen ränta alls. Allt annat i texten följer med — betalningsuppgifter, äganderättsförbehåll och anmärkningsfrist. Bekräftelsedialogen säger till när ett sådant villkor lämnas utanför, och fakturans egen text ändras aldrig.
 
@@ -286,13 +295,14 @@ Två regler styr hela modellen:
 - **En avgift per fordran.** P2-brevet upprepar den avgift som redan debiterades med P1 i stället för att lägga på en ny. Tidigare kunde P1 och P2 tillsammans bli 300 kr för samma faktura; det är rättat.
 - **Taket gäller i SEK.** Fakturor i annan valuta kontrolleras inte automatiskt, eftersom appen inte räknar om valutor. Dialogen varnar i stället för att gissa en växelkurs.
 
-**Kundtyp och avtal** anges per faktura i granskningsformuläret. Väljer du **Företag** eller **Myndighet** blir påminnelseavgiften automatiskt **0 kr** och förseningsersättningen används i stället; 5 § 2 st. tillåter inte båda för samma fordran. För privatpersoner anger du **var rätten till avgiften avtalades** — i avtalet vid köpet, i offerten eller endast på fakturan. Det sista alternativet är oftast för sent, eftersom skulden uppstod innan fakturan skrevs, och dialogen säger det innan något skickas.
+**Kundtyp och avtal** anges per faktura i granskningsformuläret. I den **lagstadgade modellen** blir påminnelseavgiften automatiskt **0 kr** för **Företag** och **Myndighet** och förseningsersättningen används i stället; 5 § 2 st. tillåter inte båda för samma fordran. I **150-modellen** gäller 150 kr för alla kundtyper, eftersom det är en avtalsgrundad avgift — men bara företag och myndigheter får debiteras det beloppet. För privatpersoner anger du **var rätten till avgiften avtalades** — i avtalet vid köpet, i offerten eller endast på fakturan. Det sista alternativet är oftast för sent, eftersom skulden uppstod innan fakturan skrevs, och dialogen säger det innan något skickas.
 
 **Skydden i praktiken:**
 
-- Ett belopp över taket **stoppar** påminnelsen med en förklaring i stället för att skrivas ut. 6 § gör ett högre villkor ogiltigt, så det går inte att avtala bort taket. Sedan beloppen blev fasta kan appen inte längre hamna där av misstag — kontrollen finns kvar som skydd mot en handredigerad databas.
-- En databas från en äldre version får en **kundtyp** som standard **Privatperson**, eftersom 60 kr är lagligt i alla relationer.
-- En påminnelse som redan skickats med ett äldre belopp behåller sitt historiska belopp. P2 lägger ändå inte till något, och dialogen upplyser om att beloppet ligger över dagens tak.
+- I den **lagstadgade modellen** **stoppar** ett belopp över taket påminnelsen med en förklaring i stället för att skrivas ut: 6 § gör ett högre villkor ogiltigt. I **150-modellen** varnar appen i stället för att blockera, eftersom modellen är ett medvetet val — men varningen säger rakt ut att beloppet inte kan krävas in av en privatperson, och 4 §-modellen är ett klick bort.
+- En databas från en äldre version får en **kundtyp** som standard **Privatperson**. I den lagstadgade modellen är 60 kr då lagligt i alla relationer; i 150-modellen får just de fakturorna varningen om 4 §-taket.
+- En påminnelse som redan skickats med ett äldre belopp behåller sitt historiska belopp och sin grund. P1 låser beloppet, P2 upprepar det, och ett byte av modell gäller bara påminnelser som inte skapats än.
+- En påminnelse som skapas i 150-modellen skriver **"Avgift per påminnelse enligt avtal, 150 kr."** i stället för en paragraf, eftersom 4 § inte ger stöd för 150 kr. I den lagstadgade modellen står 4 § respektive 4 a § som förut.
 - Avgiften är **momsfri** och appen lägger aldrig på någon ränta.
 
 ## Autostart

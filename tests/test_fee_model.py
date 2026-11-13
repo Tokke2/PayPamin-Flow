@@ -22,6 +22,8 @@ class FeeModelTests(unittest.TestCase):
         self.app.EXPORT_DIR.mkdir(exist_ok=True)
         self.app.SVG_DIR.mkdir(exist_ok=True)
         self.app.init_db()
+        # These tests cover the statutory model: 4 § and 4 a §.
+        self.app.set_setting("fee_model", "statutory")
         self.app.set_language("sv")
 
         def cleanup():
@@ -305,7 +307,7 @@ class FeeModelTests(unittest.TestCase):
             row = db.execute("SELECT * FROM invoices WHERE invoice_no='OLD-1'").fetchone()
         self.assertEqual(row["customer_type"], "private")
         self.assertEqual(row["fee_agreement"], "")
-        self.assertEqual(self.app.reminder_fee_for(row), 60.0)
+        self.assertEqual(self.app.reminder_fee_for(row, "statutory"), 60.0)
 
     def test_journal_keeps_the_customer_type(self):
         row = self.save_invoice(customer_type="business", number="FEE-JOURNAL")
@@ -318,6 +320,112 @@ class FeeModelTests(unittest.TestCase):
         self.assertEqual(saved["customer_type"], "business")
         self.assertEqual(saved["fee_agreement"], "contract")
         self.assertEqual(row["customer_type"], "business")
+
+
+
+class FeeModelChoiceTests(unittest.TestCase):
+    """150 kr per reminder is the default, and 4 § stays one choice away."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.temporary.name)
+        self.app = load_headless_app(self.workspace)
+        self.app.DB_PATH = self.workspace / "model.sqlite3"
+        self.app.JOURNAL_PATH = self.workspace / "journal.json"
+        self.app.EXPORT_DIR = self.workspace / "export"
+        self.app.SVG_DIR = self.workspace / "svg"
+        self.app.EXPORT_DIR.mkdir(exist_ok=True)
+        self.app.SVG_DIR.mkdir(exist_ok=True)
+        self.app.init_db()
+        self.app.set_language("sv")
+
+        def cleanup():
+            self.app.set_language("sv")
+            for handler in self.app.logger.handlers[:]:
+                self.app.logger.removeHandler(handler)
+                handler.close()
+            self.temporary.cleanup()
+
+        self.addCleanup(cleanup)
+
+    def invoice(self, customer_type="private", number="MODEL-1"):
+        with self.app.connect() as db:
+            db.execute(
+                "INSERT INTO invoices(customer, invoice_no, due_date, amount, paid, created, currency, customer_type, fee_agreement)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                ("Kund AB", number, "2026-01-01", 1000.0, 0.0, "2026-01-01", "SEK", customer_type, "contract"),
+            )
+            return db.execute("SELECT * FROM invoices WHERE invoice_no=?", (number,)).fetchone()
+
+    def test_per_reminder_is_the_default_model(self):
+        self.assertEqual(self.app.current_fee_model(), "per_reminder")
+        self.assertEqual(self.app.setting("fee_model"), "per_reminder")
+        self.assertEqual(self.app.reminder_fee_for(self.invoice()), 150.0)
+        self.assertEqual(self.app.reminder_fee_for(self.invoice("business", "MODEL-2")), 150.0)
+
+    def test_the_statutory_model_is_still_selectable(self):
+        self.app.set_setting("fee_model", "statutory")
+        self.assertEqual(self.app.current_fee_model(), "statutory")
+        self.assertEqual(self.app.reminder_fee_for(self.invoice()), 60.0)
+        self.assertEqual(self.app.reminder_fee_for(self.invoice("business", "MODEL-3")), 450.0)
+
+    def test_the_model_is_stored_and_survives_a_restart(self):
+        self.app.set_setting("fee_model", "statutory")
+        self.app.init_db()
+        self.assertEqual(self.app.current_fee_model(), "statutory")
+        self.app.set_setting("fee_model", "per_reminder")
+        self.app.init_db()
+        self.assertEqual(self.app.current_fee_model(), "per_reminder")
+
+    def test_an_unknown_stored_model_falls_back_to_the_default(self):
+        self.app.set_setting("fee_model", "free_amount")
+        self.assertEqual(self.app.current_fee_model(), "per_reminder")
+
+    def test_a_per_reminder_fee_is_never_capped_to_sixty(self):
+        row = self.invoice()
+        self.assertEqual(self.app.chargeable_fee(row["customer_type"], 150.0, "per_reminder"), 150.0)
+        self.assertEqual(self.app.chargeable_fee(row["customer_type"], 150.0, "statutory"), 60.0)
+
+    def test_a_private_invoice_is_warned_but_not_blocked_in_the_150_model(self):
+        row = self.invoice()
+        assessment = self.app.invoice_fee_assessment(row)
+        self.assertFalse(assessment.blocked)
+        self.assertEqual([issue.level for issue in assessment.issues], ["warning"])
+        self.assertIn("4 §", self.app.fee_issue_text(assessment.issues[0]))
+        self.assertEqual(self.app.reminder_fee_note(row), "Avgift per påminnelse enligt avtal, 150 kr.")
+
+    def test_a_business_invoice_is_lawful_in_the_150_model(self):
+        row = self.invoice("business", "MODEL-B")
+        assessment = self.app.invoice_fee_assessment(row)
+        self.assertFalse(assessment.blocked)
+        self.assertEqual(assessment.issues, ())
+        self.assertEqual(self.app.reminder_fee_note(row), "Avgift per påminnelse enligt avtal, 150 kr.")
+
+    def test_the_statutory_model_keeps_its_own_labels_and_basis(self):
+        self.app.set_setting("fee_model", "statutory")
+        row = self.invoice()
+        self.assertEqual(self.app.reminder_fee_note(row), "Påminnelseavgift enligt 4 § lagen (1981:739), högst 60 kr.")
+        business = self.invoice("business", "MODEL-C")
+        self.assertEqual(self.app.reminder_fee_note(business), "Förseningsersättning enligt 4 a § lagen (1981:739).")
+
+    def test_p2_repeats_the_amount_p1_fixed_even_after_a_model_change(self):
+        row = self.invoice()
+        snapshot = self.app.capture_p1_snapshot(row, 150.0, "2026-02-01")
+        self.assertEqual(self.app.read_reminder_snapshot(snapshot)["terms"]["fee_model"], "per_reminder")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p1_date='2026-02-01', p1_snapshot=? WHERE id=?", (snapshot, row["id"]))
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.app.set_setting("fee_model", "statutory")
+        self.assertEqual(self.app.reminder_fee_for_level(row, "P2"), 150.0)
+        self.assertEqual(self.app.reminder_fee_model_for(row, "P2"), "per_reminder")
+
+    def test_the_amounts_stay_fixed_in_both_models(self):
+        """The choice is between two fixed models, never a free number."""
+        self.assertEqual(self.app.setting("fee"), "")
+        self.assertEqual(self.app.setting("compensation"), "")
+        self.app.set_setting("fee", "150")
+        self.assertEqual(self.app.reminder_fee_for(self.invoice(), "statutory"), 60.0)
+        self.assertEqual(self.app.reminder_fee_for(self.invoice("business", "MODEL-D"), "statutory"), 450.0)
 
 
 if __name__ == "__main__":

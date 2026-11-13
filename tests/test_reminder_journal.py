@@ -35,6 +35,8 @@ class ReminderJournalTests(unittest.TestCase):
         self.app.SVG_DIR.mkdir(exist_ok=True)
         self.app.set_language("sv")
         self.app.init_db()
+        # Journal amounts below are the statutory ones.
+        self.app.set_setting("fee_model", "statutory")
 
         def cleanup():
             self.app.set_language("sv")

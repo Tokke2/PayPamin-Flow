@@ -24,6 +24,8 @@ class ReminderEditingTests(unittest.TestCase):
         self.app.SVG_DIR.mkdir(exist_ok=True)
         self.app.set_language("sv")
         self.app.init_db()
+        # Editing is checked against the statutory amounts.
+        self.app.set_setting("fee_model", "statutory")
         for filename in ("old.svg", "new.svg"):
             (self.app.SVG_DIR / filename).write_text(f"<svg>{filename}</svg>", encoding="utf-8")
         self.owner = SimpleNamespace(logo_var=SimpleNamespace(get=lambda: "old.svg"))
