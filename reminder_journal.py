@@ -39,6 +39,7 @@ INVOICE_COLUMNS = (
     "source_hash", "ignored", "note", "p1_date", "p2_date", "sent_count",
     "p1_snapshot", "p2_snapshot", "p1_draft_date", "p2_draft_date",
     "p1_sent_date", "p2_sent_date", "ledger_first_seen", "ledger_last_seen", "created",
+    "customer_type", "fee_agreement",
 )
 
 
@@ -484,6 +485,8 @@ def _invoice_values(invoice, now):
     values["reviewed"] = int(values["reviewed"] if values["reviewed"] is not None else 1)
     values["ignored"] = int(values["ignored"] or 0)
     values["sent_count"] = int(values["sent_count"] or 0)
+    values["customer_type"] = values["customer_type"] or "private"
+    values["fee_agreement"] = values["fee_agreement"] or ""
     for column in (
         "p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date",
         "ledger_first_seen", "ledger_last_seen", "paid_marked_at", "paid_marked_source",

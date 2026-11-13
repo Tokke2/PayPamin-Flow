@@ -175,7 +175,7 @@ class InvoiceLogoTests(unittest.TestCase):
             saved = db.execute("SELECT p1_snapshot FROM invoices WHERE id=?", (row["id"],)).fetchone()
         snapshot = self.app.read_p1_snapshot(saved["p1_snapshot"])
         self.assertIsNotNone(snapshot)
-        self.assertEqual(snapshot["terms"]["fee"], 150.0)
+        self.assertEqual(snapshot["terms"]["fee"], 60.0)
 
 
 if __name__ == "__main__":

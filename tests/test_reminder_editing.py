@@ -130,7 +130,8 @@ class ReminderEditingTests(unittest.TestCase):
         args, kwargs = self.owner.write_letter.call_args
         updated, level, fee, logo_path = args
         self.assertEqual(updated["logo_file"], "new.svg")
-        self.assertEqual((level, fee), ("P1", 150.0))
+        # No snapshot exists, so the lawful default for a consumer applies.
+        self.assertEqual((level, fee), ("P1", 60.0))
         self.assertEqual(logo_path, str((self.app.SVG_DIR / "new.svg").resolve()))
         self.assertEqual(kwargs["reminder_date"], self.original_date)
         self.assertEqual(kwargs["output_path"], original_path)
@@ -173,12 +174,16 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertEqual(updated["amount"], 1000.0)
         self.assertEqual(updated["paid"], 0)
         self.assertEqual(fee, 150.0)
-        self.assertEqual(kwargs["reminder_terms"], {
+        for key, value in {
             "fee": 150.0,
             "interest": "23",
             "objection_days": "5",
             "payment_deadline_days": "5",
-        })
+            "customer_type": "private",
+            "fee_kind": "reminder_fee",
+            "currency": "SEK",
+        }.items():
+            self.assertEqual(kwargs["reminder_terms"][key], value)
         self.assertEqual(kwargs["output_path"], original_path)
         self.assertEqual(languages, ["sv"])
         self.assertEqual(self.app.get_language(), "en")
@@ -230,12 +235,16 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertEqual(logo_path, str((self.app.SVG_DIR / "new.svg").resolve()))
         self.assertEqual(kwargs["reminder_date"], date(2026, 10, 10))
         self.assertEqual(kwargs["output_path"], original_path)
-        self.assertEqual(kwargs["reminder_terms"], {
+        for key, value in {
             "fee": 150.0,
             "interest": "23",
             "objection_days": "5",
             "payment_deadline_days": "5",
-        })
+            "customer_type": "private",
+            "fee_kind": "reminder_fee",
+            "currency": "SEK",
+        }.items():
+            self.assertEqual(kwargs["reminder_terms"][key], value)
         self.assertEqual(languages, ["sv"])
         self.assertEqual(self.app.get_language(), "en")
         with self.app.connect() as db:
@@ -267,7 +276,8 @@ class ReminderEditingTests(unittest.TestCase):
         snapshot = self.app.read_reminder_snapshot(saved["p2_snapshot"])
         self.assertIsNotNone(snapshot)
         self.assertEqual(snapshot["row"]["p2_date"], "2026-10-10")
-        self.assertEqual(snapshot["terms"]["fee"], 150.0)
+        # A reminder without a snapshot keeps the lawful consumer fee of 60 kr.
+        self.assertEqual(snapshot["terms"]["fee"], 60.0)
         self.assertNotIn("p2_snapshot", snapshot["row"])
 
     def test_p2_edit_atomically_replaces_existing_pdf_with_original_date(self):

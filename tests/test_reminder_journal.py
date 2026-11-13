@@ -92,7 +92,7 @@ class ReminderJournalTests(unittest.TestCase):
         self.assertEqual(event["level"], "P1")
         self.assertEqual(event["invoice_no"], "JSON-1001")
         self.assertEqual(event["pdf_name"], pdf.name)
-        self.assertEqual(event["terms"]["fee"], 150.0)
+        self.assertEqual(event["terms"]["fee"], 60.0)
         self.assertEqual(event["invoice"]["note"], "Original fakturatext")
 
         first = create_weekly_backup(

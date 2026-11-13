@@ -34,6 +34,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "currency.py",
     "customer_contacts.py",
     "error_log.py",
+    "fee_rules.py",
     "i18n.py",
     "import_watcher.py",
     "invoice_parser.py",

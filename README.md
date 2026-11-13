@@ -264,6 +264,30 @@ PDF-importen föreslår valuta när en kod finns vid **ATT BETALA**, efter **Val
 
 **Appen gör ingen valutaomräkning.** Att ändra valuta ändrar märkningen, inte de inmatade siffrorna. Svensk visning blir exempelvis `1 234,50 EUR`; engelsk visning blir `EUR 1,234.50`.
 
+## Påminnelseavgift och förseningsersättning
+
+Appen följer **lag (1981:739) om ersättning för inkassokostnader m.m.** och väljer belopp efter vem fakturan gäller.
+
+| Kundtyp på fakturan | Belopp | Vad det är | Krav |
+|---|---|---|---|
+| **Privatperson** | högst **60 kr** | påminnelseavgift enligt 4 § | avtal senast när skulden uppstod (2 §) |
+| **Företag** | **450 kr** eller **0 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
+| **Myndighet** | **450 kr** eller **0 kr** | förseningsersättning enligt 4 a § | inget avtal behövs |
+
+Två regler styr hela modellen:
+
+- **En avgift per fordran.** P2-brevet upprepar den avgift som redan debiterades med P1 i stället för att lägga på en ny. Tidigare kunde P1 och P2 tillsammans bli 300 kr för samma faktura; det är rättat.
+- **Taket gäller i SEK.** Fakturor i annan valuta kontrolleras inte automatiskt, eftersom appen inte räknar om valutor. Dialogen varnar i stället för att gissa en växelkurs.
+
+**Kundtyp och avtal** anges per faktura i granskningsformuläret. Väljer du **Företag** eller **Myndighet** blir påminnelseavgiften automatiskt **0 kr** och förseningsersättningen används i stället; 5 § 2 st. tillåter inte båda för samma fordran. För privatpersoner anger du **var rätten till avgiften avtalades** — i avtalet vid köpet, i offerten eller endast på fakturan. Det sista alternativet är oftast för sent, eftersom skulden uppstod innan fakturan skrevs, och dialogen säger det innan något skickas.
+
+**Skydden i praktiken:**
+
+- Ett belopp över taket **stoppar** påminnelsen med en förklaring i stället för att skrivas ut. 6 § gör ett högre villkor ogiltigt, så det går inte att avtala bort taket.
+- Inställningarna accepterar högst **60 kr** som påminnelseavgift och **450 kr eller 0 kr** som förseningsersättning.
+- En databas från en äldre version får en **kundtyp** som standard **Privatperson**, eftersom 60 kr är lagligt i alla relationer. En sparad avgift över taket ändras aldrig automatiskt; påminnelsen stoppas och du ändrar själv.
+- Avgiften är **momsfri** och dröjsmålsräntan räknas aldrig på avgiften.
+
 ## Autostart
 
 Autostart gäller endast den inloggade användaren och kräver inga administratörsrättigheter. Appen synkroniserar valet vid start och när inställningarna sparas.

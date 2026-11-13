@@ -266,7 +266,7 @@ class CustomerContactTests(unittest.TestCase):
         self.assertEqual(query["bcc"], ["rl@tadega.com"])
         body = query["body"][0]
         self.assertIn("andra påminnelsen", body)
-        self.assertIn("P1 och P2", body)
+        self.assertIn("en gång per faktura", body)
         self.assertIn("Sista betalningsdag", body)
 
         self.app.set_language("en")
@@ -315,7 +315,10 @@ class CustomerContactTests(unittest.TestCase):
         )).query)
 
         body = query["body"][0].replace("\xa0", " ")
-        self.assertIn("1 550,00", body)
+        # One fee per claim: P2 repeats the 150 kr agreed with P1 and never
+        # adds a second one, so the total is 1 250 + 150.
+        self.assertIn("1 400,00", body)
+        self.assertNotIn("1 550,00", body)
         self.assertNotIn("10 299", body)
         self.assertIn(self.app.format_long_date(date(2026, 10, 20)), body)
         self.assertNotIn(self.app.format_long_date(date(2026, 11, 9)), body)

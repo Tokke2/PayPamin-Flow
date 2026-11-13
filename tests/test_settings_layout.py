@@ -201,6 +201,7 @@ class SettingsDialogTests(unittest.TestCase):
         self.app.ttk = FakeTtk(self.registry)
         self.values = {
             "p1_days": "5", "p2_days": "5", "p3_days": "5", "fee": "150",
+            "compensation": "450", "fee_agreement": "",
             "interest": "23", "objection_days": "5", "payment_deadline_days": "5",
             "autostart": "1", "update_auto": "1", "auto_import": "1",
             "ledger_friday_reminder": "1", "cache_auto": "1", "language": "sv",
@@ -250,8 +251,8 @@ class SettingsDialogTests(unittest.TestCase):
         self.build()
 
         entries = self.widgets("Entry")
-        self.assertEqual(len(entries), 7)
-        self.assertEqual(sorted(entry.text for entry in entries), ["150", "23", "5", "5", "5", "5", "5"])
+        self.assertEqual(len(entries), 8)
+        self.assertEqual(sorted(entry.text for entry in entries), ["150", "23", "450", "5", "5", "5", "5", "5"])
 
     def test_all_checkboxes_and_the_learning_button_are_present(self):
         self.build()

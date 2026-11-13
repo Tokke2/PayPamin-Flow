@@ -30,6 +30,13 @@ from autostart import AutostartError, autostart_location, set_autostart
 from cache_cleaner import clean_cache
 from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
+from fee_rules import (
+    AGREEMENT_CONTRACT, AGREEMENT_INVOICE, AGREEMENT_NONE, AGREEMENT_OFFER,
+    CUSTOMER_AUTHORITY, CUSTOMER_BUSINESS,
+    CUSTOMER_PRIVATE, CUSTOMER_TYPES, LATE_PAYMENT_COMPENSATION, REMINDER_FEE_CAP,
+    assess_fee, chargeable_fee, fee_kind, fee_label_key, is_business,
+    legal_basis_key, normalize_agreement, normalize_customer_type,
+)
 from console_free import configure_console_free_subprocesses
 from error_log import ERROR_LOG_NAME, refresh_error_log, resolve_errors
 from log_archive import RETENTION_DAYS, DailySizeRotatingFileHandler, archive_old_logs
@@ -507,6 +514,9 @@ def init_db():
         if 'p2_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p2_snapshot TEXT DEFAULT ''")
         for column in ('p1_draft_date','p2_draft_date','p1_sent_date','p2_sent_date'):
             if column not in existing:db.execute(f"ALTER TABLE invoices ADD COLUMN {column} TEXT DEFAULT ''")
+        # The fee depends on who the customer is (4 § vs 4 a § lag 1981:739).
+        if 'customer_type' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN customer_type TEXT NOT NULL DEFAULT 'private'")
+        if 'fee_agreement' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN fee_agreement TEXT NOT NULL DEFAULT ''")
         ensure_ledger_schema(db)
         ensure_journal_schema(db)
         ensure_customer_contact_schema(db)
@@ -529,9 +539,18 @@ def init_db():
         for column in ('org_number','bankgiro_number'):
             if column not in vendor_logo_columns:
                 db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'150','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee':'60','compensation':'450','fee_agreement':'','fee_locked':'0','interest':'23','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0'}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
+        # Older databases kept a single reminder fee, often 150 kr, which is
+        # above the 60 kr cap in 4 § lag 1981:739. Never change the value here:
+        # the user decides in the reminder dialogue or in Settings.
+        try:
+            stored=float(db.execute("SELECT value FROM settings WHERE key='fee'").fetchone()['value'])
+        except (TypeError,ValueError,sqlite3.Error):
+            stored=None
+        if stored is not None and stored>REMINDER_FEE_CAP:
+            logger.warning('Stored reminder fee %s kr is above the legal cap of %s kr',stored,REMINDER_FEE_CAP)
 
 
 def setting(key):
@@ -976,16 +995,18 @@ def save_invoice_record(values,row_id=None):
                 values['customer'],values['invoice_no'],values['invoice_date'],values['due_date'],
                 values['template_vendor'],values['amount'],values['currency'],values['paid'],
                 values['email'],values['source'],values.get('source_hash',''),values['note'],values['reviewed'],
-                values.get('logo_file'),
+                values.get('logo_file'),normalize_customer_type(values.get('customer_type')),
+                normalize_agreement(values.get('fee_agreement')),
             )
             if row_id is None:
                 db.execute('''INSERT INTO invoices(
                     customer,invoice_no,invoice_date,due_date,template_vendor,amount,currency,paid,email,
-                    source,source_hash,note,reviewed,logo_file,created
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',params+(datetime.now().isoformat(timespec='seconds'),))
+                    source,source_hash,note,reviewed,logo_file,customer_type,fee_agreement,created
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',params+(datetime.now().isoformat(timespec='seconds'),))
             else:
                 db.execute('''UPDATE invoices SET customer=?,invoice_no=?,invoice_date=?,due_date=?,
-                    template_vendor=?,amount=?,currency=?,paid=?,email=?,source=?,source_hash=?,note=?,reviewed=?,logo_file=?
+                    template_vendor=?,amount=?,currency=?,paid=?,email=?,source=?,source_hash=?,note=?,reviewed=?,logo_file=?,
+                    customer_type=?,fee_agreement=?
                     WHERE id=?''',params+(row_id,))
             save_customer_contact(db,values['customer'],values['email'],values.get('logo_file'))
             try:record_invoice_learning_db(db,values)
@@ -1026,10 +1047,111 @@ def reminder_file_path(row,level,day,prefix=None):
     return EXPORT_DIR/f"{prefix}({reminder_number})_{safe_invoice_no}_{safe_customer}_{day.isoformat()}.pdf"
 
 
-def current_reminder_terms(fee):
+CUSTOMER_TYPE_LABELS={
+    CUSTOMER_PRIVATE:'Privatperson',
+    CUSTOMER_BUSINESS:'Företag',
+    CUSTOMER_AUTHORITY:'Myndighet',
+}
+
+AGREEMENT_LABELS={
+    AGREEMENT_NONE:'(Inget avtal)',
+    AGREEMENT_CONTRACT:'I avtalet vid köpet',
+    AGREEMENT_OFFER:'I offerten eller anbudet',
+    AGREEMENT_INVOICE:'Endast på fakturan',
+}
+
+
+def row_value(row,key,default=None):
+    """Read one column from a sqlite Row, a dict or an older row without it."""
+    try:value=row[key]
+    except (KeyError,IndexError,TypeError):return default
+    return default if value is None else value
+
+
+def invoice_customer_type(row):
+    """Return who the invoice is addressed to; a consumer is the safe default."""
+    return normalize_customer_type(row_value(row,'customer_type',''))
+
+
+def invoice_fee_agreement(row):
+    """Return where the right to a reminder fee was agreed for this invoice."""
+    return normalize_agreement(row_value(row,'fee_agreement','') or setting('fee_agreement'))
+
+
+def setting_amount(key,default=0.0):
+    """Read a money setting without ever raising on bad input."""
+    try:return float(setting(key) or default)
+    except (TypeError,ValueError):return float(default)
+
+
+def invoice_currency(row):
+    return normalize_currency(row_value(row,'currency','SEK'))
+
+
+def reminder_fee_for(row):
+    """Return the one fee this invoice may be charged; 0 means none.
+
+    Consumers get the reminder fee from Settings, capped at 60 kr by 4 §.
+    Businesses and authorities get late-payment compensation under 4 a §
+    instead; the reminder fee then becomes 0, because 5 § 2 st. does not allow
+    both for the same claim.
+    """
+    if is_business(invoice_customer_type(row)):
+        return setting_amount('compensation',LATE_PAYMENT_COMPENSATION)
+    return setting_amount('fee',REMINDER_FEE_CAP)
+
+
+def invoice_fee_assessment(row,fee=None):
+    """Check this invoice's fee against the law in its own currency."""
+    amount=reminder_fee_for(row) if fee is None else float(fee or 0)
+    return assess_fee(invoice_customer_type(row),amount,invoice_currency(row),invoice_fee_agreement(row))
+
+
+def reminder_fee_note(row):
+    """Return the short label explaining which paragraph the fee rests on."""
+    fee=reminder_fee_for(row)
+    if fee<=0:return _('Ingen avgift debiteras för den här fakturan.')
+    return _(legal_basis_key(invoice_customer_type(row),fee))
+
+
+def fee_issue_text(issue):
+    """Translate one fee rule finding for a dialogue."""
+    return _(issue.key,**dict(issue.values))
+
+
+def charged_fee_for(row):
+    """Return the fee that was actually charged with P1, else 0."""
+    snapshot=read_reminder_snapshot(row_value(row,'p1_snapshot',''))
+    if snapshot:
+        try:return float(snapshot['terms'].get('fee') or 0)
+        except (TypeError,ValueError):return 0.0
+    return reminder_fee_for(row) if row_value(row,'p1_date','') else 0.0
+
+
+def reminder_fee_for_level(row,level):
+    """Return the fee already fixed for this claim, or the lawful default.
+
+    P1 fixes the amount. P2 repeats it, because the law allows one fee per
+    claim; a changed setting only applies to invoices that have no P1 yet.
+    """
+    if level=='P2':
+        snapshot=read_reminder_snapshot(row_value(row,'p1_snapshot',''))
+        if snapshot:
+            try:return float(snapshot['terms'].get('fee') or 0)
+            except (TypeError,ValueError):pass
+    return reminder_fee_for(row)
+
+
+def current_reminder_terms(fee,customer_type=CUSTOMER_PRIVATE,currency='SEK',agreement=AGREEMENT_NONE):
     """Capture the terms that affect a reminder PDF, not just its date."""
+    customer_type=normalize_customer_type(customer_type)
+    amount=float(fee or 0)
     return {
-        'fee':float(fee or 0),
+        'fee':amount,
+        'fee_kind':fee_kind(customer_type,amount),
+        'customer_type':customer_type,
+        'currency':normalize_currency(currency),
+        'fee_agreement':normalize_agreement(agreement),
         'interest':str(setting('interest') or ''),
         'objection_days':str(setting('objection_days') or ''),
         'payment_deadline_days':str(setting('payment_deadline_days') or ''),
@@ -1046,7 +1168,10 @@ def capture_reminder_snapshot(row,fee,day,level):
     return json.dumps({
         'version':1,
         'row':snapshot_row,
-        'terms':current_reminder_terms(fee),
+        'terms':current_reminder_terms(
+            fee,invoice_customer_type(row),invoice_currency(row),
+            row_value(row,'fee_agreement','') or setting('fee_agreement'),
+        ),
         'language':get_language(),
     },ensure_ascii=False,sort_keys=True)
 
@@ -1125,7 +1250,7 @@ def build_reminder_email_content(row,level,recipients):
     email_row=dict(row)
     try:followup=level=='P2' or int(email_row.get('sent_count') or 0)>0
     except (TypeError,ValueError):followup=level=='P2'
-    terms=current_reminder_terms(float(setting('fee') or 0))
+    terms=current_reminder_terms(reminder_fee_for(row),invoice_customer_type(row),invoice_currency(row),invoice_fee_agreement(row))
     snapshot_column=level.lower()+'_snapshot'
     snapshot=read_reminder_snapshot(row[snapshot_column] if snapshot_column in row.keys() else '')
     if snapshot:
@@ -1133,6 +1258,9 @@ def build_reminder_email_content(row,level,recipients):
         terms=snapshot['terms']
     try:fee=float(terms.get('fee') if terms.get('fee') is not None else setting('fee') or 0)
     except (TypeError,ValueError):fee=float(setting('fee') or 0)
+    customer_type=normalize_customer_type(terms.get('customer_type') or invoice_customer_type(email_row))
+    fee_label=_(fee_label_key(customer_type,fee))
+    fee_text=f'{fee_label}: {money(fee,email_row["currency"])}'
     remaining=max(0,float(email_row['amount'] or 0)-float(email_row['paid'] or 0))
     reminder_day=dparse(email_row.get(level.lower()+'_date')) or date.today()
     try:
@@ -1144,9 +1272,8 @@ def build_reminder_email_content(row,level,recipients):
     invoice_no=email_row['invoice_no']
     values={
         'invoice_no':invoice_no,'due_date':email_row['due_date'],
-        'remaining':money(remaining,currency),'fee':money(fee,currency),
-        'fees':money(fee*(2 if level=='P2' else 1),currency),
-        'total':money(remaining+fee*(2 if level=='P2' else 1),currency),
+        'remaining':money(remaining,currency),'fee_text':fee_text,
+        'total':money(remaining+fee,currency),
         'deadline':deadline,
     }
     subject=_('Faktura {invoice_no} – betalningspåminnelse',invoice_no=invoice_no)
@@ -1155,15 +1282,15 @@ def build_reminder_email_content(row,level,recipients):
     if followup:subject=('Re: ' if get_language()=='en' else 'SV: ')+subject
     if level=='P2':
         body=_(
-            'Hej!\n\nTrots tidigare påminnelse är faktura {invoice_no}, som förföll {due_date}, fortfarande obetald. Detta är andra påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\nPåminnelseavgifter för P1 och P2: {fees}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nBetalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Om betalningen inte har kommit in efter sista betalningsdag kan ärendet lämnas vidare utan ytterligare påminnelse. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.\n\nVänliga hälsningar\nTadega AB',
+            'Hej!\n\nTrots tidigare påminnelse är faktura {invoice_no}, som förföll {due_date}, fortfarande obetald. Detta är andra påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura och tillkommer inte igen. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Om betalningen inte har kommit in efter sista betalningsdag kan ärendet lämnas vidare utan ytterligare påminnelse. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.\n\nVänliga hälsningar\nTadega AB',
             invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
-            fees=values['fees'],total=values['total'],deadline=deadline,
+            fee_text=values['fee_text'],total=values['total'],deadline=deadline,
         )
     else:
         body=_(
-            'Hej!\n\nFaktura {invoice_no} förföll {due_date} och är fortfarande obetald. Detta är första påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\nPåminnelseavgift: {fee}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nBetalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.\n\nVänliga hälsningar\nTadega AB',
+            'Hej!\n\nFaktura {invoice_no} förföll {due_date} och är fortfarande obetald. Detta är första påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.\n\nVänliga hälsningar\nTadega AB',
             invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
-            fee=values['fee'],total=values['total'],deadline=deadline,
+            fee_text=values['fee_text'],total=values['total'],deadline=deadline,
         )
     return {'recipients':addresses,'bcc':REMINDER_BCC,'subject':subject,'body':body}
 
@@ -2545,7 +2672,7 @@ class ReminderApp(tk.Tk):
         self._instrument_menu_actions(self.row_menu)
         self.detail=ttk.Label(self,text=_('Importera PDF eller lägg till en faktura manuellt.'),padding=(24,4,24,16),style='Sub.TLabel');self.detail.pack(fill='x')
         foot=ttk.Frame(self,padding=(22,0,22,12));foot.pack(fill='x')
-        ttk.Label(foot,text=_('Startvärden: P1 +5 dagar · P2 +5 dagar · Kronofogden-granskning +5 dagar · avgift 150 i fakturans valuta · ränta 23%'),style='Sub.TLabel').pack(side='left')
+        ttk.Label(foot,text=_('Startvärden: P1 +5 dagar · P2 +5 dagar · Kronofogden-granskning +5 dagar · 60 kr för privatpersoner, 450 kr för företag · ränta 23%'),style='Sub.TLabel').pack(side='left')
         ttk.Button(foot,text=_('Ta bort vald'),command=self.delete_invoice).pack(side='right')
         ttk.Label(self,text=_('{copyright} · Skapare: {author}',copyright=APP_COPYRIGHT,author=APP_AUTHOR),padding=(24,0,24,9),style='Sub.TLabel').pack(fill='x')
         self._finalize_window_actions(self,main_window=True)
@@ -2556,7 +2683,6 @@ class ReminderApp(tk.Tk):
         flt=self.current_filter_key
         search_var=getattr(self,'invoice_search_var',None)
         query=' '.join(search_var.get().strip().casefold().split()) if search_var is not None else ''
-        fee_value=float(setting('fee') or 0)
         visible=[]
         for r in rows:
             stage=next_stage(r)
@@ -2574,7 +2700,7 @@ class ReminderApp(tk.Tk):
             r,stage,remain=item
             if sort_column=='remaining':return remain
             if sort_column=='amount':return float(r['amount'] or 0)
-            if sort_column=='fee':return fee_value if r['p1_date'] else -1.0
+            if sort_column=='fee':return charged_fee_for(r) if r['p1_date'] else -1.0
             if sort_column=='invoice_no':
                 value=str(r['invoice_no'] or '')
                 return (0,int(value)) if value.isdigit() else (1,value.casefold())
@@ -2585,7 +2711,7 @@ class ReminderApp(tk.Tk):
             return ''
         visible.sort(key=sort_key,reverse=getattr(self,'invoice_sort_reverse',False))
         for r,stage,remain in visible:
-            fee=money(fee_value,r['currency']) if r['p1_date'] else '—'
+            fee=money(charged_fee_for(r),r['currency']) if r['p1_date'] else '—'
             p1_display=r['p1_date'] or '—'
             if r['ignored'] or remain<=0.005:p2_display='—'
             elif r['p2_date']:p2_display=_('Skapad {date}',date=r['p2_date'])
@@ -2661,6 +2787,7 @@ class ReminderApp(tk.Tk):
                 reminder_email_status(r,level) for level in ('P1','P2') if r[level.lower()+'_date']
             )
             if email_status:detail_text+='\n'+_('E-post: {status}',status=email_status)
+            detail_text+='\n'+_('Kundtyp: {type} · {note}',type=_(CUSTOMER_TYPE_LABELS[invoice_customer_type(r)]),note=reminder_fee_note(r))
             self.detail.configure(text=detail_text)
 
     def show_row_context_menu(self,event):
@@ -3593,6 +3720,45 @@ class ReminderApp(tk.Tk):
         for i,(lab,k) in enumerate(fields):
             ttk.Label(form,text=_(lab)).grid(row=i,column=0,sticky='w',pady=5,padx=(0,12));e=ttk.Entry(form,width=43);e.grid(row=i,column=1,pady=5);e.insert(0,str(vals.get(k,'') or ''));entries[k]=e
             if enrich_original and k in ORIGINAL_INVOICE_PROTECTED_FIELDS:e.configure(state='readonly')
+        type_row=len(fields)
+        saved_type=invoice_customer_type(row) if row is not None else CUSTOMER_PRIVATE
+        saved_agreement=normalize_agreement(
+            row_value(row,'fee_agreement','') if row is not None else ''
+        ) or normalize_agreement(setting('fee_agreement'))
+        customer_type_var=tk.StringVar(value=_(CUSTOMER_TYPE_LABELS[saved_type]))
+        agreement_var=tk.StringVar(value=_(AGREEMENT_LABELS[saved_agreement]))
+        ttk.Label(form,text=_('Kundtyp')).grid(row=type_row,column=0,sticky='w',pady=5,padx=(0,12))
+        type_combo=ttk.Combobox(form,textvariable=customer_type_var,state='readonly',width=40,
+            values=[_(CUSTOMER_TYPE_LABELS[code]) for code in CUSTOMER_TYPES])
+        type_combo.grid(row=type_row,column=1,sticky='w',pady=5)
+        ttk.Label(form,text=_('Var avtalades påminnelseavgiften?')).grid(row=type_row+1,column=0,sticky='w',pady=5,padx=(0,12))
+        agreement_combo=ttk.Combobox(form,textvariable=agreement_var,state='readonly',width=40,
+            values=[_(label) for label in AGREEMENT_LABELS.values()])
+        agreement_combo.grid(row=type_row+1,column=1,sticky='w',pady=5)
+        fee_hint=ttk.Label(form,text='',style='Sub.TLabel',wraplength=520,justify='left')
+        fee_hint.grid(row=type_row+2,column=0,columnspan=2,sticky='w',pady=(2,6))
+        def chosen_type():
+            for code,label in CUSTOMER_TYPE_LABELS.items():
+                if _(label)==customer_type_var.get():return code
+            return CUSTOMER_PRIVATE
+        def chosen_agreement():
+            for code,label in AGREEMENT_LABELS.items():
+                if _(label)==agreement_var.get():return code
+            return AGREEMENT_NONE
+        def update_fee_hint(*_args):
+            ctype=chosen_type()
+            fee=setting_amount('compensation',LATE_PAYMENT_COMPENSATION) if is_business(ctype) else setting_amount('fee',REMINDER_FEE_CAP)
+            currency=normalize_currency(entries['currency'].get() if 'currency' in entries else 'SEK')
+            if is_business(ctype):
+                agreement_combo.configure(state='disabled')
+                fee_hint.configure(text=_('{label}: {fee}. Företag och myndigheter får förseningsersättning i stället; påminnelseavgiften blir 0 kr.',label=_(fee_label_key(ctype,fee)),fee=money(fee,currency)))
+            else:
+                agreement_combo.configure(state='readonly')
+                fee_hint.configure(text=_('{label}: {fee}, högst 60 kr och en gång per fordran. Rätten till avgiften måste avtalas senast när skulden uppstod.',label=_(fee_label_key(ctype,fee)),fee=money(fee,currency)))
+        type_combo.bind('<<ComboboxSelected>>',update_fee_hint)
+        agreement_combo.bind('<<ComboboxSelected>>',update_fee_hint)
+        entries['currency'].bind('<FocusOut>',update_fee_hint)
+        update_fee_hint()
         if learned_suggestions:
             # Ask only after the form is visible, and never overwrite typing.
             w.update_idletasks()
@@ -3610,7 +3776,7 @@ class ReminderApp(tk.Tk):
                         for learned in learned_suggestions:learning.decline(db,learned)
                 except Exception:logger.exception('Declined learning suggestions could not be recorded')
                 log_activity('learning','suggestions_declined','completed',fields=','.join(item.field for item in learned_suggestions))
-        review_row=len(fields)
+        review_row=len(fields)+3
         if learned_applied:
             applied_fields=', '.join(sorted({_(LEARNING_FIELD_LABELS.get(item.field,item.field)) for item in learned_applied}))
             ttk.Label(form,text=_('Inlärda förslag som du godkände: {fields}',fields=applied_fields),style='Sub.TLabel',wraplength=520).grid(row=review_row,column=0,columnspan=2,sticky='w',pady=(6,0))
@@ -3638,6 +3804,8 @@ class ReminderApp(tk.Tk):
                 template_vendor=vals['template_vendor'],amount=amount,currency=currency,paid=paid,
                 source=vals['source'],source_hash=vals['source_hash'],reviewed=int(reviewed_var.get()),
                 logo_file=vals['logo_file'],
+                customer_type=chosen_type(),
+                fee_agreement=chosen_agreement() if not is_business(chosen_type()) else '',
             )
             duplicate=save_invoice_record(record,row['id'] if row else None)
             if duplicate:
@@ -3971,10 +4139,24 @@ class ReminderApp(tk.Tk):
                             parent=self,
                         )
                         return latest[2] if latest else None
-            fee=float(setting('fee') or 0);locked=setting('fee_locked')=='1'
+            fee=reminder_fee_for_level(r,level)
+            locked=setting('fee_locked')=='1'
+            assessment=assess_fee(invoice_customer_type(r),fee,invoice_currency(r),invoice_fee_agreement(r))
+            if assessment.blocked:
+                problem=fee_issue_text(assessment.problems[0])
+                logger.warning('Reminder blocked by the fee rules: invoice=%s level=%s fee=%s problem=%s',r['id'],level,fee,problem)
+                log_activity('reminder','fee_blocked','failed',invoice_id=r['id'],invoice_no=r['invoice_no'],level=level,fee=fee)
+                messagebox.showerror(
+                    _('Avgiften följer inte lagen'),
+                    _('{problem}\n\nÄndra avgiften i Inställningar eller välj rätt kundtyp på fakturan. Ingen påminnelse skapades.',problem=problem),
+                    parent=self,
+                )
+                break
             template_name=r['template_vendor'] or _('Ingen matchad mall')
             logo_path,logo_name=self.invoice_logo(r)
-            confirmation=_('Skapa {level} för {invoice_no}?\n\nPåminnelseavgift: {fee}{locked}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',interest=setting('interest'),template=template_name,logo=logo_name)
+            confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}{locked}\n{note}\nRänta: {interest}% per år\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee)),fee=money(fee,r['currency']),locked=_(' (låst)') if locked else '',note=reminder_fee_note(r),interest=setting('interest'),template=template_name,logo=logo_name)
+            for issue in assessment.warnings:
+                confirmation+='\n\n'+fee_issue_text(issue)
             if ledger_fallback_used and level=='P1':
                 confirmation+='\n\n'+_('Underlag: reskontraimporten. Original-PDF-kontrollen har kringgåtts efter ditt godkännande.')
             if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
@@ -3989,7 +4171,7 @@ class ReminderApp(tk.Tk):
                 latest=(r,level,result)
                 try:
                     record_reminder_journal(
-                        DB_PATH,JOURNAL_PATH,r['id'],level,day,fee,current_reminder_terms(fee),
+                        DB_PATH,JOURNAL_PATH,r['id'],level,day,fee,current_reminder_terms(fee,invoice_customer_type(r),invoice_currency(r),invoice_fee_agreement(r)),
                         get_language(),Path(logo_path).name if logo_path else (r['logo_file'] or ''),Path(str(result)).name,
                     )
                     logger.info('Reminder journal updated: invoice=%s level=%s date=%s',r['id'],level,day)
@@ -4082,7 +4264,7 @@ class ReminderApp(tk.Tk):
         if not original_date:return None
         snapshot=read_reminder_snapshot(row[snapshot_column] if snapshot_column in row.keys() else '')
         updated=dict(row)
-        reminder_terms=current_reminder_terms(float(setting('fee') or 0))
+        reminder_terms=current_reminder_terms(reminder_fee_for(row),invoice_customer_type(row),invoice_currency(row),invoice_fee_agreement(row))
         snapshot_language=''
         if snapshot:
             updated.update(snapshot['row'])
@@ -4090,7 +4272,7 @@ class ReminderApp(tk.Tk):
             snapshot_language=str(snapshot.get('language') or '')
         updated['id']=row['id'];updated['logo_file']=logo_file
         fee_value=reminder_terms.get('fee')
-        fee=float(setting('fee') or 0) if fee_value is None else float(fee_value or 0)
+        fee=reminder_fee_for(row) if fee_value is None else float(fee_value or 0)
         logo_path,_logo_name=self.invoice_logo(updated)
         output_path=next((path for path in reminder_file_candidates(row,level) if path.is_file()),None)
         previous_language=get_language()
@@ -4124,8 +4306,14 @@ class ReminderApp(tk.Tk):
 
     def write_letter(self,r,level,fee,logo_path='',reminder_date=None,output_path=None,parent=None,reminder_terms=None):
         today=reminder_date or date.today();remaining=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
-        effective_terms=reminder_terms or current_reminder_terms(fee)
-        p1_fee=fee; p2_fee=fee if level=='P2' else 0; total=remaining+p1_fee+p2_fee
+        effective_terms=reminder_terms or current_reminder_terms(fee,invoice_customer_type(r),invoice_currency(r),invoice_fee_agreement(r))
+        customer_type=normalize_customer_type(effective_terms.get('customer_type') or invoice_customer_type(r))
+        if reminder_terms is None:
+            # A new reminder is capped by law. A regenerated one keeps the
+            # amount that was already printed, so history never changes.
+            fee=chargeable_fee(customer_type,fee)
+        # One fee per claim: P2 repeats the P1 fee, it never adds a second one.
+        total=remaining+float(fee or 0)
         deadline_date=today+timedelta(days=int(effective_terms.get('payment_deadline_days') or 5))
         deadline=format_long_date(deadline_date)
         p2_warning=_('Ansökan om betalningsföreläggande lämnas in till Kronofogden om betalning inte kommit oss tillhanda senast den {deadline}. Kostnader för att driva ärendet kan tillkomma till dess full betalning har skett.',deadline=deadline) if level=='P2' else ''
@@ -4172,7 +4360,9 @@ class ReminderApp(tk.Tk):
         from reportlab.lib.units import mm
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Flowable
         from xml.sax.saxutils import escape
-        effective_terms=reminder_terms or current_reminder_terms(fee)
+        effective_terms=reminder_terms or current_reminder_terms(fee,invoice_customer_type(r),invoice_currency(r),invoice_fee_agreement(r))
+        customer_type=normalize_customer_type(effective_terms.get('customer_type') or invoice_customer_type(r))
+        fee_label=_(fee_label_key(customer_type,fee))
         currency=normalize_currency(r['currency'])
         styles=getSampleStyleSheet()
         styles.add(ParagraphStyle(name='LetterTitle',parent=styles['Heading1'],fontName='Times-Bold',fontSize=17,leading=21,textColor=colors.HexColor('#202020'),spaceBefore=9,spaceAfter=8))
@@ -4212,20 +4402,27 @@ class ReminderApp(tk.Tk):
         note=str(r['note'] or '').strip()
         if note:
             story.append(Paragraph(f"<b>{_('Avser:')}</b> "+escape(note),styles['SmallText']))
+        fee_line=fee_label if level=='P1' else _('{label} (påminnelse 1)',label=fee_label)
         rows=[[Paragraph(f"<b>{_('Specifikation')}</b>",styles['SmallText']),Paragraph(f"<b>{_('Belopp')}</b>",styles['RightSmall'])],
-              [Paragraph(_('Faktura {invoice_no} – obetalt belopp',invoice_no=escape(str(r['invoice_no']))),styles['SmallText']),Paragraph(money(remaining,currency),styles['RightSmall'])],
-              [Paragraph(_('Påminnelseavgift (påminnelse 1)'),styles['SmallText']),Paragraph(money(fee,currency),styles['RightSmall'])]]
-        if level=='P2':rows.append([Paragraph(_('Påminnelseavgift (påminnelse 2)'),styles['SmallText']),Paragraph(money(fee,currency),styles['RightSmall'])])
+              [Paragraph(_('Faktura {invoice_no} – obetalt belopp',invoice_no=escape(str(r['invoice_no']))),styles['SmallText']),Paragraph(money(remaining,currency),styles['RightSmall'])]]
+        if fee>0:rows.append([Paragraph(escape(fee_line),styles['SmallText']),Paragraph(money(fee,currency),styles['RightSmall'])])
         rows.append([Paragraph(f"<b>{_('ATT BETALA')}</b>",styles['SmallText']),Paragraph(f'<b>{money(total,currency)}</b>',styles['RightSmall'])])
         tab=Table(rows,colWidths=[112*mm,54*mm]);tab.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LINEBELOW',(0,0),(-1,0),.8,colors.HexColor('#444444')),('LINEBELOW',(0,1),(-1,-2),.3,colors.HexColor('#cccccc')),('LINEABOVE',(0,-1),(-1,-1),.8,colors.HexColor('#444444')),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),4)]));story += [Spacer(1,4*mm),tab,Spacer(1,4*mm)]
         hist=[[Paragraph(f"<b>{_('Påminnelse')}</b>",styles['SmallText']),Paragraph(f"<b>{_('Datum')}</b>",styles['SmallText']),Paragraph(f"<b>{_('Avgift')}</b>",styles['RightSmall'])],
-              [Paragraph(_('Påminnelse 1'),styles['SmallText']),Paragraph(escape(str(r['p1_date'] or today.isoformat())),styles['SmallText']),Paragraph(money(fee,currency),styles['RightSmall'])]]
-        if level=='P2':hist.append([Paragraph(_('Påminnelse 2 (denna)'),styles['SmallText']),Paragraph(today.isoformat(),styles['SmallText']),Paragraph(money(fee,currency),styles['RightSmall'])])
+              [Paragraph(_('Påminnelse 1'),styles['SmallText']),Paragraph(escape(str(r['p1_date'] or today.isoformat())),styles['SmallText']),Paragraph(money(fee,currency) if fee>0 else '—',styles['RightSmall'])]]
+        if level=='P2':hist.append([Paragraph(_('Påminnelse 2 (denna)'),styles['SmallText']),Paragraph(today.isoformat(),styles['SmallText']),Paragraph('—',styles['RightSmall'])])
         ht=Table(hist,colWidths=[78*mm,54*mm,34*mm]);ht.setStyle(TableStyle([('GRID',(0,0),(-1,-1),.35,colors.HexColor('#aaaaaa')),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#f1f1f1')),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),3),('BOTTOMPADDING',(0,0),(-1,-1),2)]));story += [ht,Spacer(1,3*mm)]
-        story.append(Paragraph(_('Ovanstående påminnelser har skickats för fakturan och samtliga avgifter ingår i beloppet ovan.'),styles['SmallText']))
+        if fee>0:
+            story.append(Paragraph(_('Ovanstående påminnelser har skickats för fakturan. Avgiften debiteras en gång per fordran och ingår i beloppet ovan.'),styles['SmallText']))
+            story.append(Paragraph(escape(_(legal_basis_key(customer_type,fee))),styles['SmallText']))
+        else:
+            story.append(Paragraph(_('Ingen avgift debiteras för den här fakturan.'),styles['SmallText']))
         payment_text=f"<b>{_('Betalning')}</b><br/>Bankgiro: 5660-4200 · Swish: 123 188 42 87<br/>{_('Betalningsmottagare')}: Tadega AB. {_('Ange fakturanumret vid betalning.')}<br/>IBAN: SE26 6000 0000 0005 3862 3322 · BIC: HANDSESS"
         story.append(Paragraph(payment_text,styles['SmallText']))
-        terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. Avgift per påminnelse: {fee}. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(str(effective_terms.get('objection_days') or '')),fee=money(fee,currency),interest=escape(str(effective_terms.get('interest') or '')))
+        if fee>0:
+            terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. {label}: {fee}, högst en gång per fordran. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(str(effective_terms.get('objection_days') or '')),label=escape(fee_label),fee=money(fee,currency),interest=escape(str(effective_terms.get('interest') or '')))
+        else:
+            terms=_('Varan förblir vår egendom tills full betalning erlagts. Eventuella anmärkningar på fakturan ska göras inom {days} dagar. Ingen påminnelseavgift debiteras. Försenad betalning debiteras {interest} % ränta. Vid beställning av specialdelar lämnas ingen returrätt.',days=escape(str(effective_terms.get('objection_days') or '')),interest=escape(str(effective_terms.get('interest') or '')))
         story += [Spacer(1,2*mm),HRFlowable(width='100%',thickness=.4,color=colors.HexColor('#999999')),Spacer(1,2*mm),Paragraph(terms,styles['SmallText'])]
         doc.build(story)
     def _confirm_learned_suggestions(self,suggestions,parent=None):
@@ -4372,7 +4569,8 @@ class ReminderApp(tk.Tk):
             ('Dagar efter förfallodatum till P1','p1_days'),
             ('Dagar efter P1 till P2','p2_days'),
             ('Dagar efter P2 till Kronofogden-granskning','p3_days'),
-            ('Påminnelseavgift per påminnelse (fakturans valuta)','fee'),
+            ('Påminnelseavgift för privatpersoner (högst 60 kr, fakturans valuta)','fee'),
+            ('Förseningsersättning för företag och myndigheter (SEK)','compensation'),
             ('Dröjsmålsränta per år (%)','interest'),
             ('Anmärkningstid enligt fakturavillkor (dagar)','objection_days'),
             ('Betalningsfrist på påminnelsen (dagar)','payment_deadline_days'),
@@ -4382,6 +4580,15 @@ class ReminderApp(tk.Tk):
         for label,key in fields:
             entries[key]=cell(label,key)
             if key=='fee' and setting('fee_locked')=='1':entries[key].configure(state='disabled')
+        agreement_var=tk.StringVar(value=_(AGREEMENT_LABELS[normalize_agreement(setting('fee_agreement'))]))
+        agreement_frame=ttk.Frame(form)
+        agreement_label=ttk.Label(agreement_frame,text=_('Var avtalas påminnelseavgiften som standard?'),style='Sub.TLabel',justify='left')
+        agreement_label.grid(row=0,column=0,sticky='w')
+        ttk.Combobox(
+            agreement_frame,textvariable=agreement_var,state='readonly',width=26,
+            values=[_(label) for label in AGREEMENT_LABELS.values()],
+        ).grid(row=1,column=0,sticky='w',pady=(2,0))
+        grid.add_cell(agreement_frame,label=agreement_label)
         locked=tk.BooleanVar(value=setting('fee_locked')=='1')
         def toggle_lock():
             entries['fee'].configure(state='disabled' if locked.get() else 'normal')
@@ -4390,7 +4597,9 @@ class ReminderApp(tk.Tk):
             variable=locked,command=toggle_lock,
         ))
         hint('Låset skyddar inställningen i appen; lås upp här för att ändra avgiften.')
-        hint('Obs: påminnelseavgiften använder fakturans valuta. Kontrollera att avgift, ränta och villkor gäller för era kunder.')
+        hint('Påminnelseavgiften är högst 60 kr och kräver avtal senast när skulden uppstod. Företag och myndigheter får 450 kr i förseningsersättning i stället.')
+        hint('Avgiften debiteras en gång per fordran, aldrig en gång per påminnelse.')
+        hint('Taket gäller i SEK. På en faktura i annan valuta kontrollerar appen inte beloppet automatiskt.')
         heading('Start och uppdateringar')
         autostart_var=tk.BooleanVar(value=setting('autostart')=='1')
         check('Starta {app_name} automatiskt när jag loggar in',autostart_var,app_name=APP_NAME)
@@ -4463,14 +4672,22 @@ class ReminderApp(tk.Tk):
                 for k,e in entries.items():
                     v=e.get().strip()
                     if k in ('p1_days','p2_days','p3_days','objection_days','payment_deadline_days') and int(v)<0:raise ValueError()
-                    if k in ('fee','interest') and float(v.replace(',','.'))<0:raise ValueError()
+                    if k in ('fee','compensation','interest') and float(v.replace(',','.'))<0:raise ValueError()
+                fee_value=float(entries['fee'].get().strip().replace(',','.'))
+                compensation_value=float(entries['compensation'].get().strip().replace(',','.'))
             except (ValueError,TypeError):
                 messagebox.showerror(_('Ogiltigt värde'),_('Ange positiva siffror i inställningarna.'),parent=w);return
+            if fee_value>REMINDER_FEE_CAP:
+                messagebox.showerror(_('Avgiften är för hög'),_('Påminnelseavgiften får vara högst 60 kr enligt 4 § lagen (1981:739). Ett högre villkor är ogiltigt enligt 6 §.',),parent=w);return
+            if compensation_value not in (0.0,LATE_PAYMENT_COMPENSATION):
+                messagebox.showerror(_('Förseningsersättningen är felaktig'),_('Förseningsersättningen är 450 kr enligt 4 a § lagen (1981:739), eller 0 kr om ni avstår från den.'),parent=w);return
             try:
                 set_autostart(autostart_var.get())
             except AutostartError as exc:
                 messagebox.showerror(_('Autostart kunde inte sparas'),_('{error}\n\nPlats: {location}',error=_(str(exc)),location=autostart_location()),parent=w);return
             for k,e in entries.items():set_setting(k,e.get().strip().replace(',','.'))
+            for code,label in AGREEMENT_LABELS.items():
+                if _(label)==agreement_var.get():set_setting('fee_agreement',code)
             new_language=language_code(language_var.get())
             language_changed=new_language!=get_language()
             set_setting('fee_locked','1' if locked.get() else '0')

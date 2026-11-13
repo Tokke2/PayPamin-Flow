@@ -88,7 +88,7 @@ class ReminderWorkflowTests(unittest.TestCase):
         p2_snapshot = self.app.read_reminder_snapshot(saved["p2_snapshot"])
         self.assertIsNotNone(p2_snapshot)
         self.assertEqual(p2_snapshot["row"]["p2_date"], date.today().isoformat())
-        self.assertEqual(p2_snapshot["terms"]["fee"], 150.0)
+        self.assertEqual(p2_snapshot["terms"]["fee"], 60.0)
         self.assertNotIn("p2_snapshot", p2_snapshot["row"])
         self.assertEqual([event[0] for event in events], ["P1", "P2"])
         self.assertEqual(owner.open_reminder_email.call_count, 1)
