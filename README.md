@@ -53,7 +53,8 @@ PayPamin Flow distribueras som **Python-källkod**, inte som EXE, macOS-app elle
 
 - `PayPamin-Flow-Python.zip`
 - `PayPamin-Flow-Python.zip.sha256`
-- `PayPamin-Flow-Python.manifest.json` – release-commit och SHA-256 för varje distribuerad fil.
+
+Releasen innehåller **exakt dessa två filer**. Ett byggmanifest med commit och filhashar skapas fortfarande lokalt av `packaging/package_release.py` när du vill granska ett bygge, men det publiceras inte längre med releasen.
 
 Python **3.10 eller senare** och Tkinter krävs. Packa upp ZIP-filen i en mapp där din användare har skrivrättigheter och installera tilläggen:
 
@@ -237,9 +238,9 @@ Välj **Arkiv → Återställ säkerhetskopia** för att återställa. Arkivets 
 
 Appen kontrollerar den senaste stabila GitHub-releasen en kort stund efter start och därefter **var 12:e timme medan appen körs**, även när fönstret ligger i systemfältet. Automatiska uppdateringar är aktiverade som standard och kan stängas av under **Inställningar**.
 
-Vid en nyare version eller ett ändrat officiellt bygge av samma version hämtas samma Python-ZIP för Windows, macOS och Linux. Ett litet release-manifest innehåller full commit, SHA-256 för varje distribuerad fil och ett samlat fil-fingeravtryck. Vid samma versionsnummer jämför appen installerad commit och fil-fingeravtryck med releasen: **om något av dem skiljer sig finns en uppdatering**. Ett nytt numeriskt release-ID med oförändrad commit och identiska filer installerar därför inte om samma innehåll. Äldre installationer som bara har release-ID använder det som kompatibilitetsväg tills de har tagit emot det nya uppdateringsformatet. En lägre version erbjuds inte som nedgradering. Kontrollen går mot GitHubs **latest release**, inte mot `main`.
+Vid en nyare version eller ett ändrat officiellt bygge av samma version hämtas samma Python-ZIP för Windows, macOS och Linux. Releasen består av ZIP-filen och dess SHA-256-fil; kontrollsumman verifieras mot filen innan något packas upp. Vid samma versionsnummer jämför appen det numeriska **release-ID:t**: ett nytt publicerat bygge har alltid ett nytt ID och erbjuds därför även när versionsnumret står stilla. Om en release någon gång skulle innehålla ett byggmanifest jämförs i stället installerad commit och fil-fingeravtryck, och då installerar ett nytt release-ID med identiska filer inte om samma innehåll. En lägre version erbjuds inte som nedgradering. Kontrollen går mot GitHubs **latest release**, inte mot `main`.
 
-Kontrollsumman verifieras, arkivets sökvägar och filer valideras och Python-filerna syntaxkontrolleras innan något ersätts. För nya release-manifest måste även det uppackade paketets commit, release-ID och fil-fingeravtryck matcha manifestet. Appen ersätter endast egna program-, start-, dokumentations- och ikonfiler. Databas, `import/`, `export/`, `svg/` och andra användardata ingår inte och lämnas orörda. Installationer med den äldre uppdateraren, som endast jämför versionsnummer, måste installera det första paketet med release-ID-stöd manuellt en gång.
+Kontrollsumman verifieras, arkivets sökvägar och filer valideras och Python-filerna syntaxkontrolleras innan något ersätts. Innehåller releasen ett byggmanifest måste även det uppackade paketets commit, release-ID och fil-fingeravtryck matcha manifestet. Appen ersätter endast egna program-, start-, dokumentations- och ikonfiler. Databas, `import/`, `export/`, `svg/` och andra användardata ingår inte och lämnas orörda. Installationer med den äldre uppdateraren, som endast jämför versionsnummer, måste installera det första paketet med release-ID-stöd manuellt en gång.
 
 Installationen sker **inuti appen**; du ska inte starta någon separat uppdateringsfil. Därefter startas den uppdaterade Python-appen om utan konsolfönster. Gamla programfiler används som reserv under ersättningen och återställs om installationen eller omstarten misslyckas. Den gamla appen stängs först när den nya processen har bekräftat att gränssnittets händelseloop startat via en engångsbekräftelse med PID och token. Vid timeout eller tidigt avslut stoppas den misslyckade nya processen, filerna rullas tillbaka och den gamla appen lämnas användbar.
 
@@ -316,7 +317,7 @@ Det finns inget PyInstaller- eller native-byggsteg. Skapa det plattformsoberoend
 python packaging/package_release.py --output release-assets
 ```
 
-GitHub Actions-workflöen i `.github/workflows/build.yml` kör testerna på Windows, macOS och Linux. Ubuntu-jobbet installerar Tkinter och Xvfb, kör de verkliga Tk-testerna på en 1280×900-skärm och skapar Python-ZIP, SHA-256-fil och byggmanifest med commit och enskilda filhashar. Vid en release bifogas alla tre filerna för appens uppdateringsfunktion.
+GitHub Actions-workflöen i `.github/workflows/build.yml` kör testerna på Windows, macOS och Linux. Ubuntu-jobbet installerar Tkinter och Xvfb, kör de verkliga Tk-testerna på en 1280×900-skärm och skapar Python-ZIP och SHA-256-fil. Vid en release bifogas **endast dessa två filer** för appens uppdateringsfunktion.
 
 ## Kostnadsfri Fortnox-import utan API
 

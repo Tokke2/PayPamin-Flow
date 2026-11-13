@@ -77,27 +77,34 @@ def is_update_available(
 ) -> bool:
     """Compare versions, then release commits and shipped-file fingerprints.
 
-    Newer versions are always eligible. For the same version, current builds
-    with commit/file metadata update only when either value actually changes.
-    A new release ID alone does not reinstall identical content. Older official
-    builds without that metadata retain the release-ID fallback so they can
-    receive this updater. Source checkouts keep version-only behavior.
+    Newer versions are always eligible. For the same version, two releases
+    that both carry commit/file metadata are compared by that content, so a
+    new release ID alone never reinstalls identical files. Releases ship only
+    the Python ZIP and its SHA-256 sidecar, so a published build normally has
+    no manifest; that case - and older official builds that predate the
+    metadata - fall back to the numeric release ID, which still delivers a
+    republished 0.6.0 to an installed 0.6.0. Source checkouts keep
+    version-only behavior.
     """
     if is_newer_version(release.version, current_version):
         return True
     if version_key(release.version) != version_key(current_version):
         return False
 
-    if current_release_commit and current_package_fingerprint:
-        # Wait for complete metadata during release publication instead of
-        # reinstalling solely because the numeric release ID changed.
-        if not (release.release_commit and release.package_fingerprint):
-            return False
+    if (
+        current_release_commit
+        and current_package_fingerprint
+        and release.release_commit
+        and release.package_fingerprint
+    ):
+        # Complete metadata on both sides: compare the shipped content itself.
         return (
             release.release_commit.lower() != current_release_commit.lower()
             or release.package_fingerprint.lower() != current_package_fingerprint.lower()
         )
 
+    # No manifest in the release (the normal case): the release ID changes on
+    # every publication, so it still carries a republished same-version build.
     return bool(
         release.release_id
         and current_release_id

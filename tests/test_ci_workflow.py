@@ -70,6 +70,18 @@ class WorkflowGuardTests(unittest.TestCase):
         self.assertIn("python assets/verify_branding.py", self.workflow)
         self.assertTrue((ROOT / "assets" / "verify_branding.py").is_file())
 
+    def test_release_carries_only_the_package_and_its_checksum(self):
+        """A release has exactly two files; the manifest is a local record."""
+        publish_block = self.workflow.split("publish-python-package:", 1)[1]
+        self.assertIn("gh release upload", publish_block)
+        self.assertIn("release-assets/PayPamin-Flow-Python.zip ", publish_block)
+        self.assertIn("release-assets/PayPamin-Flow-Python.zip.sha256", publish_block)
+        # Never publish the build manifest or a wildcard that would pick it up.
+        self.assertNotIn("release-assets/*", publish_block)
+        self.assertNotIn(".manifest.json\n            --clobber", publish_block)
+        # The packaging step drops the locally built manifest before upload.
+        self.assertIn("rm -f release-assets/*.manifest.json", self.workflow)
+
     def test_workflow_only_publishes_for_releases(self):
         publish_block = self.workflow.split("publish-python-package:", 1)[1]
         requirement = re.search(r"^    if: .*$", publish_block, re.MULTILINE)

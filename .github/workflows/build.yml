@@ -74,6 +74,10 @@ jobs:
             args=(--release-id "$RELEASE_ID" --release-commit "$(git rev-parse HEAD)")
           fi
           python packaging/package_release.py --output release-assets "${args[@]}"
+          # A release carries exactly two files: the Python ZIP and its
+          # SHA-256 sidecar. The build manifest remains a local build record,
+          # so it is not uploaded with the release.
+          rm -f release-assets/*.manifest.json
       - name: Upload Python release package
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
@@ -100,4 +104,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
-        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$REPOSITORY"
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            release-assets/PayPamin-Flow-Python.zip \
+            release-assets/PayPamin-Flow-Python.zip.sha256 \
+            --clobber --repo "$REPOSITORY"

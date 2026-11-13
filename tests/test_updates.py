@@ -85,6 +85,31 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertTrue(is_update_available(release, "0.5.9", "100", **legacy_build))
         self.assertFalse(is_update_available(release, "0.6.1", "100", **legacy_build))
 
+    def test_same_version_without_a_manifest_falls_back_to_release_id(self):
+        """Releases ship only the ZIP and its checksum, so no manifest arrives.
+
+        A republished 0.6.0 must still reach an installed 0.6.0; otherwise the
+        app would only ever update when the version number changed.
+        """
+        published = ReleaseInfo(
+            "0.6.0", "v0.6.0",
+            "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0",
+            release_id="200",
+        )
+        stamped = {
+            "current_release_id": "100",
+            "current_release_commit": "a" * 40,
+            "current_package_fingerprint": "a" * 64,
+        }
+        self.assertTrue(is_update_available(published, "0.6.0", **stamped))
+        self.assertFalse(is_update_available(published, "0.6.0", **{**stamped, "current_release_id": "200"}))
+        # A release that does carry a manifest is still compared by content.
+        with_manifest = ReleaseInfo(
+            "0.6.0", "v0.6.0", published.url, release_id="200",
+            release_commit="a" * 40, package_fingerprint="a" * 64,
+        )
+        self.assertFalse(is_update_available(with_manifest, "0.6.0", **stamped))
+
     def test_same_version_compares_commit_and_files_before_release_id(self):
         release = ReleaseInfo(
             "0.6.0",
@@ -106,10 +131,12 @@ class UpdateCheckerTests(unittest.TestCase):
             "current_release_commit": "b" * 40,
             "current_package_fingerprint": "b" * 64,
         }))
+        # The current build still has metadata but the release has none: the
+        # numeric release ID decides, so a republished build is not missed.
         without_manifest = ReleaseInfo(
             "0.6.0", "v0.6.0", release.url, release_id="200"
         )
-        self.assertFalse(is_update_available(without_manifest, "0.6.0", **current))
+        self.assertTrue(is_update_available(without_manifest, "0.6.0", **current))
 
     def test_release_assets_must_be_complete_before_install(self):
         url = "https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/"
