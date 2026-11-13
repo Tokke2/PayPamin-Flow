@@ -1288,6 +1288,58 @@ def reminder_email_company(row):
     return ''
 
 
+# A reminder must never repeat a fee or interest clause from the invoice text.
+# The stored invoice keeps its own wording (it belongs to the original invoice),
+# but an old "Avgift per påminnelse: 150:-" or "23 % ränta" would contradict the
+# amount the app charges today and the fact that this app states no interest at
+# all. Only the reminder is cleaned; nothing in the invoice record changes.
+REMINDER_INTEREST_WORDS=re.compile(
+    r'\b(?:dröjsmålsränt\w*|ränta|räntan|räntor|räntesats\w*|räntekostnad\w*|interest(?:\s+rate)?)\b',re.I)
+REMINDER_FEE_WORDS=re.compile(
+    r'\b(?:påminnelseavgift\w*|påminnelseavgiften|förseningsavgift\w*|förseningsersättning\w*|'
+    r'inkassoavgift\w*|reminder\s+fee\w*|late[- ]payment\s+(?:fee|compensation)\w*)\b',re.I)
+# Break after . ! ? when a new sentence starts. A following lowercase word keeps
+# abbreviations such as "Ev." and "t.ex." inside their sentence.
+REMINDER_SENTENCE_BREAK=re.compile(r'(?<=[.!?])(?:\s+(?=[A-ZÅÄÖ0-9])|(?=[A-ZÅÄÖ]))')
+
+
+def reminder_note_sentences(note):
+    """Split an invoice text into the sentences a reminder may print."""
+    return [part.strip() for part in REMINDER_SENTENCE_BREAK.split(str(note or '')) if part.strip()]
+
+
+def reminder_note_term_clause(sentence):
+    """True for a sentence that states a reminder fee or a late-payment rate."""
+    text=str(sentence or '').casefold()
+    if REMINDER_INTEREST_WORDS.search(text):return True
+    if REMINDER_FEE_WORDS.search(text):return True
+    # "Avgift: 150 kr per påminnelse" and "fee for each reminder" in any order.
+    if 'avgift' in text and ('påminnelse' in text or 'reminder' in text):return True
+    return 'fee' in text and ('påminnelse' in text or 'reminder' in text or 'late payment' in text)
+
+
+def reminder_note_text(note):
+    """Return the invoice text as a reminder may repeat it.
+
+    Everything the invoice actually documents is kept — payment details,
+    retention of title, objection days — while fee and interest clauses are
+    left out. The reminder states the lawful fee and its legal basis once,
+    separately, so repeating an older amount or a rate would only contradict it.
+    """
+    return re.sub(r'\s+',' ',' '.join(
+        sentence for sentence in reminder_note_sentences(note)
+        if not reminder_note_term_clause(sentence)
+    )).strip()
+
+
+def reminder_note_omitted(note):
+    """Return the fee and interest sentences a reminder will not repeat."""
+    return tuple(
+        sentence for sentence in reminder_note_sentences(note)
+        if reminder_note_term_clause(sentence)
+    )
+
+
 def build_reminder_email_content(row,level,recipients):
     """Build editable preview content with a fixed BCC; never send automatically."""
     addresses=parse_email_addresses(','.join(recipients))
@@ -4347,6 +4399,14 @@ class ReminderApp(tk.Tk):
             for issue in assessment.warnings:
                 confirmation+='\n\n'+fee_issue_text(issue)
             if frozen_note:confirmation+='\n\n'+frozen_note
+            omitted_terms=reminder_note_omitted(r['note'])
+            if omitted_terms:
+                # Transparency: the user sees why the reminder text differs from
+                # the invoice text, before anything is created.
+                confirmation+='\n\n'+_(
+                    'Fakturatexten innehåller ett avgifts- eller räntevillkor. Det skrivs inte ut på påminnelsen, som i stället anger den lagstadgade avgiften och ingen ränta. Fakturatexten på fakturan ändras inte.'
+                )
+                logger.info('Reminder note contains %d fee/interest clauses that the reminder omits: invoice=%s',len(omitted_terms),r['invoice_no'])
             if ledger_fallback_used and level=='P1':
                 confirmation+='\n\n'+_('Underlag: reskontraimporten. Original-PDF-kontrollen har kringgåtts efter ditt godkännande.')
             if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
@@ -4589,7 +4649,11 @@ class ReminderApp(tk.Tk):
         deadline_text=format_long_date(deadline_date)
         story.append(Paragraph(f"<b>{escape(_('Betalning ska vara oss tillhanda senast {date}.',date=deadline_text))}</b>",styles['SmallText']))
         if level=='P2': story.append(Paragraph(escape(p2_warning),styles['AlertText']))
-        note=str(r['note'] or '').strip()
+        raw_note=str(r['note'] or '').strip()
+        note=reminder_note_text(raw_note)
+        if note!=raw_note:
+            logger.info('Reminder note leaves out fee/interest wording: invoice=%s omitted=%d',r['invoice_no'],len(reminder_note_omitted(raw_note)))
+            log_activity('reminder','note_terms_omitted','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],omitted=len(reminder_note_omitted(raw_note)))
         if note:
             story.append(Paragraph(f"<b>{_('Avser:')}</b> "+escape(note),styles['SmallText']))
         fee_line=fee_label if level=='P1' else _('{label} (påminnelse 1)',label=fee_label)

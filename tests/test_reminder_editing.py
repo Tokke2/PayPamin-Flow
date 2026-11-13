@@ -381,6 +381,92 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertIn("Konsulttjänst", self.pdf_text(with_note))
         self.assertLess(self.specification_y(empty), self.specification_y(with_note))
 
+    INVOICE_TEXT = (
+        "Betalning sker till Tadega AB. Swish 123 188 42 87. "
+        "Ange fakturanummret vid betalning Varan förblir vår egendom tills full betalning erlagts. "
+        "Ev. anmärkningar på fakturan ska göras inom 5 dgr."
+        "Avgift per påminnelse: 150:-. Försenad betalning debiteras 23% ränta."
+    )
+
+    def test_reminder_pdf_leaves_out_fee_and_interest_clauses_from_the_invoice_text(self):
+        """The invoice text is kept, but a reminder never repeats its old terms."""
+        row, _ = self.save_p1()
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET note=? WHERE id=?", (self.INVOICE_TEXT, row["id"]))
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        path = self.workspace / "invoice-text-reminder.pdf"
+        self.app.ReminderApp.write_pdf(
+            self.owner, path, dict(row), "P1", 60.0, self.original_date, 1000.0, 1060.0, "", "",
+        )
+        text = self.pdf_text(path)
+        # Everything the invoice actually documents is still there.
+        self.assertIn("Tadega AB", text)
+        self.assertIn("Swish 123 188 42 87", text)
+        self.assertIn("fakturanummret", text)
+        self.assertIn("egendom tills full betalning", text)
+        self.assertIn("anmärkningar på fakturan", text)
+        # The old 150 kr and 23 % do not follow the invoice into the reminder.
+        self.assertNotIn("150", text)
+        self.assertNotIn("Avgift per påminnelse", text)
+        self.assertNotIn("23%", text)
+        self.assertNotIn("23 %", text)
+        self.assertNotIn("ränta", text.casefold())
+        # The lawful fee is stated once, by the reminder itself.
+        self.assertIn("60", text)
+        self.assertIn("4 §", text)
+
+    def test_a_note_with_only_old_terms_leaves_no_empty_avser_row(self):
+        row, _ = self.save_p1()
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET note=? WHERE id=?",
+                ("Avgift per påminnelse: 150:-. Försenad betalning debiteras 23% ränta.", row["id"]),
+            )
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        path = self.workspace / "only-terms-note.pdf"
+        self.app.ReminderApp.write_pdf(
+            self.owner, path, dict(row), "P1", 60.0, self.original_date, 1000.0, 1060.0, "", "",
+        )
+        text = self.pdf_text(path)
+        self.assertNotIn("Avser:", text)
+        self.assertNotIn("150", text)
+        self.assertNotIn("ränta", text.casefold())
+
+    def test_the_stored_invoice_text_itself_is_never_rewritten(self):
+        """Only reminders are cleaned; the invoice keeps its own wording."""
+        row, _ = self.save_p1()
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET note=? WHERE id=?", (self.INVOICE_TEXT, row["id"]))
+        path = self.workspace / "keep-note.pdf"
+        self.app.ReminderApp.write_pdf(
+            self.owner, path, dict(row), "P1", 60.0, self.original_date, 1000.0, 1060.0, "", "",
+        )
+        with self.app.connect() as db:
+            stored = db.execute("SELECT note FROM invoices WHERE id=?", (row["id"],)).fetchone()["note"]
+        self.assertEqual(stored, self.INVOICE_TEXT)
+
+    def test_reminder_note_helper_keeps_payment_terms_and_drops_rates(self):
+        kept = self.app.reminder_note_text(self.INVOICE_TEXT)
+        self.assertTrue(kept.startswith("Betalning sker till Tadega AB."))
+        self.assertIn("Ev. anmärkningar på fakturan ska göras inom 5 dgr.", kept)
+        self.assertNotIn("150", kept)
+        self.assertNotIn("ränta", kept.casefold())
+        self.assertEqual(
+            self.app.reminder_note_omitted(self.INVOICE_TEXT),
+            ("Avgift per påminnelse: 150:-.", "Försenad betalning debiteras 23% ränta."),
+        )
+        english = "Payment to Tadega AB. Reminder fee: SEK 150. Late payment is subject to 23% interest. Objections within 5 days."
+        self.assertEqual(self.app.reminder_note_text(english), "Payment to Tadega AB. Objections within 5 days.")
+        # A note without any term clause is returned unchanged.
+        self.assertEqual(self.app.reminder_note_text("Konsulttjänst 2026."), "Konsulttjänst 2026.")
+        self.assertEqual(self.app.reminder_note_text(""), "")
+        # A product wording is not an interest clause and stays.
+        self.assertEqual(
+            self.app.reminder_note_text("Räntefri delbetalning 12 månader. Betalning till Tadega AB."),
+            "Räntefri delbetalning 12 månader. Betalning till Tadega AB.",
+        )
+        self.assertEqual(self.app.reminder_note_text("Dröjsmålsränta 23 % debiteras."), "")
+
     def test_reminder_pdf_states_no_interest_at_all(self):
         """Interest is outside this app, so no reminder may mention a rate."""
         row, _ = self.save_p1()

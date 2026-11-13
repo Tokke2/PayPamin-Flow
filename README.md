@@ -277,6 +277,8 @@ Appen följer **lag (1981:739) om ersättning för inkassokostnader m.m.** och v
 
 **Beloppen är fasta.** De följer lagen och kan inte ändras i appen — det finns inga avgiftsfält i **Inställningar**, bara en rad som visar de två beloppen. Ett värde som en äldre version har sparat (till exempel 150 kr) läses aldrig och tas bort ur databasen vid start, så det kan inte följa med i en säkerhetskopia och se ut som en giltig inställning.
 
+**Fakturatexten sparas ordagrant, men upprepas aldrig med gamla villkor.** Texten på fakturan (**Avser**) behåller sin ursprungliga lydelse, till exempel *"Avgift per påminnelse: 150:-. Försenad betalning debiteras 23% ränta."* Påminnelsen skriver inte ut den meningen: den anger i stället den lagstadgade avgiften en gång med sin paragraf och ingen ränta alls. Allt annat i texten följer med — betalningsuppgifter, äganderättsförbehåll och anmärkningsfrist. Bekräftelsedialogen säger till när ett sådant villkor lämnas utanför, och fakturans egen text ändras aldrig.
+
 **Ränta ingår inte i appen.** Inget räntebelopp beräknas, ingen räntesats visas och påminnelse-PDF:en, e-postutkastet och dialogen nämner ingen dröjsmålsränta. Ett sparat räntevärde från en äldre version tas bort ur databasen vid start. Lagstadgad dröjsmålsränta gäller ändå mellan parterna enligt räntelagen — appen uttalar sig bara inte om den.
 
 Två regler styr hela modellen:
