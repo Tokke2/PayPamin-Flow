@@ -2,14 +2,16 @@
 ' Copyright © 2026 Rickard Längkvist.
 '
 ' An existing Python runtime is always reused unchanged and is never updated
-' at startup. A default Python is installed only after all existing-runtime
-' checks have found nothing. Add-on upgrades are offered manually inside the app.
+' at startup. A default Python is offered only after all existing-runtime
+' checks have found nothing, and only if the user accepts: a present runtime
+' means the question is never asked at all. A refusal is remembered, so the
+' offer is not repeated. Add-on upgrades are offered manually inside the app.
 Option Explicit
 Dim fso, sh, appDir, scriptPath, env, runtimeLogPath
 Dim pythonwPath, pythonPath, knownPythonPath, managerPath, wingetPath
 Dim anyPythonPath
 Dim anyCode, installCode, captured
-Dim hasPython, managerInventoryOK
+Dim hasPython, managerInventoryOK, consent, markerFile
 Dim cmd, arguments, argument
 
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -72,6 +74,39 @@ End If
 '    manager's default tag selects its current recommended stable release.
 If Not hasPython Then
   WriteRuntimeLog "No existing Python runtime found. A new default stable runtime may now be installed."
+  ' The installation is offered, never silent, and only ever in this branch:
+  ' a machine that already has a usable Python never sees the question.
+  If fso.FileExists(DeclinedMarkerPath()) Then
+    WriteRuntimeLog "Python is still missing; the earlier offer was declined, so it is not repeated."
+    ShowRuntimeNotice "Python 3.10 eller senare saknas fortfarande." & vbCrLf & vbCrLf & _
+      "Du avböjde installationen tidigare. Hämta Python på https://www.python.org/downloads/ och starta PayPamin Flow igen." & vbCrLf & _
+      "Python 3.10 or later is still missing. You declined the installation earlier. Download it from https://www.python.org/downloads/ and start PayPamin Flow again."
+    WScript.Quit 1
+  End If
+  consent = MsgBox("PayPamin Flow behöver Python 3.10 eller senare, men hittar det inte på datorn." & vbCrLf & vbCrLf & _
+    "Vill du att PayPamin Flow installerar senaste stabila Python nu? Det sker för din användare och en befintlig Python-installation rörs aldrig." & vbCrLf & vbCrLf & _
+    "Python 3.10 or later is required but was not found. Install the latest stable Python now, for your user only? An existing Python installation is never touched.", _
+    vbYesNoCancel + vbQuestion, "PayPamin Flow")
+  If consent = vbCancel Then
+    ' Cancelling is not a refusal: nothing is remembered, so asking again later
+    ' is still allowed.
+    WriteRuntimeLog "The Python installation offer was cancelled without an answer."
+    WScript.Quit 1
+  End If
+  If consent <> vbYes Then
+    WriteRuntimeLog "The Python installation offer was declined; remembering the answer."
+    EnsureFolder fso.GetParentFolderName(DeclinedMarkerPath())
+    On Error Resume Next
+    Set markerFile = fso.CreateTextFile(DeclinedMarkerPath(), True)
+    markerFile.WriteLine "declined " & CStr(Now)
+    markerFile.Close
+    On Error GoTo 0
+    ShowRuntimeNotice "Ingen Python installerades." & vbCrLf & vbCrLf & _
+      "Hämta Python 3.10 eller senare på https://www.python.org/downloads/ och starta PayPamin Flow igen. Frågan ställs inte om igen." & vbCrLf & _
+      "No Python was installed. Download Python 3.10 or later from https://www.python.org/downloads/ and start PayPamin Flow again. The question will not be asked again."
+    WScript.Quit 1
+  End If
+  WriteRuntimeLog "The Python installation offer was accepted by the user."
   If managerPath = "" Then
     wingetPath = FindOnPath("winget.exe")
     If wingetPath = "" Then
@@ -269,6 +304,15 @@ Sub WriteRuntimeLog(message)
   Set stream = fso.OpenTextFile(runtimeLogPath, 8, True, 0)
   stream.WriteLine "[" & CStr(Now) & "] " & CStr(message)
   stream.Close
+End Sub
+
+Function DeclinedMarkerPath()
+  DeclinedMarkerPath = sh.ExpandEnvironmentStrings("%USERPROFILE%") & "\.paminnelseapp\python-offer.declined"
+End Function
+
+Sub ShowRuntimeNotice(message)
+  WriteRuntimeLog "Notice shown to the user."
+  MsgBox message & vbCrLf & vbCrLf & "Logg: " & runtimeLogPath, vbInformation, "PayPamin Flow"
 End Sub
 
 Sub FailRuntime(message)

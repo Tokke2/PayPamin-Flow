@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from datetime import date as real_date
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
@@ -52,6 +53,12 @@ class InvoiceViewTests(unittest.TestCase):
         self.addCleanup(cleanup)
 
     def save_invoice(self, invoice_no, *, paid=0.0, ignored=0, amount=1000.0):
+        # The reminder dates are relative, so the fixture stays in the same stage
+        # whenever the suite runs. A fixed P2 date would drift into the
+        # Kronofogden review once the calendar passed it, and the row would leave
+        # the current view for a reason the test never meant to exercise.
+        self.p1_date = (real_date.today() - timedelta(days=5)).isoformat()
+        self.p2_date = real_date.today().isoformat()
         record = {
             "customer": f"Kund {invoice_no}",
             "invoice_no": invoice_no,
@@ -71,7 +78,7 @@ class InvoiceViewTests(unittest.TestCase):
         with self.app.connect() as db:
             db.execute(
                 "UPDATE invoices SET ignored=?,p1_date=?,p2_date=?,sent_count=? WHERE invoice_no=?",
-                (ignored, "2026-11-06", "2026-11-11", 2, invoice_no),
+                (ignored, self.p1_date, self.p2_date, 2, invoice_no),
             )
             return db.execute("SELECT * FROM invoices WHERE invoice_no=?", (invoice_no,)).fetchone()
 
@@ -97,14 +104,14 @@ class InvoiceViewTests(unittest.TestCase):
         self.assertEqual(set(self.render("ignored")), {"ARCHIVED-1"})
 
         # The history tab renders the same stored P1/P2 history; it is not a new archive.
-        self.assertEqual(history["PAID-1"][5], "2026-11-06")
+        self.assertEqual(history["PAID-1"][5], self.p1_date)
         self.assertIn("Avslutad", history["PAID-1"][8])
         self.assertIn("IGNORERAD", history["ARCHIVED-1"][8])
         with self.app.connect() as db:
             rows = db.execute("SELECT * FROM invoices ORDER BY invoice_no").fetchall()
             self.assertEqual(len(rows), 3)
             for row in rows:
-                self.assertEqual((row["p1_date"], row["p2_date"], row["sent_count"]), ("2026-11-06", "2026-11-11", 2))
+                self.assertEqual((row["p1_date"], row["p2_date"], row["sent_count"]), (self.p1_date, self.p2_date, 2))
             self.assertEqual(db.execute("SELECT paid FROM invoices WHERE id=?", (paid["id"],)).fetchone()[0], 1000.0)
             self.assertEqual(db.execute("SELECT paid FROM invoices WHERE id=?", (active["id"],)).fetchone()[0], 0.0)
             self.assertEqual(db.execute("SELECT ignored FROM invoices WHERE id=?", (archived["id"],)).fetchone()[0], 1)
@@ -154,9 +161,9 @@ class InvoiceViewTests(unittest.TestCase):
         with self.app.connect() as db:
             db.execute("UPDATE invoices SET source=? WHERE id=?", (str(original), row["id"]))
             row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
-        p1 = self.app.reminder_file_path(row, "P1", real_date(2026, 11, 6))
+        p1 = self.app.reminder_file_path(row, "P1", real_date.fromisoformat(self.p1_date))
         p1.write_bytes(b"P1")
-        p2 = self.app.reminder_file_path(row, "P2", real_date(2026, 11, 11))
+        p2 = self.app.reminder_file_path(row, "P2", real_date.fromisoformat(self.p2_date))
         archived_p2 = p2.parent / self.app.ARCHIVE_FOLDER_NAME / p2.name
         archived_p2.parent.mkdir(parents=True, exist_ok=True)
         archived_p2.write_bytes(b"archived P2")
@@ -210,7 +217,7 @@ class InvoiceViewTests(unittest.TestCase):
         fake.refresh.assert_called_once_with()
         with self.app.connect() as db:
             saved = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
-            self.assertEqual((saved["paid"], saved["p1_date"], saved["p2_date"]), (1000.0, "2026-11-06", "2026-11-11"))
+            self.assertEqual((saved["paid"], saved["p1_date"], saved["p2_date"]), (1000.0, self.p1_date, self.p2_date))
 
 
 if __name__ == "__main__":

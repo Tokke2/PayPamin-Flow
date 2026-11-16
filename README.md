@@ -67,10 +67,28 @@ Använd `py -m pip` i Windows om det är det kommando som pekar på din Python-i
 
 ## Starta utan konsolfönster
 
+Appen har **exakt en startfil per operativsystem**, och den sköter hela starten: den letar upp en användbar Python och startar appen. Frågan om att hämta Python ställs **endast när systemet saknar Python** — finns en fungerande Python startar appen direkt, utan fråga och utan dialog.
+
+| System | Startfil | Hur du startar |
+|---|---|---|
+| **Windows** | `start_paypamin_flow.vbs` | dubbelklick, inget konsolfönster |
+| **macOS** | `start_paypamin_flow.command` | dubbelklick i Finder |
+| **Linux** | `start_paypamin_flow.sh` | `./start_paypamin_flow.sh` eller posten i programmenyn |
+
+Alla tre filer finns i release-ZIP:en. Det finns **ingen separat Python-installatör** i paketet och ingen `.bat`-fil: en eventuell Python-installation erbjuds av startfilen själv, bara när den behövs, och aldrig som ett eget skript.
+
+**Så fungerar erbjudandet, likadant på alla tre system:**
+
+1. Startfilen letar först efter en Python som fungerar: `PATH`, kända installationsplatser, Python Install Manager (Windows) och `PAYPAMIN_PYTHON` (macOS/Linux). Kravet är **3.10 eller senare** och att Tkinter finns.
+2. **Finns Python startar appen direkt.** Ingen fråga ställs, och ingenting uppdateras, ersätts eller skuggas.
+3. **Saknas Python ställs frågan en gång.** Windows installerar då senaste stabila Python för din användare (utan administratörslösenord, via Python Install Manager) om du svarar ja. macOS och Linux öppnar i stället den officiella nedladdningssidan, så att du själv kör installationsprogrammet: de rör aldrig systemets Python och kör aldrig en pakethanterare eller begär administratörsrättigheter.
+4. **Svarar du nej kommer frågan inte igen.** Svaret sparas i `~/.paminnelseapp/python-offer.declined`, och startfilen visar då bara en rad med nedladdningsadressen. Radera filen om du vill bli tillfrågad igen. Ett **Avbryt** på Windows räknas inte som nej och sparas inte.
+5. Finns Python men **saknar Tkinter** säger startfilen det rakt ut i stället för att föreslå en ny Python-installation, eftersom en ny Python inte skulle lösa problemet.
+
 ### Windows
 
 1. Dubbelklicka på **`start_paypamin_flow.vbs`**. Startaren kontrollerar att en startbar Python finns i `PATH`, via Python Install Manager eller på vanliga installationsplatser. Den öppnar inget konsolfönster.
-2. Om Python helt saknas installeras managerens aktuella rekommenderade stabila standardversion automatiskt. Vid behov installeras först den officiella Python Install Manager med WinGet. Installationssteget nås inte när en befintlig Python hittats eller när kontrollen har misslyckats och resultatet därför är osäkert.
+2. Saknas Python helt frågar startaren om senaste stabila Python får installeras för din användare. Svarar du ja installeras vid behov först den officiella Python Install Manager med WinGet och därefter managerens aktuella rekommenderade stabila version. Installationssteget nås inte när en befintlig Python hittats, när frågan avböjts eller när kontrollen har misslyckats och resultatet därför är osäkert.
 3. En befintlig Python används alltid oförändrad. Startaren uppdaterar inte Python-runtime och installerar inte en ny version bredvid en befintlig installation.
 4. En befintlig Python som hanteras av Python Install Manager, system-Python eller en virtuell miljö används utan att ersättas eller uppdateras externt. Appen skapar ingen parallellinstallation.
 
@@ -80,11 +98,14 @@ För felsökning från en redan öppen PowerShell kan `py paypamin_flow.py` anv�
 
 ### macOS
 
-1. Installera Python 3.10+ med Tkinter och Python Launcher, till exempel det officiella installationspaketet från python.org.
-2. Installera tilläggen enligt ovan.
-3. Öppna **`paypamin_flow.pyw`** med Python Launcher. Python Launchers alternativ att köra i Terminal ska vara avstängt. Startaren loggar eventuella startfel och visar ett felmeddelande utan att öppna Terminal.
+1. Dubbelklicka på **`start_paypamin_flow.command`** i Finder. Finder öppnar filen i Terminal, så startfilen kopplar loss appen direkt och stänger sitt eget Terminal-fönster igen — inget konsolfönster blir kvar bredvid appens fönster.
+2. Startfilen letar efter Python 3.10+ med Tkinter i `PATH`, i Homebrew- och python.org-platserna och i `PAYPAMIN_PYTHON`. Apples `/usr/bin/python3` används bara när Command Line Tools redan är installerade, eftersom stubben annars öppnar Apples egen installationsdialog.
+3. Saknas Python öppnas nedladdningssidan för senaste Python när du tackar ja. Om du hellre använder Homebrew eller Python Launcher fungerar det också: appen startar med vilken Python som helst som uppfyller kraven.
+4. Alternativ start: `python3 paypamin_flow_launcher.py` eller **`paypamin_flow.pyw`** med Python Launcher, med alternativet att köra i Terminal avstängt.
 
-Autostart och omstart efter uppdatering använder Python direkt via LaunchAgents respektive appens befintliga process och öppnar inte Terminal. En separat `.command`-startare används inte eftersom macOS annars kan öppna Terminal. PayPamin Flow uppdaterar eller ersätter inte Apples/systemets Python och installerar inte en ny python.org-runtime bredvid en befintlig installation.
+Första gången kan macOS markera den nedladdade ZIP-filen som karantänsatt och vägra starta `.command`-filen. Högerklicka då på filen och välj **Öppna**, eller kör `xattr -dr com.apple.quarantine <mapp>` en gång för uppackade mappen.
+
+Autostart och omstart efter uppdatering använder Python direkt via LaunchAgents respektive appens befintliga process och öppnar inte Terminal. PayPamin Flow uppdaterar eller ersätter inte Apples/systemets Python och installerar inte en ny python.org-runtime bredvid en befintlig installation.
 
 ### Linux
 
@@ -98,11 +119,11 @@ python3 -m pip install -r requirements.txt
 
 Starta därefter **PayPamin Flow** från programmenyn. Skrivbordsposten har `Terminal=false`. Installationen är per användare och kopierar Python-filerna till `~/.local/share/paypamin-flow` som standard. Du kan också köra `./start_paypamin_flow.sh` eller `python3 paypamin_flow_launcher.py` direkt från appmappen.
 
-På system med externally managed Python kan en virtuell miljö användas. Skapa miljön, installera `requirements.txt` i den och ange dess Python med miljövariabeln `PYTHON` när installationsprogrammet körs. `start_paypamin_flow.sh` kontrollerar den valda tolken respektive `python3`/`python`, men uppdaterar eller ersätter aldrig system-Python och skapar ingen automatisk parallellinstallation.
+På system med externally managed Python kan en virtuell miljö användas. Skapa miljön, installera `requirements.txt` i den och ange dess Python med miljövariabeln `PYTHON` när installationsprogrammet körs. `start_paypamin_flow.sh` kontrollerar den valda tolken (`PAYPAMIN_PYTHON`), `python3.13` ner till `python3` samt vanliga installationsplatser. Den kräver 3.10 eller senare **och** Tkinter, men uppdaterar eller ersätter aldrig system-Python, kör aldrig en pakethanterare och begär aldrig administratörsrättigheter. Saknas Python öppnas den officiella nedladdningssidan efter ditt ja; på Debian/Ubuntu heter Tkinter-paketet `python3-tk`.
 
 ## Python och valfria tilläggsuppdateringar
 
-- En befintlig Python-runtime uppdateras **inte vid appstart** och ersätts inte av PayPamin Flow. Windows-startaren installerar Python endast om ingen fungerande Python hittas.
+- En befintlig Python-runtime uppdateras **inte vid appstart** och ersätts inte av PayPamin Flow. Startfilerna erbjuder en ny Python **endast** när ingen fungerande Python hittas, och Windows installerar den bara efter ett uttryckligt ja.
 - Vid start kontrolleras att nödvändiga Python-tillägg finns. Saknade tillägg kan återställas i bakgrunden utan att befintliga tillägg uppgraderas.
 - Välj **Hjälp → Uppdatera Python-tillägg** för att manuellt uppdatera appens tillägg. Appen frågar först och använder den befintliga Python-miljön; ingen egen virtuell miljö eller parallell Python-runtime skapas. Starta om appen efter en lyckad uppdatering.
 - Automatiska veckouppdateringar av Python-runtime och tillägg körs inte längre. Ett misslyckat manuellt tilläggsförsök lämnar appen med befintliga tillägg och loggas.

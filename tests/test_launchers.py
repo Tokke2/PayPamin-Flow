@@ -1,4 +1,5 @@
 import configparser
+import os
 import runpy
 import sys
 import tempfile
@@ -18,11 +19,20 @@ class ConsoleFreeLauncherTests(unittest.TestCase):
         self.assertIn("paypamin_flow_launcher.py", launcher)
         self.assertIn("sh.Run cmd, 0, False", launcher)
 
-    def test_pyw_compatibility_entrypoint_remains_without_terminal_launcher(self):
+    def test_pyw_compatibility_entrypoint_remains(self):
         compatibility = ROOT / "paypamin_flow.pyw"
         self.assertTrue(compatibility.is_file())
         self.assertIn("from paypamin_flow_launcher import run", compatibility.read_text(encoding="utf-8"))
-        self.assertFalse((ROOT / "start_paypamin_flow.command").exists())
+
+    def test_macos_has_a_double_clickable_start_file(self):
+        # Finder starts a .command in Terminal, so the file detaches the app and
+        # closes its own window again instead of leaving a console open.
+        start_file = ROOT / "start_paypamin_flow.command"
+        self.assertTrue(start_file.is_file())
+        self.assertTrue(os.access(start_file, os.X_OK))
+        script = start_file.read_text(encoding="utf-8")
+        self.assertIn("paypamin_flow_launcher.py", script)
+        self.assertIn("close_own_terminal_window", script)
 
     def test_linux_menu_launcher_does_not_open_terminal(self):
         parser = configparser.ConfigParser()

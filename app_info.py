@@ -55,6 +55,9 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "update_checker.py",
     "update_installer.py",
     "requirements.txt",
+    # One start file per platform, all shipped and all required.
+    "start_paypamin_flow.command",
+    "start_paypamin_flow.sh",
     "start_paypamin_flow.vbs",
     "assets/paypamin_flow.png",
     "assets/paypamin_flow.ico",
@@ -109,7 +112,10 @@ def is_python_package_file(filename: str) -> bool:
     ):
         return False
     if len(path.parts) == 1:
-        return path.suffix.lower() in {".py", ".pyw", ".txt", ".md", ".vbs", ".sh"}
+        # .command is the double-clickable start file on macOS. A Windows .bat
+        # is deliberately not accepted: start_paypamin_flow.vbs is the one
+        # Windows start file, and no separate installer script is shipped.
+        return path.suffix.lower() in {".py", ".pyw", ".txt", ".md", ".vbs", ".sh", ".command"}
     if len(path.parts) == 2 and path.parts[0] == "assets":
         return path.suffix.lower() in {".png", ".svg", ".ico", ".icns"}
     if len(path.parts) == 3 and path.parts[:2] in (("assets", "icons"), ("assets", "print")):
