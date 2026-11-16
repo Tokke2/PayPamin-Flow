@@ -61,6 +61,13 @@ _ENGLISH = {
     "Lokal app för fakturor och betalningspåminnelser": "Local app for invoices and payment reminders",
     "Version {version}": "Version {version}",
     "Skapare: {author}": "Creator: {author}",
+    # Donations (Swish only)
+    "Stöd appen med Swish": "Support the app with Swish",
+    "Skanna koden med Swish-appen. Frivilligt — appen fungerar precis likadant utan.": "Scan the code with the Swish app. Voluntary — the app works exactly the same without it.",
+    "Välj belopp": "Choose an amount",
+    "{amount} kr": "{amount} kr",
+    "Valt belopp: {amount} kr": "Selected amount: {amount} kr",
+    "Swishnummer: {number}": "Swish number: {number}",
     "{copyright} · Skapare: {author}": "{copyright} · Creator: {author}",
     "Stäng": "Close",
     "Skanna importmapp nu": "Scan the import folder now",

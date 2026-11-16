@@ -477,6 +477,19 @@ xvfb-run -a -s "-screen 0 1280x900x24" python -m unittest discover -s tests -v
 
 Översättningstesterna kontrollerar att nya texter har engelska översättningar och matchande variabler. Tk-testerna kontrollerar verklig fokusflytt, 200 %-layout, scrollad fokusvisning och växling av högkontrastpalett. Följ även [den manuella skärmläsarchecklistan](ACCESSIBILITY_TESTING.md). Testa alltid ändringar mot riktiga, noggrant granskade exempel före skarp användning.
 
+## Stöd appen med Swish
+
+Appen har en liten stödpanel **inne i huvudfönstret** — inget separat fönster och ingen egen sida. Du når den via **Hjälp → Stöd appen med Swish**, och samma menyval stänger den igen.
+
+- **Bara Swish.** Donationen går till Swishnumret **0721-817 177**. PayPal och Ko-fi finns inte längre i appen.
+- **QR-koden ritas lokalt.** Koden är en helt vanlig Swish-standardkod (`C<nummer>;<belopp>;;6`) och byggs av appens egen QR-kodare i `qr_code.py`. Ingenting hämtas från nätet, så koden fungerar offline och avslöjar aldrig att appen öppnades. Swish-appens egen skanner läser den direkt.
+- **Beloppen är låsta.** Du väljer mellan **25, 50, 100 eller 200 kr**. Det finns inget fält för ett eget belopp, och ett belopp utanför de fyra avvisas i stället för att bli en betalkod. Själva koden låser mottagaren; belopp och meddelande går att ändra i Swish-appen, precis som en vanlig Swish-QR.
+- **Mottagaren kan inte bytas.** Numret ligger som en konstant i `donations.py` — inte i databasen. Det finns ingen inställning och inget fält som kan peka donationen någon annanstans, och en återställd säkerhetskopia kan därför aldrig byta mottagare.
+- **Inget låses upp.** Donationer är helt frivilliga och ger inga fler funktioner. Appen fungerar precis likadant utan, och panelen säger det.
+
+Ingen betalning sker i appen: den visar bara koden, och betalningen görs i Swish. Val av belopp och att panelen öppnas loggas som vanliga aktiviteter (`donation`), aldrig med betaluppgifter.
+
+## Begränsningar
 ## Begränsningar
 
 - PDF-layout och OCR kan misstolka fält. Kontrollera fakturan före godkännande. Reskontraimporten kräver textbaserad PDF och stoppar vid oläsbara rader eller avvikande kontrollsummor.

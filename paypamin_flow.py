@@ -28,6 +28,8 @@ from app_backup import (
 )
 from autostart import AutostartError, autostart_location, set_autostart
 from cache_cleaner import clean_cache
+import donations
+import qr_code
 from tray import TrayController, TrayUnavailable
 from currency import find_currency_code, is_valid_currency, normalize_currency
 from fee_rules import (
@@ -2235,6 +2237,104 @@ class ReminderApp(tk.Tk):
         ttk.Label(form,text=_('Skapare: {author}',author=APP_AUTHOR)).pack(pady=(4,0))
         ttk.Button(form,text=_('Stäng'),command=w.destroy,style='Accent.TButton').pack(pady=(20,0))
 
+    def _draw_donation_qr(self, amount=None):
+        """Draw the standard Swish code on the panel's canvas.
+
+        The code is built here and encoded by :mod:`qr_code`, so it works
+        offline and never asks anyone else to render it. The canvas is painted
+        white first: a QR code must stay dark on light even in high contrast.
+        """
+        canvas=getattr(self,'donation_canvas',None)
+        if canvas is None:return False
+        chosen=self.donation_amount if amount is None else amount
+        try:
+            matrix=qr_code.encode(donations.swish_payload(chosen))
+        except Exception:
+            logger.exception('The Swish QR code could not be built')
+            self._show_donation_fallback()
+            return False
+        quiet=4
+        scale=max(2,int(round(self._px(4))))
+        total=(len(matrix)+2*quiet)*scale
+        try:
+            canvas.configure(width=total,height=total)
+            canvas.delete('all')
+            canvas.create_rectangle(0,0,total,total,fill='#FFFFFF',outline='')
+            for row_index,row in enumerate(matrix):
+                for column_index,dark in enumerate(row):
+                    if not dark:continue
+                    x=(column_index+quiet)*scale;y=(row_index+quiet)*scale
+                    canvas.create_rectangle(x,y,x+scale,y+scale,fill='#000000',outline='')
+        except tk.TclError:
+            logger.info('The Swish QR code was not drawn because the panel closed')
+            return False
+        return True
+
+    def _show_donation_fallback(self):
+        """Name the locked number if the code cannot be drawn at all."""
+        label=getattr(self,'donation_number_label',None)
+        if label is None:return
+        try:label.configure(text=_('Swishnummer: {number}',number=donations.formatted_number()))
+        except tk.TclError:pass
+
+    def _choose_donation_amount(self, amount):
+        """Select one of the locked amounts and redraw the code."""
+        if not donations.is_fixed_amount(amount):return
+        self.donation_amount=amount
+        for value,button in getattr(self,'donation_buttons',{}).items():
+            try:button.configure(style='Accent.TButton' if value==amount else 'TButton')
+            except tk.TclError:pass
+        label=getattr(self,'donation_amount_label',None)
+        if label is not None:
+            try:label.configure(text=_('Valt belopp: {amount} kr',amount=amount))
+            except tk.TclError:pass
+        self._draw_donation_qr(amount)
+        log_activity('donation','amount_selected','completed',amount=amount)
+
+    def _build_donation_panel(self):
+        """Build the inline support panel: amounts, one Swish code, no page."""
+        panel=ttk.Frame(self,padding=(22,6,22,10))
+        title=ttk.Frame(panel);title.pack(fill='x')
+        ttk.Label(title,text=_('Stöd appen med Swish'),style='Heading.TLabel').pack(side='left')
+        ttk.Button(title,text=_('Stäng'),command=self.toggle_donations).pack(side='right')
+        ttk.Label(panel,text=_('Skanna koden med Swish-appen. Frivilligt — appen fungerar precis likadant utan.'),style='Sub.TLabel',justify='left').pack(anchor='w',pady=(3,7))
+        row=ttk.Frame(panel);row.pack(fill='x')
+        chips=ttk.Frame(row);chips.pack(side='left',anchor='n')
+        ttk.Label(chips,text=_('Välj belopp'),style='BodyBold.TLabel').pack(anchor='w')
+        buttons=ttk.Frame(chips);buttons.pack(anchor='w',pady=(4,0))
+        self.donation_buttons={}
+        self.donation_amount=donations.default_amount()
+        for value in donations.amounts():
+            button=ttk.Button(buttons,text=_('{amount} kr',amount=value),command=lambda amount=value:self._choose_donation_amount(amount))
+            button.pack(side='left',padx=(0,6));self.donation_buttons[value]=button
+        self.donation_amount_label=ttk.Label(chips,text='',style='Sub.TLabel')
+        self.donation_amount_label.pack(anchor='w',pady=(6,0))
+        self.donation_number_label=ttk.Label(chips,text=_('Swishnummer: {number}',number=donations.formatted_number()),style='Sub.TLabel')
+        self.donation_number_label.pack(anchor='w',pady=(2,0))
+        code=ttk.Frame(row);code.pack(side='left',padx=(24,0))
+        self.donation_canvas=tk.Canvas(code,width=self._px(132),height=self._px(132),highlightthickness=0,bd=0,background='#FFFFFF')
+        self.donation_canvas.pack()
+        self._choose_donation_amount(donations.default_amount())
+        log_activity('donation','panel_opened','completed',amount=self.donation_amount)
+        return panel
+
+    def toggle_donations(self):
+        """Show or hide the inline support panel. No window and no page."""
+        panel=getattr(self,'donation_panel',None)
+        try:
+            if panel is not None and panel.winfo_ismapped():
+                panel.pack_forget();return
+        except tk.TclError:
+            pass
+        if panel is None:
+            panel=self._build_donation_panel();self.donation_panel=panel
+        anchor=getattr(self,'detail',None)
+        try:
+            if anchor is not None:panel.pack(fill='x',after=anchor)
+            else:panel.pack(fill='x')
+        except tk.TclError:
+            panel.pack(fill='x')
+
     def _run_scheduled_update_check(self):
         if not ui_is_alive(self):return
         try:
@@ -2821,6 +2921,7 @@ class ReminderApp(tk.Tk):
         help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
         help_menu.add_command(label=_('Uppdatera Python-tillägg'),command=self.update_python_addons)
         help_menu.add_command(label=_('Kortkommandon och tillgänglighet'),command=self.show_keyboard_help,accelerator='F1')
+        help_menu.add_command(label=_('Stöd appen med Swish'),command=self.toggle_donations)
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
         menu.add_cascade(label=_('Hjälp'),menu=help_menu)
         self._apply_menu_icons(file_menu);self._apply_menu_icons(help_menu);self._apply_menu_icons(menu)
