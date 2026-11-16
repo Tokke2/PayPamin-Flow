@@ -477,18 +477,19 @@ xvfb-run -a -s "-screen 0 1280x900x24" python -m unittest discover -s tests -v
 
 Översättningstesterna kontrollerar att nya texter har engelska översättningar och matchande variabler. Tk-testerna kontrollerar verklig fokusflytt, 200 %-layout, scrollad fokusvisning och växling av högkontrastpalett. Följ även [den manuella skärmläsarchecklistan](ACCESSIBILITY_TESTING.md). Testa alltid ändringar mot riktiga, noggrant granskade exempel före skarp användning.
 
-## Stöd appen med Swish
+## Stöd PayPamin Flow
 
-Appen har en liten stödpanel **inne i huvudfönstret** — inget separat fönster och ingen egen sida. Du når den via **Hjälp → Stöd appen med Swish**, och samma menyval stänger den igen.
+**Hjälp → Stöd PayPamin Flow** öppnar en egen donationsdialog med tre kanaler: **Swish** (QR-kod), **PayPal** och **Ko-fi**. Dialogen är byggd för att vara enkel att lita på:
 
-- **Bara Swish.** Donationen går till Swishnumret **0721-817 177**. PayPal och Ko-fi finns inte längre i appen.
-- **QR-koden ritas lokalt.** Koden är en helt vanlig Swish-standardkod (`C<nummer>;<belopp>;;6`) och byggs av appens egen QR-kodare i `qr_code.py`. Ingenting hämtas från nätet, så koden fungerar offline och avslöjar aldrig att appen öppnades. Swish-appens egen skanner läser den direkt.
-- **Beloppen är låsta.** Du väljer mellan **25, 50, 100 eller 200 kr**. Det finns inget fält för ett eget belopp, och ett belopp utanför de fyra avvisas i stället för att bli en betalkod. Själva koden låser mottagaren; belopp och meddelande går att ändra i Swish-appen, precis som en vanlig Swish-QR.
-- **Mottagaren kan inte bytas.** Numret ligger som en konstant i `donations.py` — inte i databasen. Det finns ingen inställning och inget fält som kan peka donationen någon annanstans, och en återställd säkerhetskopia kan därför aldrig byta mottagare.
-- **Inget låses upp.** Donationer är helt frivilliga och ger inga fler funktioner. Appen fungerar precis likadant utan, och panelen säger det.
+- **Beloppen är låsta.** Du väljer mellan **25, 50, 100 eller 200 kr**. Det finns inget fält för ett eget belopp, och ett belopp utanför de fyra avvisas i stället för att bli en betalkod.
+- **Mottagare och länkar är låsta.** Swishnumret, PayPal-adressen och Ko-fi-adressen ligger som konstanter i `donations.py` — inte i databasen. Det finns ingen inställning och inget fält som kan peka donationen någon annanstans, och en återställd säkerhetskopia kan därför aldrig byta mottagare. Appen kontrollerar varje adress mot den låsta listan innan webbläsaren öppnas; en okänd adress loggas och öppnas inte alls.
+- **Swish-koden ritas lokalt.** Koden är en helt vanlig Swish-standardkod (`C<nummer>;<belopp>;;6`) och byggs av appens egen QR-kodare i `qr_code.py`. Ingenting hämtas från nätet, så koden fungerar offline och avslöjar aldrig att appen öppnades. Swish-appens egen skanner läser den direkt, och mask `6` låter dig ändra belopp och meddelande i appen medan mottagaren är låst.
+- **Beloppet följer med.** PayPal-knappen öppnar `paypal.me/.../<belopp>SEK`, där du alltid kan ändra summan. Ko-fi tar valfritt belopp och även månadsstöd.
+- **Inget låses upp.** Donationer är helt frivilliga och ger inga fler funktioner. Appen fungerar precis likadant utan, och dialogen säger det.
 
-Ingen betalning sker i appen: den visar bara koden, och betalningen görs i Swish. Val av belopp och att panelen öppnas loggas som vanliga aktiviteter (`donation`), aldrig med betaluppgifter.
+Numret visas också i klartext (`0721-817 177`) med en **Kopiera nummer**-knapp, för den som hellre swishar manuellt. Ingen betalning sker i appen — den visar bara koden och öppnar dina egna sidor. Val av belopp, kopiering och att dialogen öppnas loggas som vanliga aktiviteter (`donation`), aldrig med betaluppgifter.
 
+## Begränsningar
 ## Begränsningar
 ## Begränsningar
 

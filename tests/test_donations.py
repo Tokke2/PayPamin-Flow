@@ -1,10 +1,15 @@
 import ast
+import tempfile
 import unittest
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import donations
 import i18n
+import qr_code
+from test_database import load_headless_app
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,15 +52,40 @@ class LockedAmountTests(unittest.TestCase):
         self.assertIn("0721-817 177", text)
 
 
-class LockedSwishTests(unittest.TestCase):
-    def test_only_swish_exists(self):
-        """PayPal and Ko-fi are gone for good."""
-        for name in ("PAYPAL_URL", "KOFI_URL", "CHANNELS", "Channel", "paypal_link", "kofi_link", "links"):
-            self.assertFalse(hasattr(donations, name), name)
-        source = (ROOT / "donations.py").read_text(encoding="utf-8").lower()
-        self.assertNotIn("paypal", source)
-        self.assertNotIn("ko-fi", source)
-        self.assertNotIn("kofi", source)
+class LockedChannelTests(unittest.TestCase):
+    def test_all_three_channels_are_locked_constants(self):
+        self.assertIsInstance(donations.CHANNELS, tuple)
+        self.assertEqual([item.key for item in donations.CHANNELS], ["paypal", "kofi"])
+        for item in donations.CHANNELS:
+            with self.assertRaises(FrozenInstanceError):
+                item.url = "https://example.com"
+        self.assertEqual(donations.channel("PayPal").url, donations.PAYPAL_URL)
+        with self.assertRaises(KeyError):
+            donations.channel("swish-swish")
+
+    def test_only_the_authors_pages_can_be_opened(self):
+        self.assertTrue(donations.is_locked_address(donations.PAYPAL_URL))
+        self.assertTrue(donations.is_locked_address(donations.paypal_link(100)))
+        self.assertTrue(donations.is_locked_address(donations.kofi_link()))
+        for foreign in (
+            "https://example.com",
+            "https://paypal.me/SomeoneElse",
+            "https://paypal.me/Rickard3dPrint.evil.example",
+            "https://paypal.me/Rickard3dPrint/abcSEK",
+            "javascript:alert(1)",
+            "",
+            None,
+        ):
+            with self.subTest(foreign=foreign):
+                self.assertFalse(donations.is_locked_address(foreign))
+
+    def test_the_paypal_amount_link_is_still_the_author_page(self):
+        for amount in donations.AMOUNTS:
+            link = donations.paypal_link(amount)
+            self.assertEqual(link, f"https://paypal.me/Rickard3dPrint/{amount}SEK")
+            self.assertTrue(donations.is_locked_address(link))
+        with self.assertRaises(ValueError):
+            donations.paypal_link(37)
 
     def test_the_number_is_locked_and_formatted(self):
         self.assertEqual(donations.swish_number(), "0721817177")
@@ -78,15 +108,15 @@ class LockedSwishTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             donations.swish_payload("150 kr")
 
-    def test_the_module_offers_no_setter_and_no_link(self):
+    def test_the_module_offers_no_setter(self):
         self.assertEqual([name for name in dir(donations) if name.lower().startswith("set")], [])
         source = (ROOT / "donations.py").read_text(encoding="utf-8")
-        self.assertNotIn("http", source)
         self.assertNotIn("webbrowser", source)
+        self.assertNotIn("open(", source)
 
 
-class DonationPanelSourceTests(unittest.TestCase):
-    """The support UI is inline in the main window: no page, no second window."""
+class DonationDialogSourceTests(unittest.TestCase):
+    """Donations live in their own dialogue under Help, with three channels."""
 
     @classmethod
     def setUpClass(cls):
@@ -99,26 +129,50 @@ class DonationPanelSourceTests(unittest.TestCase):
                 return node
         self.fail(f"{name} not found")
 
-    def test_the_help_menu_toggles_the_panel(self):
+    def test_the_help_menu_opens_the_dialogue(self):
         self.assertIn(
-            "help_menu.add_command(label=_('Stöd appen med Swish'),command=self.toggle_donations)",
+            "help_menu.add_command(label=_('Stöd PayPamin Flow'),command=self.show_donations)",
             self.source,
         )
-        self.assertNotIn("self.show_donations", self.source)
+        self.assertNotIn("self.toggle_donations", self.source)
 
-    def test_the_panel_never_opens_a_second_window(self):
-        for name in ("_build_donation_panel", "toggle_donations", "_choose_donation_amount"):
-            node = self.method(name)
-            calls = {
-                getattr(inner.func, "attr", "") or getattr(inner.func, "id", "")
-                for inner in ast.walk(node)
-                if isinstance(inner, ast.Call)
-            }
-            self.assertNotIn("Toplevel", calls, name)
-            self.assertNotIn("_new_toplevel", calls, name)
+    def test_the_dialogue_is_its_own_window(self):
+        node = self.method("show_donations")
+        calls = {
+            getattr(inner.func, "attr", "") or getattr(inner.func, "id", "")
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Call)
+        }
+        self.assertIn("_new_toplevel", calls)
+        # Opening it twice must raise the window that is already open.
+        self.assertIn("deiconify", calls)
+        self.assertIn("lift", calls)
 
-    def test_the_panel_has_no_entry_field_and_no_setting(self):
-        node = self.method("_build_donation_panel")
+    def test_the_dialogue_offers_swish_paypal_and_kofi(self):
+        node = self.method("show_donations")
+        calls = {
+            getattr(inner.func, "attr", "")
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Call)
+        }
+        for expected in ("paypal_link", "kofi_link", "amounts", "default_amount", "_choose_donation_amount"):
+            self.assertIn(expected, calls)
+        # The Swish code itself is drawn through the locked payload.
+        self.assertIn("swish_payload", {
+            getattr(inner.func, "attr", "")
+            for inner in ast.walk(self.method("_draw_donation_qr"))
+            if isinstance(inner, ast.Call)
+        })
+        texts = [
+            inner.value for inner in ast.walk(node)
+            if isinstance(inner, ast.Constant) and isinstance(inner.value, str)
+        ]
+        self.assertIn("Öppna PayPal", texts)
+        self.assertIn("Öppna Ko-fi", texts)
+        self.assertIn("Swish", texts)
+
+    def test_the_dialogue_has_no_entry_field_and_no_setting(self):
+        node = self.method("show_donations")
         for inner in ast.walk(node):
             if isinstance(inner, ast.Call):
                 name = getattr(inner.func, "id", None) or getattr(inner.func, "attr", None)
@@ -130,16 +184,6 @@ class DonationPanelSourceTests(unittest.TestCase):
                 for target in inner.targets:
                     owner = getattr(getattr(target, "value", None), "id", None)
                     self.assertNotEqual(owner, "donations")
-
-    def test_the_panel_reads_amounts_from_the_locked_module(self):
-        node = self.method("_build_donation_panel")
-        calls = {
-            getattr(inner.func, "attr", "")
-            for inner in ast.walk(node)
-            if isinstance(inner, ast.Call)
-        }
-        self.assertIn("amounts", calls)
-        self.assertIn("default_amount", calls)
 
     def test_the_code_is_drawn_locally_and_never_fetched(self):
         node = self.method("_draw_donation_qr")
@@ -153,13 +197,15 @@ class DonationPanelSourceTests(unittest.TestCase):
         self.assertNotIn("webbrowser", calls)
         self.assertNotIn("urlopen", calls)
 
-    def test_nothing_in_the_app_reaches_the_network_for_a_donation(self):
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.Call) and getattr(node.func, "attr", "") in {"open", "urlopen"}:
-                arguments = [argument.value for argument in node.args if isinstance(argument, ast.Constant)]
-                self.assertFalse(
-                    [value for value in arguments if isinstance(value, str) and "donat" in value.lower()],
-                )
+    def test_every_link_is_checked_before_the_browser_opens(self):
+        node = self.method("_open_donation_link")
+        names = {
+            getattr(inner.func, "attr", "") or getattr(inner.func, "id", "")
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Call)
+        }
+        self.assertIn("is_locked_address", names)
+        self.assertIn("open", names)
 
     def test_no_donation_value_is_stored_in_the_database(self):
         for node in ast.walk(self.tree):
@@ -167,9 +213,9 @@ class DonationPanelSourceTests(unittest.TestCase):
                 values = [argument.value for argument in node.args if isinstance(argument, ast.Constant)]
                 self.assertFalse([value for value in values if isinstance(value, str) and "donat" in value.lower()])
 
-    def test_the_panel_strings_are_translated(self):
+    def test_the_dialogue_strings_are_translated(self):
         missing = []
-        for name in ("_build_donation_panel", "_choose_donation_amount", "_show_donation_fallback"):
+        for name in ("show_donations", "_copy_swish_number"):
             for inner in ast.walk(self.method(name)):
                 if isinstance(inner, ast.Call) and getattr(inner.func, "id", "") == "_":
                     if inner.args and isinstance(inner.args[0], ast.Constant):
@@ -177,6 +223,90 @@ class DonationPanelSourceTests(unittest.TestCase):
                         if key not in i18n.translation_keys():
                             missing.append(key)
         self.assertEqual(missing, [])
+
+
+class FakeCanvas:
+    """Record what the dialogue would paint on its Swish canvas."""
+
+    def __init__(self):
+        self.calls = []
+        self.options = {}
+
+    def configure(self, **options):
+        self.options.update(options)
+
+    def delete(self, *args):
+        self.calls.append(("delete", args))
+
+    def create_rectangle(self, *args, **options):
+        self.calls.append(("rect", args, options["fill"]))
+
+
+class FakeButton:
+    def __init__(self):
+        self.style = None
+
+    def configure(self, **options):
+        if "style" in options:
+            self.style = options["style"]
+
+
+class FakeLabel:
+    def __init__(self):
+        self.text = ""
+
+    def configure(self, **options):
+        if "text" in options:
+            self.text = options["text"]
+
+
+class DonationDrawingTests(unittest.TestCase):
+    """The drawing and amount logic, without a display."""
+
+    def setUp(self):
+        self.app = load_headless_app(Path(tempfile.mkdtemp()))
+
+    def owner(self, amount=None):
+        owner = SimpleNamespace(
+            donation_canvas=FakeCanvas(),
+            donation_amount=donations.default_amount() if amount is None else amount,
+            donation_buttons={value: FakeButton() for value in donations.AMOUNTS},
+            donation_amount_label=FakeLabel(),
+        )
+        owner._px = lambda value: value
+        owner._donation_qr_size = lambda: (len(qr_code.encode(donations.swish_payload(donations.default_amount()))) + 8, 1)
+        # Binding the real method keeps the drawing path intact.
+        owner._draw_donation_qr = lambda amount=None: self.app.ReminderApp._draw_donation_qr(owner, amount)
+        return owner
+
+    def test_the_canvas_is_painted_white_before_the_modules(self):
+        owner = self.owner()
+        self.assertTrue(self.app.ReminderApp._draw_donation_qr(owner))
+        rectangles = [call for call in owner.donation_canvas.calls if call[0] == "rect"]
+        self.assertEqual(rectangles[0][2], "#FFFFFF")
+
+    def test_only_dark_modules_are_drawn(self):
+        owner = self.owner()
+        self.app.ReminderApp._draw_donation_qr(owner)
+        rects = [call for call in owner.donation_canvas.calls if call[0] == "rect"]
+        expected = sum(1 for row in qr_code.encode(donations.swish_payload(50)) for value in row if value)
+        self.assertEqual(len(rects), expected + 1)  # plus the white background
+        self.assertTrue(all(call[2] == "#000000" for call in rects[1:]))
+
+    def test_the_code_follows_the_selected_amount(self):
+        owner = self.owner()
+        self.app.ReminderApp._choose_donation_amount(owner, 200)
+        self.assertEqual(owner.donation_amount, 200)
+        self.assertEqual(owner.donation_buttons[200].style, "Accent.TButton")
+        self.assertEqual(owner.donation_buttons[50].style, "TButton")
+        self.assertIn("200", owner.donation_amount_label.text)
+        self.assertTrue(owner.donation_canvas.calls)
+
+    def test_a_free_amount_is_ignored_instead_of_drawn(self):
+        owner = self.owner()
+        self.app.ReminderApp._choose_donation_amount(owner, 137)
+        self.assertEqual(owner.donation_amount, donations.default_amount())
+        self.assertEqual(owner.donation_canvas.calls, [])
 
 
 class DonationPackagingTests(unittest.TestCase):

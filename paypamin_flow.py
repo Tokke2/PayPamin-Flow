@@ -2237,8 +2237,19 @@ class ReminderApp(tk.Tk):
         ttk.Label(form,text=_('Skapare: {author}',author=APP_AUTHOR)).pack(pady=(4,0))
         ttk.Button(form,text=_('Stäng'),command=w.destroy,style='Accent.TButton').pack(pady=(20,0))
 
+    def _donation_qr_size(self):
+        """Return (pixels, scale) for the Swish code at the current text size.
+
+        The module count comes from a real encode of the default amount, so the
+        canvas is the right size even if the payload or the amounts change.
+        """
+        scale=max(2,int(round(self._px(4))))
+        try:modules=len(qr_code.encode(donations.swish_payload(donations.default_amount())))
+        except Exception:modules=25
+        return (modules+8)*scale,scale
+
     def _draw_donation_qr(self, amount=None):
-        """Draw the standard Swish code on the panel's canvas.
+        """Draw the standard Swish code on the dialogue's canvas.
 
         The code is built here and encoded by :mod:`qr_code`, so it works
         offline and never asks anyone else to render it. The canvas is painted
@@ -2246,15 +2257,14 @@ class ReminderApp(tk.Tk):
         """
         canvas=getattr(self,'donation_canvas',None)
         if canvas is None:return False
-        chosen=self.donation_amount if amount is None else amount
+        chosen=getattr(self,'donation_amount',donations.default_amount()) if amount is None else amount
         try:
             matrix=qr_code.encode(donations.swish_payload(chosen))
         except Exception:
             logger.exception('The Swish QR code could not be built')
-            self._show_donation_fallback()
             return False
         quiet=4
-        scale=max(2,int(round(self._px(4))))
+        _,scale=self._donation_qr_size()
         total=(len(matrix)+2*quiet)*scale
         try:
             canvas.configure(width=total,height=total)
@@ -2266,16 +2276,9 @@ class ReminderApp(tk.Tk):
                     x=(column_index+quiet)*scale;y=(row_index+quiet)*scale
                     canvas.create_rectangle(x,y,x+scale,y+scale,fill='#000000',outline='')
         except tk.TclError:
-            logger.info('The Swish QR code was not drawn because the panel closed')
+            logger.info('The Swish QR code was not drawn because the dialogue closed')
             return False
         return True
-
-    def _show_donation_fallback(self):
-        """Name the locked number if the code cannot be drawn at all."""
-        label=getattr(self,'donation_number_label',None)
-        if label is None:return
-        try:label.configure(text=_('Swishnummer: {number}',number=donations.formatted_number()))
-        except tk.TclError:pass
 
     def _choose_donation_amount(self, amount):
         """Select one of the locked amounts and redraw the code."""
@@ -2289,51 +2292,107 @@ class ReminderApp(tk.Tk):
             try:label.configure(text=_('Valt belopp: {amount} kr',amount=amount))
             except tk.TclError:pass
         self._draw_donation_qr(amount)
-        log_activity('donation','amount_selected','completed',amount=amount)
 
-    def _build_donation_panel(self):
-        """Build the inline support panel: amounts, one Swish code, no page."""
-        panel=ttk.Frame(self,padding=(22,6,22,10))
-        title=ttk.Frame(panel);title.pack(fill='x')
-        ttk.Label(title,text=_('Stöd appen med Swish'),style='Heading.TLabel').pack(side='left')
-        ttk.Button(title,text=_('Stäng'),command=self.toggle_donations).pack(side='right')
-        ttk.Label(panel,text=_('Skanna koden med Swish-appen. Frivilligt — appen fungerar precis likadant utan.'),style='Sub.TLabel',justify='left').pack(anchor='w',pady=(3,7))
-        row=ttk.Frame(panel);row.pack(fill='x')
-        chips=ttk.Frame(row);chips.pack(side='left',anchor='n')
-        ttk.Label(chips,text=_('Välj belopp'),style='BodyBold.TLabel').pack(anchor='w')
-        buttons=ttk.Frame(chips);buttons.pack(anchor='w',pady=(4,0))
+    def _copy_swish_number(self):
+        """Put the locked Swish number on the clipboard."""
+        window=getattr(self,'_donation_window',None)
+        target=window if window is not None else self
+        try:
+            target.clipboard_clear();target.clipboard_append(donations.swish_number())
+            self.donation_copy_label.configure(text=_('Numret ligger i urklipp.'))
+        except tk.TclError:
+            logger.info('The Swish number could not be copied to the clipboard')
+        log_activity('donation','copy_number','completed',channel='swish')
+
+    def _open_donation_link(self,url,channel_key):
+        """Open one of the locked donation pages, never an arbitrary URL."""
+        if not donations.is_locked_address(url):
+            logger.warning('Refused to open an unknown donation address: %s',url)
+            return False
+        try:opened=bool(webbrowser.open(url,new=2))
+        except Exception:
+            logger.exception('The donation page could not be opened')
+            opened=False
+        if not opened:
+            log_activity('donation','open','error',level=logging.WARNING,channel=channel_key,url=url)
+            messagebox.showwarning(_('Kunde inte öppna webbläsaren'),_('Öppna adressen manuellt: {url}',url=url),parent=self)
+            return False
+        log_activity('donation','open','completed',channel=channel_key,url=url)
+        return True
+
+    def _donation_heading(self,parent,title,text):
+        """Add one named channel heading with its explanation."""
+        frame=ttk.Frame(parent);frame.pack(fill='x',pady=(0,10))
+        ttk.Label(frame,text=title,style='Heading.TLabel').pack(anchor='w')
+        ttk.Label(frame,text=text,style='Sub.TLabel',wraplength=330,justify='left').pack(anchor='w')
+        return frame
+
+    def show_donations(self):
+        """Open the support dialogue: Swish code, PayPal and Ko-fi.
+
+        Every amount and address comes from :mod:`donations`, which has no
+        setter and no settings key. Nothing here is editable, and an imported
+        backup can never point a donation somewhere else.
+        """
+        existing=getattr(self,'_donation_window',None)
+        if existing is not None:
+            try:
+                existing.deiconify();existing.lift();existing.focus_force()
+                return existing
+            except tk.TclError:
+                pass
+        w=self._new_toplevel(_('Stöd PayPamin Flow'))
+        self._donation_window=w
+        w.resizable(True,True);w.configure(bg='#f3f5f8')
+        def close():
+            self._donation_window=None
+            w.destroy()
+        w.protocol('WM_DELETE_WINDOW',close)
+        form=self._dialog_form(w,padding=0)
+        head=ttk.Frame(form,padding=(26,22,26,14));head.pack(fill='x')
+        brand=ttk.Frame(head);brand.pack(anchor='w')
+        if self._brand_logo:ttk.Label(brand,image=self._brand_logo).pack(side='left',padx=(0,10))
+        elif self._header_icon:ttk.Label(brand,image=self._header_icon).pack(side='left',padx=(0,10))
+        titles=ttk.Frame(brand);titles.pack(side='left')
+        ttk.Label(titles,text=_('Stöd PayPamin Flow'),style='Title.TLabel').pack(anchor='w')
+        ttk.Label(titles,text=_('Gratis · reklamfritt · inga prenumerationer'),style='Sub.TLabel').pack(anchor='w')
+        ttk.Label(head,text=_('Appen är gratis för alla, utan reklam och utan betalvägg. Din gåva går direkt till utvecklingen — nya funktioner, testade flöden och den tid det tar att hålla allt igång. Ingenting låses upp av en gåva, och appen fungerar precis likadant utan.'),wraplength=600,justify='left').pack(anchor='w',pady=(12,0))
+        ttk.Separator(form,orient='horizontal').pack(fill='x')
+        body=ttk.Frame(form,padding=(26,16,26,12));body.pack(fill='x')
+        left=ttk.Frame(body);left.pack(side='left',fill='both',expand=True)
+        ttk.Label(left,text=_('Välj belopp'),style='Heading.TLabel').pack(anchor='w')
+        chips=ttk.Frame(left);chips.pack(anchor='w',pady=(6,0))
         self.donation_buttons={}
-        self.donation_amount=donations.default_amount()
         for value in donations.amounts():
-            button=ttk.Button(buttons,text=_('{amount} kr',amount=value),command=lambda amount=value:self._choose_donation_amount(amount))
+            button=ttk.Button(chips,text=_('{amount} kr',amount=value),command=lambda amount=value:self._choose_donation_amount(amount))
             button.pack(side='left',padx=(0,6));self.donation_buttons[value]=button
-        self.donation_amount_label=ttk.Label(chips,text='',style='Sub.TLabel')
-        self.donation_amount_label.pack(anchor='w',pady=(6,0))
-        self.donation_number_label=ttk.Label(chips,text=_('Swishnummer: {number}',number=donations.formatted_number()),style='Sub.TLabel')
-        self.donation_number_label.pack(anchor='w',pady=(2,0))
-        code=ttk.Frame(row);code.pack(side='left',padx=(24,0))
-        self.donation_canvas=tk.Canvas(code,width=self._px(132),height=self._px(132),highlightthickness=0,bd=0,background='#FFFFFF')
-        self.donation_canvas.pack()
+        self.donation_amount_label=ttk.Label(left,text='',style='Sub.TLabel')
+        self.donation_amount_label.pack(anchor='w',pady=(7,0))
+        ttk.Separator(left,orient='horizontal').pack(fill='x',pady=12)
+        paypal=self._donation_heading(left,'PayPal',_('Engångsgåva i SEK. Inget konto behövs för att betala med kort.'))
+        ttk.Button(paypal,text=_('Öppna PayPal'),command=lambda:self._open_donation_link(donations.paypal_link(self.donation_amount),'paypal')).pack(anchor='w',pady=(6,0))
+        kofi=self._donation_heading(left,'Ko-fi',_('Valfritt belopp, även månadsvis. Avsluta när du vill.'))
+        ttk.Button(kofi,text=_('Öppna Ko-fi'),command=lambda:self._open_donation_link(donations.kofi_link(),'kofi')).pack(anchor='w',pady=(6,0))
+        right=ttk.Frame(body);right.pack(side='left',padx=(26,0),anchor='n')
+        ttk.Label(right,text=_('Swish'),style='Heading.TLabel').pack(anchor='w')
+        ttk.Label(right,text=_('Skanna koden med Swish-appen. Beloppet är förifyllt och går att ändra där.'),style='Sub.TLabel',wraplength=250,justify='left').pack(anchor='w',pady=(2,8))
+        self.donation_canvas=tk.Canvas(right,width=self._donation_qr_size()[0],height=self._donation_qr_size()[0],highlightthickness=0,bd=0,background='#FFFFFF')
+        self.donation_canvas.pack(anchor='w')
+        self.donation_number_label=ttk.Label(right,text=_('Swishnummer: {number}',number=donations.formatted_number()),style='BodyBold.TLabel')
+        self.donation_number_label.pack(anchor='w',pady=(8,0))
+        ttk.Button(right,text=_('Kopiera nummer'),command=self._copy_swish_number).pack(anchor='w',pady=(4,0))
+        self.donation_copy_label=ttk.Label(right,text='',style='Sub.TLabel')
+        self.donation_copy_label.pack(anchor='w')
+        self.donation_amount=donations.default_amount()
         self._choose_donation_amount(donations.default_amount())
-        log_activity('donation','panel_opened','completed',amount=self.donation_amount)
-        return panel
-
-    def toggle_donations(self):
-        """Show or hide the inline support panel. No window and no page."""
-        panel=getattr(self,'donation_panel',None)
-        try:
-            if panel is not None and panel.winfo_ismapped():
-                panel.pack_forget();return
-        except tk.TclError:
-            pass
-        if panel is None:
-            panel=self._build_donation_panel();self.donation_panel=panel
-        anchor=getattr(self,'detail',None)
-        try:
-            if anchor is not None:panel.pack(fill='x',after=anchor)
-            else:panel.pack(fill='x')
-        except tk.TclError:
-            panel.pack(fill='x')
+        ttk.Separator(form,orient='horizontal').pack(fill='x')
+        foot=ttk.Frame(form,padding=(26,12,26,18));foot.pack(fill='x')
+        ttk.Label(foot,text=_('Låst: mottagare, länkar och belopp är fasta i koden och kan inte ändras i appen.'),style='Sub.TLabel',wraplength=600,justify='left').pack(anchor='w')
+        ttk.Label(foot,text=_('{copyright} · Skapare: {author}',copyright=APP_COPYRIGHT,author=APP_AUTHOR),style='Sub.TLabel').pack(anchor='w',pady=(6,12))
+        buttons=ttk.Frame(foot);buttons.pack(fill='x')
+        ttk.Button(buttons,text=_('Stäng'),command=close,style='Accent.TButton').pack(side='right')
+        log_activity('donation','dialogue_opened','completed',amount=self.donation_amount)
+        return w
 
     def _run_scheduled_update_check(self):
         if not ui_is_alive(self):return
@@ -2921,7 +2980,7 @@ class ReminderApp(tk.Tk):
         help_menu.add_command(label=_('Uppdatera appen'),command=lambda:self.check_for_updates(manual=True))
         help_menu.add_command(label=_('Uppdatera Python-tillägg'),command=self.update_python_addons)
         help_menu.add_command(label=_('Kortkommandon och tillgänglighet'),command=self.show_keyboard_help,accelerator='F1')
-        help_menu.add_command(label=_('Stöd appen med Swish'),command=self.toggle_donations)
+        help_menu.add_command(label=_('Stöd PayPamin Flow'),command=self.show_donations)
         help_menu.add_command(label=_('Om {app_name}',app_name=APP_NAME),command=self.show_about)
         menu.add_cascade(label=_('Hjälp'),menu=help_menu)
         self._apply_menu_icons(file_menu);self._apply_menu_icons(help_menu);self._apply_menu_icons(menu)
