@@ -61,9 +61,9 @@ class ReminderWorkflowTests(unittest.TestCase):
             write_letter=write_letter,
             refresh=Mock(),
             open_reminder_email=Mock(),
-            logo_var=SimpleNamespace(get=lambda: ""),
+            choose_reminder_logo=lambda record, level: ("", "", "(Ingen logotyp)"),
         )
-        for name in ("selected_logo_path", "logo_file_path", "invoice_logo"):
+        for name in ("logo_file_path", "invoice_logo"):
             setattr(owner, name, MethodType(getattr(self.app.ReminderApp, name), owner))
         owner.update_reminder_logo = MethodType(self.app.ReminderApp.update_reminder_logo, owner)
         return owner

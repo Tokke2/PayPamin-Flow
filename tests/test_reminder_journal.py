@@ -70,12 +70,12 @@ class ReminderJournalTests(unittest.TestCase):
 
     def owner_for(self, row, result):
         owner = SimpleNamespace(
-            logo_var=SimpleNamespace(get=lambda: ""),
+            choose_reminder_logo=lambda record, level: ("", "", "(Ingen logotyp)"),
             selected=lambda: row,
             write_letter=Mock(return_value=result),
             refresh=lambda: None,
         )
-        for name in ("selected_logo_path", "logo_file_path", "invoice_logo"):
+        for name in ("logo_file_path", "invoice_logo"):
             setattr(owner, name, MethodType(getattr(self.app.ReminderApp, name), owner))
         return owner
 

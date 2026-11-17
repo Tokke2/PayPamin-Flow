@@ -65,9 +65,9 @@ class ReminderSourceVerificationTests(unittest.TestCase):
             selected=lambda: row,
             write_letter=Mock(return_value=None),
             refresh=Mock(),
-            logo_var=SimpleNamespace(get=lambda: ""),
+            choose_reminder_logo=lambda record, level: ("", "", "(Ingen logotyp)"),
         )
-        for name in ("selected_logo_path", "logo_file_path", "invoice_logo", "confirm_ledger_p1_fallback"):
+        for name in ("logo_file_path", "invoice_logo", "confirm_ledger_p1_fallback"):
             setattr(owner, name, MethodType(getattr(self.app.ReminderApp, name), owner))
         return owner
 
@@ -187,13 +187,13 @@ class ReminderSourceVerificationTests(unittest.TestCase):
         with patch.object(self.app, "read_invoice_candidates", return_value=[wrong, matching]):
             self.assertEqual(self.app.verify_invoice_source(row), [])
 
-    def test_p1_verification_reuses_saved_zones_without_changing_logo(self):
+    def test_p1_verification_reuses_saved_zones_without_touching_the_logo(self):
         row = self.save_invoice()
         owner = self.owner_for(row)
         calls = []
 
-        def apply_zones(path, vendor, guess, page_indexes=None, update_logo=True):
-            calls.append((vendor, page_indexes, update_logo))
+        def apply_zones(path, vendor, guess, page_indexes=None):
+            calls.append((vendor, page_indexes))
             guess["amount"] = row["amount"]
             return guess
 
@@ -204,7 +204,7 @@ class ReminderSourceVerificationTests(unittest.TestCase):
             patch.object(self.app.messagebox, "askyesno", create=True, return_value=True),
         ):
             self.app.ReminderApp.make_reminder(owner)
-        self.assertEqual(calls, [("Supplier AB", (0,), False)])
+        self.assertEqual(calls, [("Supplier AB", (0,))])
         owner.write_letter.assert_called_once()
 
     def test_manual_invoice_without_pdf_keeps_existing_flow(self):

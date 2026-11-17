@@ -28,8 +28,10 @@ class ReminderEditingTests(unittest.TestCase):
         self.app.set_setting("fee_model", "statutory")
         for filename in ("old.svg", "new.svg"):
             (self.app.SVG_DIR / filename).write_text(f"<svg>{filename}</svg>", encoding="utf-8")
-        self.owner = SimpleNamespace(logo_var=SimpleNamespace(get=lambda: "old.svg"))
-        for name in ("selected_logo_path", "logo_file_path", "invoice_logo"):
+        self.owner = SimpleNamespace(
+            choose_reminder_logo=lambda record, level: ("old.svg", str((self.app.SVG_DIR / "old.svg").resolve()), "old.svg"),
+        )
+        for name in ("logo_file_path", "invoice_logo"):
             setattr(self.owner, name, MethodType(getattr(self.app.ReminderApp, name), self.owner))
         self.owner.update_reminder_logo = MethodType(self.app.ReminderApp.update_reminder_logo, self.owner)
         self.original_date = date(2026, 10, 1)
@@ -120,6 +122,34 @@ class ReminderEditingTests(unittest.TestCase):
                 (row["id"],),
             ).fetchone()
         self.assertEqual(tuple(saved), (self.original_date.isoformat(), "2026-10-10", 2, snapshot, "old.svg"))
+
+    def test_recreated_p1_uses_the_logo_stored_in_its_snapshot(self):
+        """A later P2 may use another logo; the recreated P1 keeps its own."""
+        row, original_path = self.save_p1()
+        snapshot = self.app.capture_p1_snapshot(row, 150.0, self.original_date.isoformat())
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET p1_snapshot=?,logo_file='new.svg' WHERE id=?",
+                (snapshot, row["id"]),
+            )
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        original_path.unlink()
+
+        self.owner.selected = lambda: row
+        self.owner.refresh = Mock()
+        self.owner.write_letter = Mock(return_value=original_path)
+        self.owner.update_p1_logo = MethodType(self.app.ReminderApp.update_p1_logo, self.owner)
+        self.owner.recreate_p1 = MethodType(self.app.ReminderApp.recreate_p1, self.owner)
+        with (
+            patch.object(self.app.messagebox, "askyesno", create=True, return_value=True),
+            patch.object(self.app.messagebox, "showinfo", create=True),
+        ):
+            result = self.app.ReminderApp.make_reminder(self.owner)
+
+        self.assertEqual(result, original_path)
+        args, _kwargs = self.owner.write_letter.call_args
+        self.assertEqual(args[0]["logo_file"], "old.svg")
+        self.assertEqual(args[3], str((self.app.SVG_DIR / "old.svg").resolve()))
 
     def test_replacement_logo_regenerates_original_p1_without_changing_history(self):
         row, original_path = self.save_p1()

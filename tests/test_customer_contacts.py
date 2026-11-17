@@ -174,7 +174,11 @@ class CustomerContactTests(unittest.TestCase):
         self.assertIn("första påminnelsen", body)
         self.assertIn("250", body)
         self.assertIn("kr", body)
-        self.assertIn("Tadega AB", body)
+        # The sender's mail account adds the signature, so the body must end
+        # with the last sentence and never repeat a company closure.
+        self.assertTrue(body.endswith("stämma av."))
+        self.assertNotIn("Vänliga hälsningar", body)
+        self.assertNotIn("Kind regards", body)
         self.assertNotIn("attachment", query)
 
     def test_subject_includes_supplier_company_for_p1_and_p2(self):

@@ -596,7 +596,7 @@ def init_db():
                 db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
         # The fee amounts are fixed by law and deliberately absent from settings,
         # so a value stored by an older version can never change what is charged.
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','objection_days':'5','payment_deadline_days':'5','logo_path':'','logo_file':'','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0','fee_model':DEFAULT_FEE_MODEL}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','objection_days':'5','payment_deadline_days':'5','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0','fee_model':DEFAULT_FEE_MODEL}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
         # Remove only these obsolete keys; nothing else in the database is
@@ -608,6 +608,14 @@ def init_db():
             if row is not None:
                 db.execute('DELETE FROM settings WHERE key=?',(obsolete,))
                 logger.info('Removed obsolete setting %s=%s; the fee amounts are fixed by law',obsolete,row['value'])
+        # The global export logo is gone. A logo is now chosen in the dialogue
+        # that creates the reminder and stored with that invoice instead, so an
+        # old default can never quietly brand a new document.
+        for obsolete in ('logo_file','logo_path'):
+            row=db.execute('SELECT value FROM settings WHERE key=?',(obsolete,)).fetchone()
+            if row is not None:
+                db.execute('DELETE FROM settings WHERE key=?',(obsolete,))
+                logger.info('Removed obsolete setting %s=%s; the logo is chosen when a reminder is created',obsolete,row['value'])
 
 
 def setting(key):
@@ -1422,13 +1430,13 @@ def build_reminder_email_content(row,level,recipients):
     if followup:subject=('Re: ' if get_language()=='en' else 'SV: ')+subject
     if level=='P2':
         body=_(
-            'Hej!\n\nTrots tidigare påminnelse är faktura {invoice_no}, som förföll {due_date}, fortfarande obetald. Detta är andra påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura och tillkommer inte igen. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Om betalningen inte har kommit in efter sista betalningsdag kan ärendet lämnas vidare utan ytterligare påminnelse. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.\n\nVänliga hälsningar\nTadega AB',
+            'Hej!\n\nTrots tidigare påminnelse är faktura {invoice_no}, som förföll {due_date}, fortfarande obetald. Detta är andra påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura och tillkommer inte igen. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Om betalningen inte har kommit in efter sista betalningsdag kan ärendet lämnas vidare utan ytterligare påminnelse. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.',
             invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
             fee_text=values['fee_text'],total=values['total'],deadline=deadline,
         )
     else:
         body=_(
-            'Hej!\n\nFaktura {invoice_no} förföll {due_date} och är fortfarande obetald. Detta är första påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.\n\nVänliga hälsningar\nTadega AB',
+            'Hej!\n\nFaktura {invoice_no} förföll {due_date} och är fortfarande obetald. Detta är första påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.',
             invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
             fee_text=values['fee_text'],total=values['total'],deadline=deadline,
         )
@@ -2965,6 +2973,7 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Importera reskontralista'),command=self.import_ledger_list)
         file_menu.add_command(label=_('Öppna exportmapp'),command=self.open_export_folder)
         file_menu.add_command(label=_('Öppna tryckfiler'),command=self.open_print_folder)
+        file_menu.add_command(label=_('Öppna logotypmapp'),command=self.open_svg_folder)
         file_menu.add_command(label=_('Rensa cache nu'),command=self.clear_cache_now)
         file_menu.add_separator()
         file_menu.add_command(label=_('Dölj i systemfältet'),command=self.hide_to_tray)
@@ -3024,16 +3033,7 @@ class ReminderApp(tk.Tk):
         search.pack(side='right')
         ttk.Label(controls,text=_('Sök kund/faktura:')).pack(side='right',padx=(8,6))
         self.invoice_search_var.trace_add('write',self.on_invoice_search)
-        logo_bar=ttk.Frame(self,padding=(22,0,22,8));logo_bar.pack(fill='x')
-        ttk.Label(logo_bar,text=_('Logotyp vid export:')).pack(side='left')
-        self.logo_var=tk.StringVar(value=_('(Ingen logotyp)'))
-        self.logo_combo=ttk.Combobox(logo_bar,textvariable=self.logo_var,state='readonly',width=34)
-        self.logo_combo.pack(side='left',padx=8)
-        self.logo_combo.bind('<<ComboboxSelected>>',self.on_logo_select)
-        ttk.Button(logo_bar,text=_('Uppdatera lista'),command=self.refresh_logo_choices).pack(side='left',padx=(0,6))
-        ttk.Button(logo_bar,text=_('Öppna SVG-mapp'),command=self.open_svg_folder).pack(side='left')
-        self.refresh_logo_choices()
-        wrap=ttk.Frame(self,padding=(22,0,22,12));wrap.pack(fill='both',expand=True)
+        wrap=ttk.Frame(self,padding=(22,10,22,12));wrap.pack(fill='both',expand=True)
         cols=('invoice_no','customer','due_date','amount','remaining','p1_date','p2_send_date','email_status','stage','fee')
         self.tree=ttk.Treeview(wrap,columns=cols,show='headings',selectmode='browse')
         configure_invoice_row_colors(self.tree,getattr(self,'_high_contrast',False))
@@ -3259,29 +3259,10 @@ class ReminderApp(tk.Tk):
                 if win.winfo_exists():win.destroy()
             except tk.TclError:pass
 
-    def refresh_logo_choices(self):
+    def reminder_logo_files(self):
+        """Return every SVG logo the user can choose for a reminder."""
         SVG_DIR.mkdir(exist_ok=True)
-        files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
-        choices=[_('(Ingen logotyp)')]+files
-        if not files:choices.append(_('(Lägg SVG i mappen svg)'))
-        self.logo_combo.configure(values=choices)
-        preferred=setting('logo_file') or Path(setting('logo_path')).name
-        self.logo_var.set(preferred if preferred in files else choices[0])
-
-    def on_logo_select(self,event=None,sync_json=True):
-        selected=self.logo_var.get()
-        if selected in [p.name for p in SVG_DIR.glob('*.svg')]:
-            set_setting('logo_file',selected)
-            set_setting('logo_path',str(SVG_DIR/selected))
-        else:
-            set_setting('logo_file','');set_setting('logo_path','')
-        log_activity('settings','export_logo_changed','completed',logo=self.logo_var.get(),sync_json=sync_json)
-        if sync_json:refresh_json_journal(parent=self)
-
-    def selected_logo_path(self):
-        selected=self.logo_var.get()
-        path=SVG_DIR/selected
-        return str(path.resolve()) if selected and path.is_file() else ''
+        return sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
 
     def logo_file_path(self,filename):
         """Resolve one safe supplier-logo filename inside the user's SVG folder."""
@@ -3297,7 +3278,12 @@ class ReminderApp(tk.Tk):
         return str(path),filename
 
     def invoice_logo(self,row):
-        """Return the invoice's persistent logo, then template/global fallbacks."""
+        """Return the invoice's stored logo, then its template and customer logo.
+
+        There is deliberately no global default. Every invoice carries the
+        logo it was imported, matched or edited with, and a reminder asks the
+        user which logo to print before the PDF is created.
+        """
         selected=row['logo_file'] if 'logo_file' in row.keys() else None
         if selected is not None:return self.logo_file_path(selected)
         vendor=(row['template_vendor'] or '').strip()
@@ -3310,7 +3296,86 @@ class ReminderApp(tk.Tk):
             with connect() as db:contact=get_customer_contact(db,customer)
             saved_logo=str(contact['logo_file'] or '') if contact is not None and 'logo_file' in contact.keys() else ''
             if saved_logo:return self.logo_file_path(saved_logo)
-        return self.selected_logo_path(),self.logo_var.get() or _('(Ingen logotyp)')
+        return '',_('(Ingen logotyp)')
+
+    def reminder_logo_options(self,row):
+        """Return the reminder logo choices, the preselected one and a missing file.
+
+        The invoice's own logo, its supplier template's logo or the customer's
+        saved logo is suggested. A logo the invoice points at but whose SVG file
+        is gone stays in the list, so the PDF step can report it instead of
+        quietly printing something else.
+        """
+        files=self.reminder_logo_files()
+        _path,suggested=self.invoice_logo(row)
+        no_logo=_('(Ingen logotyp)')
+        missing=suggested if suggested and suggested!=no_logo and suggested not in files else ''
+        choices=[no_logo]+([missing] if missing else [])+files
+        return choices,(suggested if suggested in choices else no_logo),missing
+
+    def choose_reminder_logo(self,row,level):
+        """Ask which logo the reminder PDF should print.
+
+        The invoice's own logo, its supplier template or the customer's saved
+        logo is preselected, so the normal case is a single click. The answer is
+        what the PDF gets, which is why no global logo selector is needed. A
+        cancelled dialogue returns ``None`` and nothing is created.
+        """
+        no_logo=_('(Ingen logotyp)')
+        choices,suggested_name,missing=self.reminder_logo_options(row)
+        state={'choices':choices,'missing':missing}
+        window=self._new_toplevel(_('Välj logotyp för {level}',level=level))
+        window.grab_set();window.resizable(True,True)
+        form=self._dialog_form(window,padding=22)
+        ttk.Label(form,text=_('Välj logotyp för {level}',level=level),style='Title.TLabel').pack(anchor='w')
+        ttk.Label(
+            form,
+            text=_('Logotypen trycks på {level}-PDF:en. Valet sparas med påminnelsen och ändrar inte fakturan. Du kan byta logotyp senare via Redigera {level}.',level=level),
+            wraplength=430,justify='left',
+        ).pack(anchor='w',pady=(6,12))
+        logo_var=tk.StringVar(value=suggested_name)
+        combo=ttk.Combobox(form,textvariable=logo_var,state='readonly',values=choices,width=42)
+        combo.pack(fill='x')
+        hint=tk.StringVar()
+        def update_hint(*_args):
+            selected=logo_var.get()
+            if selected and selected==state['missing']:
+                hint.set(_('Logotypen {logo} som hör till fakturan finns inte i mappen svg. Lägg tillbaka filen eller välj en annan logotyp.',logo=selected))
+            elif selected and selected!=no_logo:hint.set(_('Vald logotyp: {logo}',logo=selected))
+            elif len(state['choices'])>1:hint.set(_('Ingen logotyp väljs. PDF:en skapas med appens textlogotyp.'))
+            else:hint.set(_('Ingen SVG-logotyp finns i mappen svg ännu. Lägg till en fil och uppdatera listan.'))
+        logo_var.trace_add('write',update_hint);update_hint()
+        ttk.Label(form,textvariable=hint,wraplength=430,justify='left',style='Sub.TLabel').pack(anchor='w',pady=(6,0))
+        links=ttk.Frame(form);links.pack(fill='x',pady=(12,0))
+        def reload_choices():
+            # A logo added while the dialogue is open must be selectable.
+            state['choices'],_suggested,state['missing']=self.reminder_logo_options(row)
+            combo.configure(values=state['choices'])
+            if logo_var.get() not in state['choices']:logo_var.set(no_logo)
+            update_hint()
+        ttk.Button(links,text=_('Uppdatera lista'),command=reload_choices).pack(side='left')
+        ttk.Button(links,text=_('Öppna SVG-mapp'),command=self.open_svg_folder).pack(side='left',padx=(6,0))
+        choice={'value':None}
+        def accept():
+            selected=logo_var.get()
+            choice['value']=selected if selected and selected!=no_logo and selected in state['choices'] else ''
+            window.destroy()
+        def cancel():
+            window.destroy()
+        window.protocol('WM_DELETE_WINDOW',cancel)
+        window.bind('<Escape>',lambda event:cancel())
+        window.bind('<Return>',lambda event:accept())
+        buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(14,0))
+        ttk.Button(buttons,text=_('Fortsätt med {level}',level=level),command=accept,style='Accent.TButton').pack(side='left')
+        ttk.Button(buttons,text=_('Avbryt'),command=cancel).pack(side='right')
+        combo.focus_set()
+        window.wait_window()
+        if choice['value'] is None:
+            logger.info('Reminder logo choice cancelled: invoice=%s level=%s',row['id'],level)
+            return None
+        logo_path,logo_name=self.logo_file_path(choice['value'])
+        logger.info('Reminder logo chosen: invoice=%s level=%s logo=%s',row['id'],level,logo_name)
+        return choice['value'],logo_path,logo_name
 
     def open_svg_folder(self):
         SVG_DIR.mkdir(exist_ok=True)
@@ -3503,22 +3568,19 @@ class ReminderApp(tk.Tk):
         if field=='note':return clean_invoice_note(raw)
         return raw[:300]
 
-    def apply_saved_zones(self,path,vendor,guess,page_indexes=None,update_logo=True):
+    def apply_saved_zones(self,path,vendor,guess,page_indexes=None):
+        """Reuse the learned field positions for one supplier template.
+
+        The logo is deliberately not touched here. It lives with the invoice,
+        the supplier template or the customer, and a reminder asks for it
+        explicitly before the PDF is created.
+        """
         if not vendor:return guess
         try:
             import fitz
             vendor_key=vendor.strip().casefold()
             with connect() as db:
                 zones=db.execute('SELECT * FROM pdf_zones WHERE lower(vendor)=lower(?)',(vendor_key,)).fetchall()
-                logo=db.execute('SELECT logo_file FROM vendor_logos WHERE lower(vendor)=lower(?)',(vendor_key,)).fetchone()
-            if logo and update_logo:
-                logo_file=logo['logo_file']
-                if logo_file and (SVG_DIR/logo_file).is_file():
-                    self.logo_var.set(logo_file);set_setting('logo_file',logo_file);set_setting('logo_path',str(SVG_DIR/logo_file))
-                    logger.info('Matched reminder logo to invoice supplier template')
-                elif not logo_file:
-                    self.logo_var.set(_('(Ingen logotyp)'));set_setting('logo_file','');set_setting('logo_path','')
-                else:logger.warning('Matched SVG logo is missing from svg folder')
             if not zones:return guess
             applied=[]
             with fitz.open(path) as doc:
@@ -3771,9 +3833,6 @@ class ReminderApp(tk.Tk):
                         db.execute('UPDATE vendor_logos SET logo_file=?,org_number=?,bankgiro_number=? WHERE vendor=?',(logo_file,org_number,bankgiro_number,old_profile['vendor']))
                     else:
                         db.execute('INSERT INTO vendor_logos(vendor,logo_file,org_number,bankgiro_number) VALUES(?,?,?,?)',(vendor_key,logo_file,org_number,bankgiro_number))
-                if save_logo:
-                    self.logo_var.set(selected_logo if selected_logo in logo_files else _('(Ingen logotyp)'))
-                    self.on_logo_select(sync_json=False)
                 refresh_json_journal(parent=win)
                 logger.info('Updated learned invoice template: vendor=%s fields=%s logo_set=%s identity_set=%s',vendor_key,','.join(pending),save_logo,bool(org_number or bankgiro_number))
             close_preview()
@@ -4529,6 +4588,7 @@ class ReminderApp(tk.Tk):
             messagebox.showwarning(_('Inte redo'),_('Fakturan är inte redo för påminnelse. Status: {stage}',stage=_(stage)));return
 
         ledger_fallback_used=False
+        logo_choice=None
         while stage in ('P1 att skapa','P2 att skapa'):
             level='P1' if stage.startswith('P1') else 'P2'
             if level == 'P1':
@@ -4538,10 +4598,10 @@ class ReminderApp(tk.Tk):
                     zone_applier = None
                     if r['template_vendor'] and apply_zones:
                         def zone_applier(path, section, pdf_values):
-                            # Reuse learned fields without changing the selected logo.
+                            # Reuse learned fields; the logo is chosen separately.
                             return apply_zones(
                                 path, r['template_vendor'], pdf_values,
-                                page_indexes=section.page_indexes, update_logo=False,
+                                page_indexes=section.page_indexes,
                             )
                     source_differences = verify_invoice_source(r, zone_applier=zone_applier)
                 except Exception as exc:
@@ -4605,7 +4665,12 @@ class ReminderApp(tk.Tk):
                 logger.warning('P2 keeps a fee above the cap that was already charged with P1: invoice=%s fee=%s',r['id'],fee)
                 log_activity('reminder','fee_frozen_above_cap','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],fee=fee)
             template_name=r['template_vendor'] or _('Ingen matchad mall')
-            logo_path,logo_name=self.invoice_logo(r)
+            if logo_choice is None:
+                # Asked once per run: a P2 created moments later keeps the same
+                # logo, and Redigera P2 changes it afterwards if needed.
+                logo_choice=self.choose_reminder_logo(r,level)
+                if logo_choice is None:break
+            logo_file,logo_path,logo_name=logo_choice
             confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}\n{note}\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee,fee_model)),fee=money(fee,r['currency']),note=reminder_fee_note(r),template=template_name,logo=logo_name)
             for issue in assessment.warnings:
                 confirmation+='\n\n'+fee_issue_text(issue)
@@ -4623,17 +4688,20 @@ class ReminderApp(tk.Tk):
             if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
                 break
             day=date.today().isoformat()
-            snapshot=capture_reminder_snapshot(r,fee,day,level)
+            # The chosen logo is part of the reminder itself: the snapshot keeps
+            # it for history and the invoice remembers it for a regeneration.
+            reminder_row=dict(r);reminder_row['logo_file']=logo_file
+            snapshot=capture_reminder_snapshot(reminder_row,fee,day,level)
             with connect() as db:
-                if level=='P1':db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1 WHERE id=?',(day,snapshot,r['id']))
-                else:db.execute('UPDATE invoices SET p2_date=?,p2_snapshot=?,sent_count=sent_count+1 WHERE id=?',(day,snapshot,r['id']))
+                if level=='P1':db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1,logo_file=? WHERE id=?',(day,snapshot,logo_file,r['id']))
+                else:db.execute('UPDATE invoices SET p2_date=?,p2_snapshot=?,sent_count=sent_count+1,logo_file=? WHERE id=?',(day,snapshot,logo_file,r['id']))
             result=self.write_letter(r,level,fee,logo_path)
             if result:
                 latest=(r,level,result)
                 try:
                     record_reminder_journal(
                         DB_PATH,JOURNAL_PATH,r['id'],level,day,fee,current_reminder_terms(fee,invoice_customer_type(r),invoice_currency(r),invoice_fee_agreement(r),fee_model),
-                        get_language(),Path(logo_path).name if logo_path else (r['logo_file'] or ''),Path(str(result)).name,
+                        get_language(),Path(logo_path).name if logo_path else (logo_file or ''),Path(str(result)).name,
                     )
                     logger.info('Reminder journal updated: invoice=%s level=%s date=%s',r['id'],level,day)
                 except Exception as exc:
@@ -4665,7 +4733,11 @@ class ReminderApp(tk.Tk):
         confirmation=_('P1-PDF:en saknas. Skapa en ny kopia med ursprungligt P1-datum och oförändrad påminnelsehistorik?')
         if not messagebox.askyesno(_('Återskapa P1'),confirmation,parent=self):
             return None
-        logo_file=r['logo_file'] if 'logo_file' in r.keys() else None
+        # Recreate the P1 exactly as it was sent, even if a later P2 used
+        # another logo.
+        snapshot=read_reminder_snapshot(row_value(r,'p1_snapshot',''))
+        snapshot_logo=snapshot['row'].get('logo_file') if snapshot else None
+        logo_file=snapshot_logo if snapshot_logo is not None else (r['logo_file'] if 'logo_file' in r.keys() else None)
         result=self.update_p1_logo(r,logo_file,parent=self)
         if result:
             self.refresh()

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import MethodType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from test_database import load_headless_app
 
@@ -19,12 +19,10 @@ class InvoiceLogoTests(unittest.TestCase):
         self.app.init_db()
         # Logo editing is checked against the statutory amounts.
         self.app.set_setting("fee_model", "statutory")
-        for filename in ("invoice.svg", "vendor.svg", "global.svg"):
+        for filename in ("invoice.svg", "vendor.svg"):
             (self.app.SVG_DIR / filename).write_text(f"<svg>{filename}</svg>", encoding="utf-8")
-        self.app.set_setting("logo_file", "global.svg")
-        self.app.set_setting("logo_path", str(self.app.SVG_DIR / "global.svg"))
-        self.owner = SimpleNamespace(logo_var=SimpleNamespace(get=lambda: "global.svg"))
-        for name in ("selected_logo_path", "logo_file_path", "invoice_logo"):
+        self.owner = SimpleNamespace()
+        for name in ("logo_file_path", "invoice_logo", "reminder_logo_files", "reminder_logo_options"):
             setattr(self.owner, name, MethodType(getattr(self.app.ReminderApp, name), self.owner))
 
         def cleanup():
@@ -108,7 +106,7 @@ class InvoiceLogoTests(unittest.TestCase):
             saved = db.execute("SELECT logo_file,email FROM invoices WHERE invoice_no='LOGO-MANUAL'").fetchone()
         self.assertEqual(tuple(saved), ("invoice.svg", "saved@example.com"))
 
-    def test_customer_logo_precedes_global_fallback_for_legacy_invoice(self):
+    def test_customer_logo_is_used_for_legacy_invoice(self):
         self.assertIsNone(self.app.save_invoice_record(self.record("invoice.svg")))
 
         path, name = self.owner.invoice_logo({
@@ -126,7 +124,7 @@ class InvoiceLogoTests(unittest.TestCase):
             values = self.app.apply_saved_customer_contact(following)
             self.assertEqual(values["logo_file"], choice)
 
-    def test_explicit_invoice_logo_wins_over_template_and_global(self):
+    def test_explicit_invoice_logo_wins_over_template_and_customer(self):
         self.map_vendor_logo()
         path, name = self.owner.invoice_logo({"logo_file": "invoice.svg", "template_vendor": "Supplier AB"})
         self.assertEqual(path, str((self.app.SVG_DIR / "invoice.svg").resolve()))
@@ -149,35 +147,78 @@ class InvoiceLogoTests(unittest.TestCase):
         self.assertEqual(path, str((self.app.SVG_DIR / "missing.svg").resolve()))
         self.assertEqual(name, "missing.svg")
 
-    def test_global_logo_is_only_the_last_fallback(self):
-        path, name = self.owner.invoice_logo({"logo_file": None, "template_vendor": ""})
-        self.assertEqual(path, str((self.app.SVG_DIR / "global.svg").resolve()))
-        self.assertEqual(name, "global.svg")
+    def test_no_stored_choice_means_no_logo(self):
+        """Without a global selector there is no hidden default to fall back on."""
+        path, name = self.owner.invoice_logo({"logo_file": None, "template_vendor": "", "customer": ""})
+        self.assertEqual(path, "")
+        self.assertEqual(name, "(Ingen logotyp)")
 
-    def test_global_fallback_uses_the_canonical_logo_path(self):
-        canonical = self.workspace / "canonical-global.svg"
-        with patch.object(Path, "resolve", return_value=canonical):
-            path, name = self.owner.invoice_logo({"logo_file": None, "template_vendor": ""})
-        self.assertEqual(path, str(canonical))
-        self.assertEqual(name, "global.svg")
+    def test_reminder_logo_files_lists_the_svg_folder(self):
+        (self.app.SVG_DIR / "extra.svg").write_text("<svg/>", encoding="utf-8")
+        self.assertEqual(self.owner.reminder_logo_files(), ["extra.svg", "invoice.svg", "vendor.svg"])
 
-    def test_p1_export_keeps_invoice_logo_after_global_choice_changes(self):
+    def test_reminder_logo_options_preselect_the_invoice_logo(self):
+        choices, suggested, missing = self.owner.reminder_logo_options({"logo_file": "invoice.svg", "template_vendor": ""})
+        self.assertEqual(choices, ["(Ingen logotyp)", "invoice.svg", "vendor.svg"])
+        self.assertEqual(suggested, "invoice.svg")
+        self.assertEqual(missing, "")
+
+    def test_reminder_logo_options_keep_a_missing_file_visible(self):
+        choices, suggested, missing = self.owner.reminder_logo_options({"logo_file": "removed.svg", "template_vendor": ""})
+        self.assertEqual(choices, ["(Ingen logotyp)", "removed.svg", "invoice.svg", "vendor.svg"])
+        self.assertEqual(suggested, "removed.svg")
+        self.assertEqual(missing, "removed.svg")
+
+    def test_reminder_logo_options_fall_back_to_no_logo(self):
+        choices, suggested, missing = self.owner.reminder_logo_options(
+            {"logo_file": None, "template_vendor": "", "customer": ""}
+        )
+        self.assertEqual(choices, ["(Ingen logotyp)", "invoice.svg", "vendor.svg"])
+        self.assertEqual(suggested, "(Ingen logotyp)")
+        self.assertEqual(missing, "")
+
+    def test_p1_uses_the_logo_chosen_in_the_dialogue_and_stores_it(self):
         self.map_vendor_logo()
         row = self.save_invoice("invoice.svg")
         calls = []
+        chosen = []
         self.owner.selected = lambda: row
         self.owner.write_letter = lambda record, level, fee, logo_path: calls.append((record["id"], level, logo_path))
         self.owner.refresh = lambda: None
+
+        def choose(record, level):
+            chosen.append((record["id"], level))
+            return "vendor.svg", str((self.app.SVG_DIR / "vendor.svg").resolve()), "vendor.svg"
+
+        self.owner.choose_reminder_logo = choose
         with patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm:
             self.app.ReminderApp.make_reminder(self.owner)
-        self.assertEqual(calls, [(row["id"], "P1", str((self.app.SVG_DIR / "invoice.svg").resolve()))])
-        self.assertIn("invoice.svg", confirm.call_args.args[1])
-        self.assertNotIn("global.svg", confirm.call_args.args[1])
+
+        self.assertEqual(chosen, [(row["id"], "P1")])
+        self.assertEqual(calls, [(row["id"], "P1", str((self.app.SVG_DIR / "vendor.svg").resolve()))])
+        self.assertIn("vendor.svg", confirm.call_args.args[1])
         with self.app.connect() as db:
-            saved = db.execute("SELECT p1_snapshot FROM invoices WHERE id=?", (row["id"],)).fetchone()
+            saved = db.execute("SELECT p1_snapshot,logo_file FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertEqual(saved["logo_file"], "vendor.svg")
         snapshot = self.app.read_p1_snapshot(saved["p1_snapshot"])
         self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot["row"]["logo_file"], "vendor.svg")
         self.assertEqual(snapshot["terms"]["fee"], 60.0)
+
+    def test_cancelled_logo_choice_creates_no_reminder(self):
+        row = self.save_invoice(None)
+        self.owner.selected = lambda: row
+        self.owner.write_letter = Mock()
+        self.owner.refresh = lambda: None
+        self.owner.choose_reminder_logo = lambda record, level: None
+        with patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm:
+            self.assertIsNone(self.app.ReminderApp.make_reminder(self.owner))
+        confirm.assert_not_called()
+        self.owner.write_letter.assert_not_called()
+        with self.app.connect() as db:
+            saved = db.execute("SELECT p1_date,logo_file FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertFalse(saved["p1_date"])
+        self.assertIsNone(saved["logo_file"])
 
 
 if __name__ == "__main__":
