@@ -29,7 +29,7 @@ class ReminderEditingTests(unittest.TestCase):
         for filename in ("old.svg", "new.svg"):
             (self.app.SVG_DIR / filename).write_text(f"<svg>{filename}</svg>", encoding="utf-8")
         self.owner = SimpleNamespace(
-            choose_reminder_logo=lambda record, level: ("old.svg", str((self.app.SVG_DIR / "old.svg").resolve()), "old.svg"),
+            choose_reminder_details=lambda record, level: ("old.svg", str((self.app.SVG_DIR / "old.svg").resolve()), "old.svg", ""),
         )
         for name in ("logo_file_path", "invoice_logo"):
             setattr(self.owner, name, MethodType(getattr(self.app.ReminderApp, name), self.owner))

@@ -65,7 +65,7 @@ class ReminderSourceVerificationTests(unittest.TestCase):
             selected=lambda: row,
             write_letter=Mock(return_value=None),
             refresh=Mock(),
-            choose_reminder_logo=lambda record, level: ("", "", "(Ingen logotyp)"),
+            choose_reminder_details=lambda record, level: ("", "", "(Ingen logotyp)", ""),
         )
         for name in ("logo_file_path", "invoice_logo", "confirm_ledger_p1_fallback"):
             setattr(owner, name, MethodType(getattr(self.app.ReminderApp, name), owner))

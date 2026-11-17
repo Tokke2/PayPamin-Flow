@@ -70,7 +70,7 @@ class ReminderJournalTests(unittest.TestCase):
 
     def owner_for(self, row, result):
         owner = SimpleNamespace(
-            choose_reminder_logo=lambda record, level: ("", "", "(Ingen logotyp)"),
+            choose_reminder_details=lambda record, level: ("", "", "(Ingen logotyp)", ""),
             selected=lambda: row,
             write_letter=Mock(return_value=result),
             refresh=lambda: None,

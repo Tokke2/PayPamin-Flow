@@ -552,6 +552,7 @@ def init_db():
             paid_before_marking REAL, paid_marked_at TEXT NOT NULL DEFAULT '', paid_marked_source TEXT NOT NULL DEFAULT '',
             email TEXT DEFAULT '', source TEXT DEFAULT '', source_hash TEXT NOT NULL DEFAULT '', ignored INTEGER NOT NULL DEFAULT 0,
             note TEXT DEFAULT '', p1_date TEXT DEFAULT '', p2_date TEXT DEFAULT '', sent_count INTEGER NOT NULL DEFAULT 0,
+            reminder_message TEXT NOT NULL DEFAULT '',
             p1_snapshot TEXT DEFAULT '', p2_snapshot TEXT DEFAULT '',
             p1_draft_date TEXT DEFAULT '', p2_draft_date TEXT DEFAULT '',
             p1_sent_date TEXT DEFAULT '', p2_sent_date TEXT DEFAULT '', created TEXT NOT NULL)""")
@@ -565,6 +566,10 @@ def init_db():
         for column in ('paid_marked_at','paid_marked_source'):
             if column not in existing:db.execute(f"ALTER TABLE invoices ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         if 'source_hash' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''")
+        # One optional line from the sender on the reminder PDF. It lives on the
+        # invoice so the next reminder can reuse it, and in the P1/P2 snapshot
+        # so an old reminder keeps exactly the line it was sent with.
+        if 'reminder_message' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN reminder_message TEXT NOT NULL DEFAULT ''")
         if 'p1_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p1_snapshot TEXT DEFAULT ''")
         if 'p2_snapshot' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN p2_snapshot TEXT DEFAULT ''")
         for column in ('p1_draft_date','p2_draft_date','p1_sent_date','p2_sent_date'):
@@ -1410,6 +1415,38 @@ def reminder_note_term_clause(sentence):
     # "Avgift: 150 kr per påminnelse" and "fee for each reminder" in any order.
     if 'avgift' in text and ('påminnelse' in text or 'reminder' in text):return True
     return 'fee' in text and ('påminnelse' in text or 'reminder' in text or 'late payment' in text)
+
+
+# One optional line from the sender on the reminder PDF. Kept short because it
+# is printed in a bordered box on the customer's page.
+REMINDER_MESSAGE_MAX_LENGTH=160
+
+
+def reminder_message_text(value):
+    """Return the optional sender line a reminder prints, cleaned for the PDF.
+
+    An empty value means no line at all: nothing may leave a blank paragraph, a
+    label or an empty frame on the customer's page, and the P1/P2 snapshot
+    stores the value exactly as it was printed.
+    """
+    text=' '.join(str(value or '').split())
+    if not text:return ''
+    if len(text)>REMINDER_MESSAGE_MAX_LENGTH:
+        return text[:REMINDER_MESSAGE_MAX_LENGTH-1].rstrip()+'…'
+    return text
+
+
+def reminder_level_message(row,level):
+    """Return the line a stored reminder was actually printed with.
+
+    A reminder keeps its own line in the P1/P2 snapshot, so editing P2 can never
+    rewrite what P1 already said. Older reminders without a snapshot fall back
+    to the line stored on the invoice.
+    """
+    if level not in ('P1','P2'):return reminder_message_text(row_value(row,'reminder_message',''))
+    snapshot=read_reminder_snapshot(row_value(row,level.lower()+'_snapshot',''))
+    if snapshot:return reminder_message_text(snapshot['row'].get('reminder_message') or '')
+    return reminder_message_text(row_value(row,'reminder_message',''))
 
 
 def reminder_note_text(note):
@@ -3360,8 +3397,8 @@ class ReminderApp(tk.Tk):
         choices=[no_logo]+([missing] if missing else [])+files
         return choices,(suggested if suggested in choices else no_logo),missing
 
-    def choose_reminder_logo(self,row,level):
-        """Ask which logo the reminder PDF should print.
+    def choose_reminder_details(self,row,level):
+        """Ask which logo and which optional line the reminder PDF should carry.
 
         The invoice's own logo, its supplier template or the customer's saved
         logo is preselected, so the normal case is a single click. The answer is
@@ -3371,18 +3408,19 @@ class ReminderApp(tk.Tk):
         no_logo=_('(Ingen logotyp)')
         choices,suggested_name,missing=self.reminder_logo_options(row)
         state={'choices':choices,'missing':missing}
-        window=self._new_toplevel(_('Välj logotyp för {level}',level=level))
+        window=self._new_toplevel(_('Skapa {level}',level=level))
         window.grab_set();window.resizable(True,True)
         form=self._dialog_form(window,padding=22)
-        ttk.Label(form,text=_('Välj logotyp för {level}',level=level),style='Title.TLabel').pack(anchor='w')
+        ttk.Label(form,text=_('Skapa {level}',level=level),style='Title.TLabel').pack(anchor='w')
         ttk.Label(
             form,
-            text=_('Logotypen trycks på {level}-PDF:en. Valet sparas med påminnelsen och ändrar inte fakturan. Du kan byta logotyp senare via Redigera {level}.',level=level),
+            text=_('Välj logotyp och en frivillig meddelanderad innan {level}-PDF:en skapas. Valet sparas med påminnelsen och ändrar inte fakturan. Du kan ändra det senare via Redigera {level}.',level=level),
             wraplength=430,justify='left',
         ).pack(anchor='w',pady=(6,12))
+        ttk.Label(form,text=_('Logotyp'),style='BodyBold.TLabel').pack(anchor='w')
         logo_var=tk.StringVar(value=suggested_name)
         combo=ttk.Combobox(form,textvariable=logo_var,state='readonly',values=choices,width=42)
-        combo.pack(fill='x')
+        combo.pack(fill='x',pady=(3,0))
         hint=tk.StringVar()
         def update_hint(*_args):
             selected=logo_var.get()
@@ -3393,6 +3431,20 @@ class ReminderApp(tk.Tk):
             else:hint.set(_('Ingen SVG-logotyp finns i mappen svg ännu. Lägg till en fil och uppdatera listan.'))
         logo_var.trace_add('write',update_hint);update_hint()
         ttk.Label(form,textvariable=hint,wraplength=430,justify='left',style='Sub.TLabel').pack(anchor='w',pady=(6,0))
+        # The optional line. An empty field means no line at all on the PDF.
+        ttk.Label(form,text=_('Meddelanderad (frivillig)'),style='BodyBold.TLabel').pack(anchor='w',pady=(14,0))
+        message_var=tk.StringVar(value=reminder_message_text(row_value(row,'reminder_message','')))
+        message_entry=ttk.Entry(form,textvariable=message_var,width=52)
+        message_entry.pack(fill='x',pady=(3,0))
+        message_hint=tk.StringVar()
+        def update_message_hint(*_args):
+            remaining=REMINDER_MESSAGE_MAX_LENGTH-len(message_var.get())
+            if message_var.get().strip():
+                message_hint.set(_('Raden skrivs på PDF:en. {remaining} tecken kvar.',remaining=max(0,remaining)))
+            else:
+                message_hint.set(_('Lämnas fältet tomt tas raden bort helt ur PDF:en.'))
+        message_var.trace_add('write',update_message_hint);update_message_hint()
+        ttk.Label(form,textvariable=message_hint,wraplength=430,justify='left',style='Sub.TLabel').pack(anchor='w',pady=(6,0))
         links=ttk.Frame(form);links.pack(fill='x',pady=(12,0))
         def reload_choices():
             # A logo added while the dialogue is open must be selectable.
@@ -3402,10 +3454,11 @@ class ReminderApp(tk.Tk):
             update_hint()
         ttk.Button(links,text=_('Uppdatera lista'),command=reload_choices).pack(side='left')
         ttk.Button(links,text=_('Öppna SVG-mapp'),command=self.open_svg_folder).pack(side='left',padx=(6,0))
-        choice={'value':None}
+        choice={'value':None,'message':''}
         def accept():
             selected=logo_var.get()
             choice['value']=selected if selected and selected!=no_logo and selected in state['choices'] else ''
+            choice['message']=reminder_message_text(message_var.get())
             window.destroy()
         def cancel():
             window.destroy()
@@ -3418,11 +3471,18 @@ class ReminderApp(tk.Tk):
         combo.focus_set()
         window.wait_window()
         if choice['value'] is None:
-            logger.info('Reminder logo choice cancelled: invoice=%s level=%s',row['id'],level)
+            logger.info('Reminder creation cancelled in the logo dialogue: invoice=%s level=%s',row['id'],level)
             return None
         logo_path,logo_name=self.logo_file_path(choice['value'])
-        logger.info('Reminder logo chosen: invoice=%s level=%s logo=%s',row['id'],level,logo_name)
-        return choice['value'],logo_path,logo_name
+        logger.info(
+            'Reminder details chosen: invoice=%s level=%s logo=%s message=%s',
+            row['id'],level,logo_name,bool(choice['message']),
+        )
+        log_activity(
+            'reminder','details_chosen','completed',invoice_id=row['id'],invoice_no=row['invoice_no'],
+            level=level,logo=logo_name,has_message=bool(choice['message']),
+        )
+        return choice['value'],logo_path,logo_name,choice['message']
 
     def open_svg_folder(self):
         SVG_DIR.mkdir(exist_ok=True)
@@ -4714,11 +4774,13 @@ class ReminderApp(tk.Tk):
             template_name=r['template_vendor'] or _('Ingen matchad mall')
             if logo_choice is None:
                 # Asked once per run: a P2 created moments later keeps the same
-                # logo, and Redigera P2 changes it afterwards if needed.
-                logo_choice=self.choose_reminder_logo(r,level)
+                # logo and line, and Redigera P2 changes them afterwards.
+                logo_choice=self.choose_reminder_details(r,level)
                 if logo_choice is None:break
-            logo_file,logo_path,logo_name=logo_choice
+            logo_file,logo_path,logo_name,reminder_message=logo_choice
             confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}\n{note}\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee,fee_model)),fee=money(fee,r['currency']),note=reminder_fee_note(r),template=template_name,logo=logo_name)
+            if reminder_message:
+                confirmation+='\n'+_('Meddelanderad: {message}',message=reminder_message)
             for issue in assessment.warnings:
                 confirmation+='\n\n'+fee_issue_text(issue)
             if frozen_note:confirmation+='\n\n'+frozen_note
@@ -4735,14 +4797,18 @@ class ReminderApp(tk.Tk):
             if not messagebox.askyesno(_('Bekräfta påminnelse'),confirmation):
                 break
             day=date.today().isoformat()
-            # The chosen logo is part of the reminder itself: the snapshot keeps
-            # it for history and the invoice remembers it for a regeneration.
-            reminder_row=dict(r);reminder_row['logo_file']=logo_file
+            # The chosen logo and line are part of the reminder itself: the
+            # snapshot keeps them for history and the invoice remembers them for
+            # the next reminder and for a regeneration.
+            reminder_row=dict(r)
+            reminder_row['logo_file']=logo_file;reminder_row['reminder_message']=reminder_message
             snapshot=capture_reminder_snapshot(reminder_row,fee,day,level)
             with connect() as db:
-                if level=='P1':db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1,logo_file=? WHERE id=?',(day,snapshot,logo_file,r['id']))
-                else:db.execute('UPDATE invoices SET p2_date=?,p2_snapshot=?,sent_count=sent_count+1,logo_file=? WHERE id=?',(day,snapshot,logo_file,r['id']))
-            result=self.write_letter(r,level,fee,logo_path)
+                if level=='P1':
+                    db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1,logo_file=?,reminder_message=? WHERE id=?',(day,snapshot,logo_file,reminder_message,r['id']))
+                else:
+                    db.execute('UPDATE invoices SET p2_date=?,p2_snapshot=?,sent_count=sent_count+1,logo_file=?,reminder_message=? WHERE id=?',(day,snapshot,logo_file,reminder_message,r['id']))
+            result=self.write_letter(reminder_row,level,fee,logo_path)
             if result:
                 latest=(r,level,result)
                 try:
@@ -4812,18 +4878,29 @@ class ReminderApp(tk.Tk):
         choices=[_('(Ingen logotyp)')]+logo_files
         w=self._new_toplevel(_('Redigera {level}',level=level));w.grab_set();w.resizable(True,True)
         form=self._dialog_form(w,padding=20)
-        ttk.Label(form,text=_('Välj ny logotyp för {level}. PDF:en skrivs om med ursprungligt påminnelsedatum.',level=level),wraplength=390).pack(anchor='w',pady=(0,10))
+        ttk.Label(form,text=_('Välj logotyp och meddelanderad för {level}. PDF:en skrivs om med ursprungligt påminnelsedatum.',level=level),wraplength=390).pack(anchor='w',pady=(0,10))
+        ttk.Label(form,text=_('Logotyp'),style='BodyBold.TLabel').pack(anchor='w')
         logo_var=tk.StringVar(value=current_logo if current_logo in logo_files else choices[0])
         combo=ttk.Combobox(form,textvariable=logo_var,state='readonly',values=choices,width=42)
-        combo.pack(fill='x',pady=(0,12))
+        combo.pack(fill='x',pady=(3,14))
+        ttk.Label(form,text=_('Meddelanderad (frivillig)'),style='BodyBold.TLabel').pack(anchor='w')
+        message_var=tk.StringVar(value=reminder_level_message(r,level))
+        ttk.Entry(form,textvariable=message_var,width=52).pack(fill='x',pady=(3,0))
+        ttk.Label(
+            form,text=_('Lämnas fältet tomt tas raden bort helt ur PDF:en.'),
+            wraplength=390,justify='left',style='Sub.TLabel',
+        ).pack(anchor='w',pady=(6,0))
         def save():
             selected=logo_var.get()
-            result=self.update_reminder_logo(r,level,selected if selected in logo_files else '',parent=w)
+            result=self.update_reminder_logo(
+                r,level,selected if selected in logo_files else '',parent=w,
+                message=reminder_message_text(message_var.get()),
+            )
             if not result:return
             w.destroy();self.refresh()
             messagebox.showinfo(
                 _('{level} uppdaterad',level=level),
-                _('{level} har skrivits om med vald logotyp. Påminnelsedatum och historik är oförändrade.',level=level),parent=self,
+                _('{level} har skrivits om med vald logotyp och meddelanderad. Påminnelsedatum och historik är oförändrade.',level=level),parent=self,
             )
         buttons=ttk.Frame(form);buttons.pack(fill='x')
         ttk.Button(buttons,text=_('Spara och skriv om {level}',level=level),command=save,style='Accent.TButton').pack(side='left')
@@ -4836,8 +4913,13 @@ class ReminderApp(tk.Tk):
     def update_p2_logo(self,row,logo_file,parent=None):
         return self.update_reminder_logo(row,'P2',logo_file,parent=parent)
 
-    def update_reminder_logo(self,row,level,logo_file,parent=None):
-        """Regenerate P1/P2 without changing original content, date or history."""
+    def update_reminder_logo(self,row,level,logo_file,parent=None,message=None):
+        """Regenerate P1/P2 without changing original content, date or history.
+
+        ``message`` is the optional sender line. ``None`` keeps the line the
+        reminder already carried, which is what a recreation of a missing PDF
+        must do; an empty string removes it.
+        """
         if level not in ('P1','P2'):return None
         date_column=level.lower()+'_date';snapshot_column=level.lower()+'_snapshot'
         original_date=dparse(row[date_column])
@@ -4851,6 +4933,8 @@ class ReminderApp(tk.Tk):
             reminder_terms=snapshot['terms']
             snapshot_language=str(snapshot.get('language') or '')
         updated['id']=row['id'];updated['logo_file']=logo_file
+        if message is not None:updated['reminder_message']=reminder_message_text(message)
+        else:updated['reminder_message']=reminder_message_text(updated.get('reminder_message') or '')
         fee_value=reminder_terms.get('fee')
         fee=reminder_fee_for(row) if fee_value is None else float(fee_value or 0)
         logo_path,_logo_name=self.invoice_logo(updated)
@@ -4869,12 +4953,18 @@ class ReminderApp(tk.Tk):
         if not result:return None
         with connect() as db:
             if snapshot:
-                db.execute('UPDATE invoices SET logo_file=? WHERE id=?',(logo_file,row['id']))
+                db.execute(
+                    'UPDATE invoices SET logo_file=?,reminder_message=? WHERE id=?',
+                    (logo_file,updated['reminder_message'],row['id']),
+                )
             else:
                 # Older reminders have no snapshot. Freeze the values used for
                 # this successful regeneration before any later edit.
                 snapshot_text=capture_reminder_snapshot(updated,fee,original_date.isoformat(),level)
-                db.execute(f'UPDATE invoices SET logo_file=?,{snapshot_column}=? WHERE id=?',(logo_file,snapshot_text,row['id']))
+                db.execute(
+                    f'UPDATE invoices SET logo_file=?,reminder_message=?,{snapshot_column}=? WHERE id=?',
+                    (logo_file,updated['reminder_message'],snapshot_text,row['id']),
+                )
         try:
             export_reminder_journal(DB_PATH,JOURNAL_PATH)
         except Exception as exc:
@@ -4950,6 +5040,9 @@ class ReminderApp(tk.Tk):
         styles.add(ParagraphStyle(name='SmallText',parent=styles['BodyText'],fontName='Helvetica',fontSize=8.5,leading=12,spaceAfter=5))
         styles.add(ParagraphStyle(name='RightSmall',parent=styles['SmallText'],alignment=TA_RIGHT))
         styles.add(ParagraphStyle(name='AlertText',parent=styles['SmallText'],fontName='Helvetica-Bold',fontSize=9.2,leading=13,borderColor=colors.HexColor('#777777'),borderWidth=.6,borderPadding=8,spaceBefore=8,spaceAfter=10))
+        # A short personal line from the sender. A light left border marks it as
+        # a note without turning it into a warning.
+        styles.add(ParagraphStyle(name='MessageText',parent=styles['SmallText'],fontName='Helvetica-Oblique',fontSize=9.4,leading=13,borderColor=colors.HexColor('#0B2447'),borderWidth=.6,borderPadding=8,spaceBefore=7,spaceAfter=9))
         doc=SimpleDocTemplate(str(path),pagesize=A4,rightMargin=22*mm,leftMargin=22*mm,topMargin=18*mm,bottomMargin=18*mm,title=_('Betalningspåminnelse {level} {invoice_no}',level=level,invoice_no=r['invoice_no']),author='Tadega AB',creator=f'{APP_NAME} – {APP_AUTHOR}')
         story=[]
         brand=Paragraph('<font name="Times-BoldItalic" size="22">Tadega AB</font>',styles['BodyText'])
@@ -4980,6 +5073,10 @@ class ReminderApp(tk.Tk):
         deadline_text=format_long_date(deadline_date)
         story.append(Paragraph(f"<b>{escape(_('Betalning ska vara oss tillhanda senast {date}.',date=deadline_text))}</b>",styles['SmallText']))
         if level=='P2': story.append(Paragraph(escape(p2_warning),styles['AlertText']))
+        reminder_message=reminder_message_text(row_value(r,'reminder_message',''))
+        if reminder_message:
+            # An empty message adds nothing at all - no label, no frame, no gap.
+            story.append(Paragraph(escape(reminder_message),styles['MessageText']))
         raw_note=str(r['note'] or '').strip()
         note=reminder_note_text(raw_note)
         if note!=raw_note:

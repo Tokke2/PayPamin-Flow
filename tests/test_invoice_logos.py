@@ -188,9 +188,9 @@ class InvoiceLogoTests(unittest.TestCase):
 
         def choose(record, level):
             chosen.append((record["id"], level))
-            return "vendor.svg", str((self.app.SVG_DIR / "vendor.svg").resolve()), "vendor.svg"
+            return "vendor.svg", str((self.app.SVG_DIR / "vendor.svg").resolve()), "vendor.svg", ""
 
-        self.owner.choose_reminder_logo = choose
+        self.owner.choose_reminder_details = choose
         with patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm:
             self.app.ReminderApp.make_reminder(self.owner)
 
@@ -210,7 +210,7 @@ class InvoiceLogoTests(unittest.TestCase):
         self.owner.selected = lambda: row
         self.owner.write_letter = Mock()
         self.owner.refresh = lambda: None
-        self.owner.choose_reminder_logo = lambda record, level: None
+        self.owner.choose_reminder_details = lambda record, level: None
         with patch.object(self.app.messagebox, "askyesno", create=True, return_value=True) as confirm:
             self.assertIsNone(self.app.ReminderApp.make_reminder(self.owner))
         confirm.assert_not_called()

@@ -61,7 +61,7 @@ class ReminderWorkflowTests(unittest.TestCase):
             write_letter=write_letter,
             refresh=Mock(),
             open_reminder_email=Mock(),
-            choose_reminder_logo=lambda record, level: ("", "", "(Ingen logotyp)"),
+            choose_reminder_details=lambda record, level: ("", "", "(Ingen logotyp)", ""),
         )
         for name in ("logo_file_path", "invoice_logo"):
             setattr(owner, name, MethodType(getattr(self.app.ReminderApp, name), owner))
