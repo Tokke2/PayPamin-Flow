@@ -188,11 +188,11 @@ class CustomerContactTests(unittest.TestCase):
         p1 = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
         p2 = self.app.build_reminder_email_content(row, "P2", ["first@example.com"])
 
-        self.assertEqual(p1["subject"], "Faktura 6471 – betalningspåminnelse - Laxå Glasmästeri")
-        self.assertEqual(p2["subject"], "SV: Faktura 6471 – betalningspåminnelse - Laxå Glasmästeri")
+        self.assertEqual(p1["subject"], "Faktura 6471 – betalningspåminnelse / Laxå Glasmästeri")
+        self.assertEqual(p2["subject"], "SV: Faktura 6471 – betalningspåminnelse / Laxå Glasmästeri")
         self.app.set_language("en")
         english = self.app.build_reminder_email_content(row, "P2", ["first@example.com"])
-        self.assertEqual(english["subject"], "Re: Invoice 6471 – payment reminder - Laxå Glasmästeri")
+        self.assertEqual(english["subject"], "Re: Invoice 6471 – payment reminder / Laxå Glasmästeri")
 
     def test_email_subject_uses_snapshot_company_after_later_vendor_change(self):
         row = self.record(invoice_no="6471", email="first@example.com")
@@ -204,7 +204,7 @@ class CustomerContactTests(unittest.TestCase):
 
         content = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
 
-        self.assertEqual(content["subject"], "Faktura 6471 – betalningspåminnelse - Laxå Glasmästeri")
+        self.assertEqual(content["subject"], "Faktura 6471 – betalningspåminnelse / Laxå Glasmästeri")
         self.assertNotIn("Annat Företag", content["subject"])
 
     def test_email_subject_uses_only_unique_logo_supplier_fallback(self):
@@ -217,7 +217,7 @@ class CustomerContactTests(unittest.TestCase):
             )
 
         content = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
-        self.assertEqual(content["subject"], "Faktura 6471 – betalningspåminnelse - Laxå Glasmästeri")
+        self.assertEqual(content["subject"], "Faktura 6471 – betalningspåminnelse / Laxå Glasmästeri")
         self.assertNotIn("Testkund", content["subject"])
 
         with self.app.connect() as db:
@@ -227,6 +227,51 @@ class CustomerContactTests(unittest.TestCase):
             )
         ambiguous = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
         self.assertEqual(ambiguous["subject"], "Faktura 6471 – betalningspåminnelse")
+
+    def test_email_subject_names_the_logo_chosen_for_the_reminder(self):
+        row = self.record(invoice_no="6475", email="first@example.com")
+        row["logo_file"] = "Limoeurope.svg"
+
+        content = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
+
+        self.assertEqual(content["subject"], "Faktura 6475 – betalningspåminnelse / Limoeurope")
+
+    def test_email_subject_prefers_the_chosen_logo_over_a_stale_supplier_template(self):
+        row = self.record(invoice_no="6475", email="first@example.com")
+        row["template_vendor"] = "Annat Företag AB"
+        row["logo_file"] = "Limoeurope.svg"
+        with self.app.connect() as db:
+            db.execute(
+                "INSERT INTO vendor_logos(vendor,logo_file) VALUES(?,?)",
+                ("Limoeurope AB", "Limoeurope.svg"),
+            )
+
+        content = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
+
+        self.assertEqual(content["subject"], "Faktura 6475 – betalningspåminnelse / Limoeurope AB")
+        self.assertNotIn("Annat Företag", content["subject"])
+
+    def test_logo_file_name_names_the_supplier_unless_it_is_purely_generic(self):
+        self.assertEqual(self.app.reminder_logo_company("Limoeurope.svg"), "Limoeurope")
+        self.assertEqual(self.app.reminder_logo_company("Limoeurope logo.svg"), "Limoeurope")
+        self.assertEqual(self.app.reminder_logo_company("logo-Limoeurope.svg"), "Limoeurope")
+        self.assertEqual(self.app.reminder_logo_company("Limoeurope_2026.svg"), "Limoeurope")
+        self.assertEqual(self.app.reminder_logo_company("logo.svg"), "")
+        self.assertEqual(self.app.reminder_logo_company("Logotyp 2026.svg"), "")
+        self.assertEqual(self.app.reminder_logo_company("Standard Textil AB.svg"), "Standard Textil AB")
+        self.assertEqual(self.app.reminder_logo_company(""), "")
+
+    def test_email_subject_ignores_generic_logo_file_names(self):
+        row = self.record(invoice_no="6475", email="first@example.com")
+        row["template_vendor"] = "Laxå Glasmästeri"
+        row["logo_file"] = "logo.svg"
+
+        content = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
+        self.assertEqual(content["subject"], "Faktura 6475 – betalningspåminnelse / Laxå Glasmästeri")
+
+        row["template_vendor"] = ""
+        without_template = self.app.build_reminder_email_content(row, "P1", ["first@example.com"])
+        self.assertEqual(without_template["subject"], "Faktura 6475 – betalningspåminnelse")
 
     def test_firm_email_texts_require_full_payment_by_deadline_without_interest(self):
         row = self.record(email="first@example.com")

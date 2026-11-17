@@ -1321,22 +1321,65 @@ def money(x,currency='SEK'):
 REMINDER_BCC = 'rl@tadega.com'
 
 
-def reminder_email_company(row):
-    """Return the supplier linked to the reminder, never the customer or a guess."""
-    vendor=str(row.get('template_vendor') or '').strip()
-    if vendor:return vendor
-    logo_file=str(row.get('logo_file') or '').strip()
-    if not logo_file:return ''
+# Words in a logo file name that say nothing about the supplier. A file called
+# "logo.svg" or "Logotyp 2026.svg" must never become a company name in a
+# customer's subject line. A leading filler such as "Standard" is kept, because
+# it may be the first word of a real company name.
+LOGO_NOISE_WORDS=frozenset({
+    'logo','logotyp','logotype','logga','brand','emblem','icon','ikon','symbol',
+    'bild','image',
+})
+LOGO_FILLER_WORDS=frozenset({
+    'invoice','faktura','reminder','paminnelse','påminnelse','default','standard',
+    'ny','new','gammal','old',
+})
+GENERIC_LOGO_WORDS=LOGO_NOISE_WORDS|LOGO_FILLER_WORDS
+
+
+def reminder_logo_company(logo_file):
+    """Return the supplier a reminder's chosen logo belongs to.
+
+    The logo chosen for the reminder decides the name in the subject, because
+    that is what the user picked in the logo dialogue. A supplier saved for the
+    file wins, since it is a name the user typed. Without one, the file name is
+    used as it stands — "Limoeurope.svg" becomes "Limoeurope" — unless it is a
+    word such as "logo" that names no supplier at all.
+    """
+    name=Path(str(logo_file or '').strip()).name
+    if not name:return ''
     try:
         with connect() as db:
-            rows=db.execute('SELECT vendor FROM vendor_logos WHERE logo_file=?',(Path(logo_file).name,)).fetchall()
+            rows=db.execute('SELECT vendor FROM vendor_logos WHERE logo_file=?',(name,)).fetchall()
     except sqlite3.Error:
-        logger.exception('Could not resolve supplier name for reminder email subject: logo=%s',logo_file)
-        return ''
+        logger.exception('Could not resolve supplier name for reminder email subject: logo=%s',name)
+        rows=[]
     companies={str(item['vendor'] or '').strip() for item in rows if str(item['vendor'] or '').strip()}
     if len(companies)==1:return next(iter(companies))
-    if companies:logger.warning('Reminder email supplier logo is ambiguous: logo=%s matches=%d',logo_file,len(companies))
-    return ''
+    if companies:
+        logger.warning('Reminder email supplier logo is ambiguous: logo=%s matches=%d',name,len(companies))
+        return ''
+    words=[word for word in re.split(r'[\s._-]+',Path(name).stem) if word]
+    # "Limoeurope logo 2026" is still the Limoeurope logo: drop the noise and
+    # the year from the ends, never from the middle of a name.
+    while len(words)>1 and (words[-1].casefold() in GENERIC_LOGO_WORDS or words[-1].isdigit()):
+        words.pop()
+    while len(words)>1 and words[0].casefold() in LOGO_NOISE_WORDS:words.pop(0)
+    stem=' '.join(words).strip()
+    if not stem or stem.casefold() in GENERIC_LOGO_WORDS:return ''
+    return stem
+
+
+def reminder_email_company(row):
+    """Return the supplier named in the reminder's subject line.
+
+    The logo chosen for the reminder comes first: choosing the Limoeurope logo
+    is the user saying which company the reminder is sent from, even when the
+    invoice's supplier template still points somewhere else. Without a logo the
+    saved supplier template is used, and the customer's name is never used.
+    """
+    logo_company=reminder_logo_company(row.get('logo_file'))
+    if logo_company:return logo_company
+    return str(row.get('template_vendor') or '').strip()
 
 
 # A reminder must never repeat a fee or interest clause from the invoice text.
@@ -1426,7 +1469,7 @@ def build_reminder_email_content(row,level,recipients):
     }
     subject=_('Faktura {invoice_no} – betalningspåminnelse',invoice_no=invoice_no)
     company=reminder_email_company(email_row)
-    if company:subject+=f' - {company}'
+    if company:subject+=f' / {company}'
     if followup:subject=('Re: ' if get_language()=='en' else 'SV: ')+subject
     if level=='P2':
         body=_(
@@ -2243,6 +2286,10 @@ class ReminderApp(tk.Tk):
         ttk.Label(form,text=SUPPORTED_PLATFORMS,style='Sub.TLabel').pack(pady=(5,16))
         ttk.Label(form,text=APP_COPYRIGHT).pack()
         ttk.Label(form,text=_('Skapare: {author}',author=APP_AUTHOR)).pack(pady=(4,0))
+        ttk.Label(
+            form,text=_('Gratis att använda privat och kommersiellt. Ändringar kräver skriftligt tillstånd. Se LICENSE.'),
+            wraplength=430,justify='center',style='Sub.TLabel',
+        ).pack(pady=(10,0))
         ttk.Button(form,text=_('Stäng'),command=w.destroy,style='Accent.TButton').pack(pady=(20,0))
 
     def _donation_qr_size(self):

@@ -57,6 +57,9 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "update_checker.py",
     "update_installer.py",
     "requirements.txt",
+    # The terms of use travel inside the package, not as a web page.
+    "LICENSE",
+    "NOTICE",
     # One start file per platform, all shipped and all required.
     "start_paypamin_flow.command",
     "start_paypamin_flow.sh",
@@ -114,6 +117,10 @@ def is_python_package_file(filename: str) -> bool:
     ):
         return False
     if len(path.parts) == 1:
+        # The licence and the copyright notice have no file extension and must
+        # travel with every copy, so they are allowed by their exact names.
+        if filename in {"LICENSE", "NOTICE"}:
+            return True
         # .command is the double-clickable start file on macOS. A Windows .bat
         # is deliberately not accepted: start_paypamin_flow.vbs is the one
         # Windows start file, and no separate installer script is shipped.

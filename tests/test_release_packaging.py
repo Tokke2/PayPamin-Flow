@@ -28,6 +28,20 @@ SPEC.loader.exec_module(packaging)
 
 
 class ReleasePackagingTests(unittest.TestCase):
+    def test_licence_and_notice_ship_with_every_package(self):
+        """The terms of use must travel with the app, not live on a web page."""
+        for name in ("LICENSE", "NOTICE"):
+            self.assertIn(name, PYTHON_PACKAGE_REQUIRED_FILES)
+            self.assertTrue(is_python_package_file(name), name)
+
+    def test_licence_allows_free_private_and_commercial_use(self):
+        licence = " ".join((ROOT / "LICENSE").read_text(encoding="utf-8").split())
+        self.assertIn("gratis, både privat och i kommersiell verksamhet", licence)
+        self.assertIn("Du får inte ändra", licence)
+        self.assertIn("utan skriftligt tillstånd", licence)
+        self.assertIn("free of charge, both privately and commercially", licence)
+        self.assertIn("Rickard Längkvist", licence)
+
     def test_all_platforms_use_one_python_package(self):
         self.assertEqual(set(RELEASE_ASSET_NAMES.values()), {PYTHON_RELEASE_ASSET})
         self.assertEqual(PYTHON_RELEASE_ASSET, "PayPamin-Flow-Python.zip")
@@ -125,6 +139,9 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("ui_icons.py", names)
                 self.assertIn("assets/paypamin_flow.ico", names)
                 self.assertIn("assets/paypamin_flow.icns", names)
+                self.assertIn("LICENSE", names)
+                self.assertIn("NOTICE", names)
+                self.assertIn("LICENSE", manifest["files"])
                 self.assertIn("assets/paypamin_logo.png", names)
                 self.assertIn("assets/paypamin_logo.svg", names)
                 # Print files travel inside the package; nothing is a separate download.

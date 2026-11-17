@@ -1,0 +1,76 @@
+PayPamin Flow – användningslicens / Licence to use
+Copyright © 2026 Rickard Längkvist, Tadega AB
+Skapare / Creator: Rickard Längkvist
+
+Den här licensen gäller för PayPamin Flow och all kod som följer med
+programmet. Läs den svenska texten först; den engelska texten är en översättning.
+This licence covers PayPamin Flow and the code that ships with it. The Swedish
+text comes first; the English text below is a translation of the same terms.
+
+SVENSKA
+
+1. Gratis användning
+   Du får använda PayPamin Flow gratis, både privat och i kommersiell
+   verksamhet. Ingen avgift, prenumeration eller betalvägg gäller, och inga
+   funktioner låses upp av en betalning.
+
+2. Inga ändringar utan tillstånd
+   Du får inte ändra, anpassa, översätta eller på annat sätt bearbeta
+   programmet, och inte heller sprida en ändrad eller bearbetad version, utan
+   skriftligt tillstånd från rättighetsinnehavaren. Att skapa egna logotyper,
+   fakturor och andra datafiler med programmet är vanlig användning och inte en
+   ändring av programmet.
+
+3. Upphovsrätt och notiser
+   Programmet och dess källkod tillhör Rickard Längkvist, Tadega AB. Copyright-,
+   licens- och NOTICE-notisen ska följa med varje kopia av programmet. Du får
+   inte ta bort dem eller uppge dig vara upphovsman till programmet.
+
+4. Ingen garanti
+   Programmet tillhandahålls i befintligt skick, utan garanti av något slag, i
+   den utsträckning lagen tillåter. Rättighetsinnehavaren ansvarar inte för
+   förlorad data, utebliven betalning eller andra skador som kan uppstå genom
+   användning av programmet. Kontrollera alltid fakturor, avgifter och
+   påminnelser innan de skickas.
+
+5. Tredjepartsbibliotek
+   Programmet använder separata Python-bibliotek, till exempel reportlab,
+   PyMuPDF, Pillow och opencv. De installeras för sig och har egna licenser som
+   gäller för dem. Inget i den här licensen begränsar dina rättigheter enligt
+   dessa licenser.
+
+6. Övriga rättigheter
+   Rättigheter som inte uttryckligen ges här tillhör rättighetsinnehavaren.
+
+ENGLISH
+
+1. Free use
+   You may use PayPamin Flow free of charge, both privately and commercially.
+   No fee, subscription or paywall applies, and no feature is unlocked by a
+   payment.
+
+2. No changes without permission
+   You may not modify, adapt, translate or otherwise alter the software, or
+   distribute a modified or altered version, without written permission from
+   the copyright holder. Creating your own logos, invoices and other data files
+   with the software is ordinary use, not a modification of the software.
+
+3. Copyright and notices
+   The software and its source code belong to Rickard Längkvist, Tadega AB.
+   The copyright, licence and NOTICE notices must accompany every copy of the
+   software. You may not remove them or claim authorship of the software.
+
+4. No warranty
+   The software is provided "as is", without warranty of any kind, to the extent
+   permitted by law. The copyright holder is not liable for lost data, missing
+   payments or other damage that may arise from using the software. Always
+   review invoices, fees and reminders before sending them.
+
+5. Third-party libraries
+   The software uses separate Python libraries, for example reportlab, PyMuPDF,
+   Pillow and opencv. They are installed separately and carry their own
+   licences, which apply to them. Nothing in this licence limits your rights
+   under those licences.
+
+6. Other rights
+   Rights not expressly granted here belong to the copyright holder.

@@ -61,6 +61,7 @@ _ENGLISH = {
     "Lokal app för fakturor och betalningspåminnelser": "Local app for invoices and payment reminders",
     "Version {version}": "Version {version}",
     "Skapare: {author}": "Creator: {author}",
+    "Gratis att använda privat och kommersiellt. Ändringar kräver skriftligt tillstånd. Se LICENSE.": "Free to use privately and commercially. Changes require written permission. See LICENSE.",
     # Donations
     "Stöd PayPamin Flow": "Support PayPamin Flow",
     "Gratis · reklamfritt · inga prenumerationer": "Free · ad-free · no subscriptions",
