@@ -491,8 +491,6 @@ xvfb-run -a -s "-screen 0 1280x900x24" python -m unittest discover -s tests -v
 Numret visas också i klartext (`0721-817 177`) med en **Kopiera nummer**-knapp, för den som hellre swishar manuellt. Ingen betalning sker i appen — den visar bara koden och öppnar dina egna sidor. Val av belopp, kopiering och att dialogen öppnas loggas som vanliga aktiviteter (`donation`), aldrig med betaluppgifter.
 
 ## Begränsningar
-## Begränsningar
-## Begränsningar
 
 - PDF-layout och OCR kan misstolka fält. Kontrollera fakturan före godkännande. Reskontraimporten kräver textbaserad PDF och stoppar vid oläsbara rader eller avvikande kontrollsummor.
 - Betalstatus hämtas inte direkt via Fortnox. Den kan avstämmas med bekräftade, kompletta reskontralistor; kontrollera alltid importsammanfattningen och verifiera betalningar före utskick.
