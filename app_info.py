@@ -38,6 +38,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "fee_rules.py",
     "i18n.py",
     "import_watcher.py",
+    "invoice_export.py",
     "invoice_parser.py",
     "invoice_trash.py",
     "learning.py",

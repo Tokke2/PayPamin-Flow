@@ -50,6 +50,7 @@ from customer_contacts import (
     normalize_email_addresses, parse_email_addresses, save_customer_contact,
 )
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
+import invoice_export
 import invoice_trash
 from invoice_parser import (
     clean_invoice_note, extract_invoice_sections, normalize_date,
@@ -1778,6 +1779,70 @@ def invoice_search_summary(shown,total,query='',elsewhere=0):
     return _('Inga träffar för ”{query}”',query=query)
 
 
+def invoice_view(flt,query='',sort_column='due_date',sort_reverse=False):
+    """Return the invoices exactly as the list shows them right now.
+
+    One place answers "what is in the list": the open tab, the search and the
+    order. The table and the CSV export both read this, so an export can never
+    disagree with what the user is looking at.
+    """
+    with connect() as db: rows=db.execute('SELECT * FROM invoices ORDER BY due_date').fetchall()
+    terms=split_search_query(query)
+
+    def in_view(r,stage,remain):
+        if flt=='current':return not (r['ignored'] or stage in ('Avslutad','Kronofogden – granska'))
+        if flt=='history':return bool(r['ignored'] or remain<=0.005)
+        if flt=='ignored':return bool(r['ignored'])
+        if flt=='debt_review':return stage=='Kronofogden – granska'
+        return True
+
+    prepared=[]
+    for r in rows:
+        stage=next_stage(r)
+        remain=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
+        prepared.append((r,stage,remain,invoice_search_fields(r,stage,remain)))
+    visible=[];in_view_total=0
+    for r,stage,remain,fields in prepared:
+        if not in_view(r,stage,remain):continue
+        in_view_total+=1
+        if not invoice_matches_search(fields,terms):continue
+        visible.append((r,stage,remain))
+    # A search also reports hits outside the open tab, so nobody concludes
+    # that an invoice is gone when it is only in another view.
+    elsewhere=0
+    if terms:
+        elsewhere=sum(
+            1 for r,stage,remain,fields in prepared
+            if not in_view(r,stage,remain) and invoice_matches_search(fields,terms)
+        )
+    def sort_key(item):
+        r,stage,remain=item
+        if sort_column=='remaining':return remain
+        if sort_column=='amount':return float(r['amount'] or 0)
+        if sort_column=='fee':return charged_fee_for(r) if r['p1_date'] else -1.0
+        if sort_column=='invoice_no':
+            value=str(r['invoice_no'] or '')
+            return (0,int(value)) if value.isdigit() else (1,value.casefold())
+        if sort_column=='stage':return _(stage).casefold()
+        if sort_column=='email_status':return reminder_email_status(r).casefold()
+        if sort_column=='p2_send_date':return str(r['p2_date'] or '')
+        if sort_column in r.keys():return str(r[sort_column] or '').casefold()
+        return ''
+    visible.sort(key=sort_key,reverse=sort_reverse)
+    return visible,in_view_total,elsewhere
+
+
+def current_view_options(app):
+    """Read the tab, search and sort order that the window is showing."""
+    search_var=getattr(app,'invoice_search_var',None)
+    query=search_var.get().strip() if search_var is not None else ''
+    return (
+        getattr(app,'current_filter_key','current'),query,
+        getattr(app,'invoice_sort_column','due_date'),
+        getattr(app,'invoice_sort_reverse',False),
+    )
+
+
 def due_reminder_invoices():
     """Return unpaid, reviewed invoices whose normal workflow is ready for P1/P2."""
     with connect() as db:
@@ -3322,6 +3387,7 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Importera JSON-journal'),command=self.import_journal)
         file_menu.add_command(label=_('Importera reskontralista'),command=self.import_ledger_list)
         file_menu.add_command(label=_('Öppna exportmapp'),command=self.open_export_folder)
+        file_menu.add_command(label=_('Exportera listan till CSV'),command=self.export_invoices_csv)
         file_menu.add_command(label=_('Öppna tryckfiler'),command=self.open_print_folder)
         file_menu.add_command(label=_('Öppna logotypmapp'),command=self.open_svg_folder)
         file_menu.add_command(label=_('Rensa cache nu'),command=self.clear_cache_now)
@@ -3465,6 +3531,59 @@ class ReminderApp(tk.Tk):
         ttk.Label(self,text=_('{copyright} · Skapare: {author}',copyright=APP_COPYRIGHT,author=APP_AUTHOR),padding=(24,0,24,9),style='Sub.TLabel').pack(fill='x')
         self._finalize_window_actions(self,main_window=True)
 
+    def export_records(self,visible):
+        """Turn the visible rows into the plain values a CSV file holds."""
+        records=[]
+        for r,stage,remain in visible:
+            records.append({
+                'invoice_no':r['invoice_no'],
+                'customer':r['customer'],
+                'invoice_date':r['invoice_date'] or '',
+                'due_date':r['due_date'],
+                'amount':float(r['amount'] or 0),
+                'currency':r['currency'],
+                'paid':float(r['paid'] or 0),
+                'balance':remain,
+                'stage':(_('IGNORERAD')+' · ' if r['ignored'] else '')+_(stage),
+                'p1_date':r['p1_date'] or '',
+                'p2_date':r['p2_date'] or '',
+                'fee':charged_fee_for(r) if r['p1_date'] else '',
+                'email_status':reminder_email_status(r),
+                'note':r['note'] or '',
+            })
+        return records
+
+    def export_invoices_csv(self):
+        """Write the list as it looks right now to a CSV file."""
+        view=invoice_view(*current_view_options(self))
+        visible=view[0]
+        if not visible:
+            messagebox.showinfo(_('Inget att exportera'),_('Listan är tom, så det finns ingenting att exportera.'),parent=self)
+            return None
+        selected=filedialog.asksaveasfilename(
+            parent=self,title=_('Exportera till CSV'),initialdir=str(EXPORT_DIR),
+            initialfile=invoice_export.suggested_name(),defaultextension='.csv',
+            filetypes=[(_('CSV-fil'),'*.csv'),(_('Alla filer'),'*.*')],
+        )
+        if not selected:return None
+        records=self.export_records(visible)
+        columns=[(key,_(label)) for key,label in invoice_export.COLUMNS]
+        try:
+            written=invoice_export.write(selected,records,columns)
+        except OSError as exc:
+            logger.error('CSV export failed: %s',exc)
+            messagebox.showerror(_('Kunde inte exportera'),_('CSV-filen kunde inte skrivas: {error}',error=exc),parent=self)
+            return None
+        log_activity('invoice','csv_exported','completed',count=written,path=str(selected))
+        if written==1:summary=_('1 faktura exporterad till:\n{path}',path=selected)
+        else:summary=_('{count} fakturor exporterade till:\n{path}',count=written,path=selected)
+        messagebox.showinfo(
+            _('CSV-filen är klar'),
+            summary+'\n\n'+_('Filen innehåller listan som den ser ut nu: flik, sökning och sortering.'),
+            parent=self,
+        )
+        return Path(selected)
+
     def refresh(self):
         if not ui_is_alive(self):
             logger.info('Invoice list refresh skipped because the window is closing')
@@ -3474,53 +3593,8 @@ class ReminderApp(tk.Tk):
         except tk.TclError:
             logger.info('Invoice list refresh skipped because the tree view was destroyed')
             return
-        with connect() as db: rows=db.execute('SELECT * FROM invoices ORDER BY due_date').fetchall()
-        flt=self.current_filter_key
-        search_var=getattr(self,'invoice_search_var',None)
-        query=search_var.get().strip() if search_var is not None else ''
-        terms=split_search_query(query)
-
-        def in_view(r,stage,remain):
-            if flt=='current':return not (r['ignored'] or stage in ('Avslutad','Kronofogden – granska'))
-            if flt=='history':return bool(r['ignored'] or remain<=0.005)
-            if flt=='ignored':return bool(r['ignored'])
-            if flt=='debt_review':return stage=='Kronofogden – granska'
-            return True
-
-        prepared=[]
-        for r in rows:
-            stage=next_stage(r)
-            remain=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
-            prepared.append((r,stage,remain,invoice_search_fields(r,stage,remain)))
-        visible=[];in_view_total=0
-        for r,stage,remain,fields in prepared:
-            if not in_view(r,stage,remain):continue
-            in_view_total+=1
-            if not invoice_matches_search(fields,terms):continue
-            visible.append((r,stage,remain))
-        # A search also reports hits outside the open tab, so nobody concludes
-        # that an invoice is gone when it is only in another view.
-        elsewhere=0
-        if terms:
-            elsewhere=sum(
-                1 for r,stage,remain,fields in prepared
-                if not in_view(r,stage,remain) and invoice_matches_search(fields,terms)
-            )
-        sort_column=getattr(self,'invoice_sort_column','due_date')
-        def sort_key(item):
-            r,stage,remain=item
-            if sort_column=='remaining':return remain
-            if sort_column=='amount':return float(r['amount'] or 0)
-            if sort_column=='fee':return charged_fee_for(r) if r['p1_date'] else -1.0
-            if sort_column=='invoice_no':
-                value=str(r['invoice_no'] or '')
-                return (0,int(value)) if value.isdigit() else (1,value.casefold())
-            if sort_column=='stage':return _(stage).casefold()
-            if sort_column=='email_status':return reminder_email_status(r).casefold()
-            if sort_column=='p2_send_date':return str(r['p2_date'] or '')
-            if sort_column in r.keys():return str(r[sort_column] or '').casefold()
-            return ''
-        visible.sort(key=sort_key,reverse=getattr(self,'invoice_sort_reverse',False))
+        flt,query,sort_column,sort_reverse=current_view_options(self)
+        visible,in_view_total,elsewhere=invoice_view(flt,query,sort_column,sort_reverse)
         for r,stage,remain in visible:
             fee=money(charged_fee_for(r),r['currency']) if r['p1_date'] else '—'
             p1_display=r['p1_date'] or '—'
