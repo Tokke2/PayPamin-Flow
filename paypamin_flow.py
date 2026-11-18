@@ -1335,6 +1335,15 @@ DONATION_SUPPORT_POINTS = (
     ('Oberoende', 'Ingen annonsör, ingen prenumeration och ingen som bestämmer över din data.'),
 )
 DONATION_TRUST_LINE = 'Gåvan är helt frivillig. Appen är lika komplett utan den, och inget låses upp av en gåva.'
+# The support page's trust row, in the app's own words. Every claim is true here:
+# nothing is fetched from the internet while donating, the receipt is issued by
+# the payment service, and the app sends no usage data anywhere.
+DONATION_TRUST_POINTS = (
+    'Säker betalning hos betaltjänsten',
+    'Kvitto direkt från Swish, PayPal eller Ko-fi',
+    'Ingen spårning – appen skickar inga användardata',
+    'Svensk utvecklare',
+)
 
 
 # Words in a logo file name that say nothing about the supplier. A file called
@@ -2556,6 +2565,8 @@ class ReminderApp(tk.Tk):
             ttk.Label(column,text=_(title),style='CardBody.TLabel').pack(anchor='w',fill='x')
             point=ttk.Label(column,text=_(text),style='CardSub.TLabel',wraplength=155,justify='left')
             point.pack(anchor='w',fill='x');self._wrap_to_width(point,minimum=110)
+        trust_points=ttk.Label(why,text=' · '.join(_(item) for item in DONATION_TRUST_POINTS),style='CardSub.TLabel',justify='left')
+        trust_points.pack(anchor='w',fill='x',pady=(10,0));self._wrap_to_width(trust_points,minimum=200)
         ttk.Separator(form,orient='horizontal').pack(fill='x',pady=(12,0))
         foot=ttk.Frame(form,padding=(24,10,24,16));foot.pack(fill='x')
         trust=ttk.Label(foot,text=_(DONATION_TRUST_LINE),style='Sub.TLabel',wraplength=660,justify='left')

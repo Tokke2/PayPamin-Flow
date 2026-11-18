@@ -418,6 +418,30 @@ class DonationDialogueLayoutTests(unittest.TestCase):
                 self.assertTrue(translated.strip())
                 self.assertNotEqual(translated, original)
 
+    def test_the_trust_row_is_honest_and_translated(self):
+        self.assertEqual(len(self.app.DONATION_TRUST_POINTS), 4)
+        for line in self.app.DONATION_TRUST_POINTS:
+            self.assertTrue(line.strip())
+        i18n.set_language("en")
+        self.addCleanup(i18n.set_language, "sv")
+        for line in self.app.DONATION_TRUST_POINTS:
+            with self.subTest(line=line):
+                self.assertNotEqual(i18n._(line), line)
+
+    def test_the_support_lives_only_in_the_app(self):
+        """No separate support page and no link aside from the two channels."""
+        source = (ROOT / "paypamin_flow.py").read_text(encoding="utf-8")
+        for marker in ("tokke2.github.io", "stod.html", "Mitt Maskinkök"):
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, source)
+        start = source.index("    def show_donations(self):")
+        end = source.index("    def _run_scheduled_update_check(self):")
+        dialogue = source[start:end]
+        opened = [line.strip() for line in dialogue.splitlines() if "_open_donation_link(" in line]
+        self.assertEqual(len(opened), 2)
+        for line in opened:
+            self.assertIn("donations.", line)
+
     def test_the_swish_code_is_drawn_only_once(self):
         """One canvas, in the Swish card, and no code anywhere else."""
         source = (ROOT / "paypamin_flow.py").read_text(encoding="utf-8")

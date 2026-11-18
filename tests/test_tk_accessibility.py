@@ -275,5 +275,40 @@ class RealTkAccessibilityTests(unittest.TestCase):
         self.assertEqual(text.cget("highlightcolor"), FOCUS)
 
 
+    def test_the_support_dialogue_styles_exist_on_a_real_toolkit(self):
+        """The card and channel styles must be usable, not just configured.
+
+        A style name that is configured but never registered, or a colour that
+        the theme refuses, raises TclError the moment the dialogue is built.
+        This test builds the real widgets on the real clam theme.
+        """
+        style = AccessibleStyle(ttk.Style(self.root), tkfont)
+        style.apply(1.0)
+        self.root.update()
+        dialog = self.track(tk.Toplevel(self.root))
+        card = ttk.Frame(dialog, style="Card.TFrame", padding=(16, 14))
+        card.pack(fill="x")
+        label = ttk.Label(card, text="Kicker", style="CardKicker.TLabel")
+        label.pack(anchor="w")
+        ttk.Label(card, text="Heading", style="CardHeading.TLabel").pack(anchor="w")
+        ttk.Label(card, text="Body", style="CardBody.TLabel").pack(anchor="w")
+        ttk.Label(card, text="Sub", style="CardSub.TLabel").pack(anchor="w")
+        buttons = [
+            ttk.Button(card, text="Swish", style="Swish.TButton"),
+            ttk.Button(card, text="PayPal", style="PayPal.TButton"),
+            ttk.Button(card, text="Ko-fi", style="Kofi.TButton"),
+        ]
+        for button in buttons:
+            button.pack(fill="x", pady=2)
+        dialog.update()
+        self.assertEqual(label.cget("style"), "CardKicker.TLabel")
+        for button, colour in zip(buttons, ("#0B7A4B", "#0070BA", "#C0392B")):
+            name = button.cget("style")
+            self.assertTrue(name.endswith(".TButton"), name)
+            self.assertEqual(str(style.style.lookup(name, "background")).lower(), colour.lower())
+            self.assertEqual(str(style.style.lookup(name, "foreground")).lower(), "#ffffff")
+        self.assertEqual(str(style.style.lookup("Card.TFrame", "background")).lower(), "#ffffff")
+
+
 if __name__ == "__main__":
     unittest.main()
