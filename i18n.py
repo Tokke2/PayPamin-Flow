@@ -713,7 +713,7 @@ _ENGLISH = {
     "Autostart stöds inte på {platform}.": "Autostart is not supported on {platform}.",
 
     # Startup, local self-learning and its review panel
-    "Starta alltid minimerad i systemfältet": "Always start minimized in the system tray",
+    "PayPamin Flow startar alltid minimerad i systemfältet. Klicka på ikonen, eller starta appen igen, för att öppna fönstret.": "PayPamin Flow always starts minimized in the system tray. Click the icon, or start the app again, to open the window.",
     "Ett nytt startförsök öppnar ändå det befintliga fönstret.": "Starting again still opens the existing window.",
     "Lär sig av sparade fakturor och leverantörsval (endast lokalt)": "Learns from saved invoices and supplier choices (local only)",
     "Granska inlärning": "Review learning",

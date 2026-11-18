@@ -244,9 +244,12 @@ class InvoiceLearningIntegrationTests(unittest.TestCase):
         self.assertEqual(values["due_date"], "")
         self.assertIn("payment_term_days", {item.field for item in suggested})
 
-    def test_startup_and_learning_are_enabled_on_a_fresh_database(self):
-        self.assertEqual(self.app.setting("start_minimized"), "1")
+    def test_learning_is_enabled_on_a_fresh_database(self):
+        # Starting minimized is no longer a stored preference: it is how the app
+        # always starts, so nothing about it belongs in the settings table.
         self.assertEqual(self.app.setting("learning_enabled"), "1")
+        with self.app.connect() as db:
+            self.assertIsNone(db.execute("SELECT value FROM settings WHERE key='start_minimized'").fetchone())
 
     def test_disabled_learning_records_and_suggests_nothing(self):
         self.app.set_setting("learning_enabled", "0")

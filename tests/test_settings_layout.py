@@ -204,7 +204,7 @@ class SettingsDialogTests(unittest.TestCase):
             "objection_days": "5", "payment_deadline_days": "5",
             "autostart": "1", "update_auto": "1", "auto_import": "1",
             "ledger_friday_reminder": "1", "cache_auto": "1", "language": "sv",
-            "start_minimized": "1", "learning_enabled": "1",
+            "learning_enabled": "1",
         }
 
     def _close_handlers(self):
@@ -283,7 +283,6 @@ class SettingsDialogTests(unittest.TestCase):
         for expected in (
             "Starta PayPamin Flow automatiskt när jag loggar in",
             "Sök efter och installera uppdateringar automatiskt två gånger per dygn",
-            "Starta alltid minimerad i systemfältet",
             "Bevaka importmappen och importera nya PDF:er automatiskt",
             "Påminn om att importera kundreskontralista varje fredag",
             "Rensa appcache automatiskt en gång per dygn samt vid avslut",

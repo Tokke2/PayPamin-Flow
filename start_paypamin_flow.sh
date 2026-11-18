@@ -117,6 +117,13 @@ if PYTHON=$(find_python); then
   # A runtime that exists is used as it is. Only a missing window toolkit is
   # named, because installing another Python would not help the user here.
   if runtime_has_tkinter "$PYTHON"; then
+    # Started from a terminal, the start file detaches instead of keeping that
+    # terminal busy next to the window: the app writes its own log and shows
+    # its own dialogues, so nothing is lost by leaving the terminal behind.
+    if [ -t 1 ] || [ -t 2 ]; then
+      nohup "$PYTHON" "$APP_DIR/paypamin_flow_launcher.py" "$@" >/dev/null 2>&1 &
+      exit 0
+    fi
     exec "$PYTHON" "$APP_DIR/paypamin_flow_launcher.py" "$@"
   fi
   notify "Python $(runtime_version "$PYTHON") finns på datorn men saknar Tkinter.

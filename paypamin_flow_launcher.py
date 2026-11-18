@@ -122,6 +122,20 @@ def _report_startup_failure(details: str) -> None:
 
 def run() -> int:
     """Import and run the app while keeping console-free failures diagnosable."""
+    # This is the first code the app runs, so it is also where a console window
+    # is dealt with: a start through python.exe is restarted under pythonw.exe
+    # (the same interpreter, no window), and anything already attached to a
+    # console is hidden. Nothing below this line can open a terminal window.
+    try:
+        from console_free import hide_own_console_window, relaunch_console_free
+
+        relaunched = relaunch_console_free(Path(__file__).resolve(), sys.argv[1:])
+        if relaunched is not None:
+            return relaunched
+        hide_own_console_window()
+    except Exception:
+        # A console-free start must never be the reason the app does not start.
+        pass
     try:
         from paypamin_flow import main
 

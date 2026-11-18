@@ -144,8 +144,14 @@ open_download_page() {
 close_own_terminal_window() {
   [ "${TERM_PROGRAM:-}" = "Apple_Terminal" ] || return 0
   command -v osascript >/dev/null 2>&1 || return 0
-  # The window is closed only after this script has exited, and only if it is
-  # the window Finder opened for this very file.
+  # Finder opens a .command in Terminal, so that window exists before this line
+  # runs. It is hidden at once - not closed later - so no terminal is left on
+  # screen next to the app, and it is closed once this script has exited.
+  osascript -e 'tell application "Terminal"
+    repeat with w in windows
+      if name of w contains "start_paypamin_flow.command" then set visible of w to false
+    end repeat
+  end tell' >/dev/null 2>&1 || true
   (
     sleep 1
     osascript -e 'tell application "Terminal"

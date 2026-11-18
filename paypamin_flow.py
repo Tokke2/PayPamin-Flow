@@ -16,7 +16,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
-from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_ID, APP_NAME, APP_SLUG, APP_VERSION, MINIMIZED_START_ARG, SUPPORTED_PLATFORMS
+from app_info import APP_AUTHOR, APP_COPYRIGHT, APP_ID, APP_NAME, APP_SLUG, APP_VERSION, SUPPORTED_PLATFORMS
 from activity_log import ACTIVITY_LOG_NAME, ACTIVITY_LOGGER_NAME, instrument_tk_command, log_activity
 from build_info import APP_RELEASE_COMMIT, APP_RELEASE_ID
 from app_backup import (
@@ -42,7 +42,7 @@ from fee_rules import (
     legal_basis_key, normalize_agreement, normalize_customer_type,
     normalize_fee_model,
 )
-from console_free import configure_console_free_subprocesses
+from console_free import configure_console_free_subprocesses, hide_own_console_window
 from error_log import ERROR_LOG_NAME, refresh_error_log, resolve_errors
 from log_archive import RETENTION_DAYS, DailySizeRotatingFileHandler, archive_old_logs
 from customer_contacts import (
@@ -601,7 +601,7 @@ def init_db():
                 db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
         # The fee amounts are fixed by law and deliberately absent from settings,
         # so a value stored by an older version can never change what is charged.
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','objection_days':'5','payment_deadline_days':'5','autostart':'1','start_minimized':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0','fee_model':DEFAULT_FEE_MODEL}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','objection_days':'5','payment_deadline_days':'5','autostart':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0','fee_model':DEFAULT_FEE_MODEL}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
         # Remove only these obsolete keys; nothing else in the database is
@@ -2056,6 +2056,9 @@ class ReminderApp(tk.Tk):
         self.withdraw()
         logger.info('Application started minimized in the system tray')
         log_activity('tray','startup_minimized','completed')
+        # Nothing was visible during startup, so say once where the window is.
+        explain=getattr(self,'_explain_tray_hide',None)
+        if callable(explain):explain()
         return True
 
     def _poll_single_instance_activation(self):
@@ -5597,9 +5600,9 @@ class ReminderApp(tk.Tk):
         hint('Autostart för din användare · {platforms}',platforms=SUPPORTED_PLATFORMS)
         automatic_updates_var=tk.BooleanVar(value=setting('update_auto')=='1')
         check('Sök efter och installera uppdateringar automatiskt två gånger per dygn',automatic_updates_var)
-        start_minimized_var=tk.BooleanVar(value=setting('start_minimized')!='0')
-        check('Starta alltid minimerad i systemfältet',start_minimized_var)
-        hint('Ett nytt startförsök öppnar ändå det befintliga fönstret.')
+        # Starting in the tray is not a choice any more, so there is no
+        # checkbox for it - only a line that says what will happen.
+        hint('PayPamin Flow startar alltid minimerad i systemfältet. Klicka på ikonen, eller starta appen igen, för att öppna fönstret.')
         heading('Import, reskontra och cache')
         automatic_import_var=tk.BooleanVar(value=setting('auto_import')=='1')
         check('Bevaka importmappen och importera nya PDF:er automatiskt',automatic_import_var)
@@ -5679,7 +5682,6 @@ class ReminderApp(tk.Tk):
             set_setting('auto_import','1' if automatic_import_var.get() else '0')
             set_setting('ledger_friday_reminder','1' if ledger_reminder_var.get() else '0')
             set_setting('cache_auto','1' if automatic_cache_var.get() else '0')
-            set_setting('start_minimized','1' if start_minimized_var.get() else '0')
             set_setting('learning_enabled','1' if learning_var.get() else '0')
             set_setting('language',new_language)
             set_setting('fee_model',chosen_fee_model())
@@ -5688,7 +5690,7 @@ class ReminderApp(tk.Tk):
             self.set_font_scale(new_font_scale,persist=False)
             set_language(new_language)
             refresh_json_journal(parent=w)
-            logger.info('Settings saved; autostart=%s start_minimized=%s learning=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s fee_model=%s',bool(autostart_var.get()),bool(start_minimized_var.get()),bool(learning_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language,chosen_fee_model())
+            logger.info('Settings saved; autostart=%s learning=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s fee_model=%s',bool(autostart_var.get()),bool(learning_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language,chosen_fee_model())
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()
@@ -5704,6 +5706,10 @@ def _tk_version():
 def main():
     instance=None
     try:
+        # A start through python.exe still has a console attached; hide it and
+        # make sure every child process is created without one, before anything
+        # else in the app runs.
+        hide_own_console_window()
         configure_console_free_subprocesses()
         configure_windows_dpi_awareness()
         configure_windows_app_identity()
@@ -5743,15 +5749,15 @@ def main():
         after_idle=getattr(window,'after_idle',None)
         if after_idle is not None:after_idle(mark_update_ready)
         else:mark_update_ready()
-        start_hidden=MINIMIZED_START_ARG in sys.argv[1:]
-        if not start_hidden:
-            try:start_hidden=setting('start_minimized')!='0'
-            except Exception:start_hidden=True
-        if start_hidden:
-            starter=getattr(window,'start_minimized',None)
-            if starter is not None:starter()
-            elif hasattr(window,'hide_to_tray'):window.hide_to_tray()
-            if getattr(window,'_quitting',False):return
+        # The app always starts in the system tray. It is not a preference any
+        # more: the window is opened by clicking the tray icon or by starting
+        # PayPamin Flow a second time, and starting hidden is what keeps the
+        # desktop clean after a login start. --minimized is still accepted so an
+        # older shortcut keeps working, but it no longer changes anything.
+        starter=getattr(window,'start_minimized',None)
+        if starter is not None:starter()
+        elif hasattr(window,'hide_to_tray'):window.hide_to_tray()
+        if getattr(window,'_quitting',False):return
         window.mainloop()
     except Exception as e:
         if not isinstance(e,getattr(tk,'TclError',())):

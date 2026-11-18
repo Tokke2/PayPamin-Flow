@@ -29,7 +29,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser Fortnox-
 - **Detaljerad aktivitetslogg:** knappar, menyer, systemfältsåtgärder, filter, fakturaval, uppdateringar och övriga viktiga händelser loggas strukturerat med start, slut/fel, varaktighet, sessions-ID och spårnings-ID i en egen `logs/activity.log`. PDF-, reskontra-, e-post-, säkerhetskopia- och bakgrundsjobbsposter ligger kvar i den tekniska `logs/app.log`. Startfel och uppdateringssteg skrivs också till `app.log`, så en pågående dag har exakt **tre loggfiler**.
 - **Dagligt loggarkiv med sju dagars sparning:** vid första posten en ny dag flyttas gårdagens loggar till `logs/arkiv/ÅÅÅÅ-MM-DD/`. Arkiverade dagar, inklusive kopior av åtgärdade fel, raderas automatiskt när de är **äldre än sju dagar**, så loggmappen växer aldrig obegränsat. Dagens tre filer rörs aldrig av rensningen. Olösta fel ligger kvar i `logs/errors.log` även när källoggen roteras eller arkiveras. Först när du uttryckligen väljer **Hjälp → Markera fellogg som åtgärdad** markeras de granskade felen som åtgärdade och en kopia sparas i loggarkivet.
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
-- **Alltid minimerad start och autostart:** appen startar i systemfältet vid autostart, manuell start, direktstart och uppdateringsomstart. Öppna fönstret via systemfältet eller genom att starta appen igen; en ny start visar och fokuserar då den befintliga instansen. Autostart vid inloggning finns på Windows, macOS och Linux och är aktiverad som standard. Båda inställningarna kan ändras under **Inställningar**.
+- **Alltid minimerad start och autostart:** appen startar i systemfältet vid autostart, manuell start, direktstart och uppdateringsomstart – utan undantag och utan inställning. Öppna fönstret via systemfältet eller genom att starta appen igen; en ny start visar och fokuserar då den befintliga instansen. Autostart vid inloggning finns på Windows, macOS och Linux och är aktiverad som standard och kan ändras under **Inställningar**. Inget konsolfönster öppnas någonstans i kedjan.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
 - **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med commit- och filjämförelse, SHA-256-verifiering och tyst omstart. Både nyare versioner och verkligt ändrade release-byggen med samma versionsnummer upptäcks. Manuell sökning och installation finns via den tydliga **Uppdatera appen**-knappen, **Hjälp → Uppdatera appen** eller systemfältets högerklicksmeny.
 - PDF sparas lokalt och öppnas i datorns standardprogram. **Öppna exportmapp** i knappraden eller under **Arkiv** öppnar mappen med skapade påminnelser i datorns filhanterare. Den samlade felloggen öppnas via **Visa samlad fellogg** eller **Hjälp → Visa samlad fellogg**.
@@ -98,7 +98,7 @@ För felsökning från en redan öppen PowerShell kan `py paypamin_flow.py` anv�
 
 ### macOS
 
-1. Dubbelklicka på **`start_paypamin_flow.command`** i Finder. Finder öppnar filen i Terminal, så startfilen kopplar loss appen direkt och stänger sitt eget Terminal-fönster igen — inget konsolfönster blir kvar bredvid appens fönster.
+1. Dubbelklicka på **`start_paypamin_flow.command`** i Finder. Finder öppnar filen i Terminal, så startfilen kopplar loss appen direkt, **döljer Terminal-fönstret omedelbart** och stänger det sedan — inget terminalfönster blir kvar bredvid appens fönster.
 2. Startfilen letar efter Python 3.10+ med Tkinter i `PATH`, i Homebrew- och python.org-platserna och i `PAYPAMIN_PYTHON`. Apples `/usr/bin/python3` används bara när Command Line Tools redan är installerade, eftersom stubben annars öppnar Apples egen installationsdialog.
 3. Saknas Python öppnas nedladdningssidan för senaste Python när du tackar ja. Om du hellre använder Homebrew eller Python Launcher fungerar det också: appen startar med vilken Python som helst som uppfyller kraven.
 4. Alternativ start: `python3 paypamin_flow_launcher.py` eller **`paypamin_flow.pyw`** med Python Launcher, med alternativet att köra i Terminal avstängt.
@@ -175,14 +175,23 @@ På Windows använder appen en egen app-identitet för aktivitetsfältets PayPam
 
 **Begränsning i Windows:** Aktivitetshanterarens **Detaljer**-flik och vissa bakgrundsprocessvyer kan fortfarande visa Python-ikonen. Windows hämtar då den inbäddade ikonen från `pythonw.exe`, inte från appfönstret. Att ersätta just den processikonen skulle kräva en native EXE med egen ikonresurs, vilket inte ingår i PayPamin Flows Python-only-distribution.
 
-## Starta minimerad
+## Starta minimerad – alltid
 
-PayPamin Flow startar som standard minimerad i systemfältet. Det gäller vid inloggning, manuell start, direktstart av `paypamin_flow.py`/startaren och när appen startas om efter en uppdatering. Fönstret skapas och appens schemalagda kontroller börjar direkt, men det visas inte förrän du öppnar det.
+PayPamin Flow startar **alltid** minimerad i systemfältet. Det gäller vid inloggning, manuell start, direktstart av `paypamin_flow.py`/startaren och när appen startas om efter en uppdatering. Fönstret skapas och appens schemalagda kontroller börjar direkt, men det visas inte förrän du öppnar det.
 
 - Klicka på systemfältsikonen eller välj **Öppna PayPamin Flow**.
 - Eller starta appen igen: eninstansskyddet aktiverar den befintliga appen och visar fönstret.
-- Stäng av **Starta alltid minimerad i systemfältet** under **Inställningar** om du hellre vill se fönstret vid start. Flaggan `--minimized` används fortfarande av autostart och tvingar minimerad start.
+- Det finns ingen inställning som stänger av det: starten är alltid densamma, så det finns inget läge där fönstret dyker upp av misstag. Flaggan `--minimized`, som autostart skickar, accepteras fortfarande men behövs inte längre.
+- Första gången appen startar göms fönstret med en förklaring i systemfältet, så det är tydligt var det hamnade.
 - Om systemfältet inte är tillgängligt lämnas fönstret synligt i stället för att appen göms oåtkomligt.
+
+## Inget terminal- eller konsolfönster
+
+Ett svart konsolfönster ska aldrig synas – varken vid start eller medan importmappen skannas. Det gäller på tre nivåer:
+
+- **Vid start:** `start_paypamin_flow.vbs` kör `pythonw.exe` via `wscript.exe`, och startaren startar om sig själv med `pythonw.exe` om den råkat startas med `python.exe`. Startar du `paypamin_flow.py` från en egen terminal döljs inget fönster som du själv äger – konsolen delas då med terminalen och lämnas orörd.
+- **Vid skanning:** `console_free.py` lägger `CREATE_NO_WINDOW` på **varje** barnprocess så snart modulen laddas, innan PDF- och OCR-biblioteken hunnit laddas. Det täcker `pdftoppm`, `tesseract`, `pip` och allt annat appen startar, oavsett om det sker via `subprocess.Popen` eller `subprocess.run`. Skanningen av importmappen kan därför aldrig blinka fram en konsol.
+- **På macOS och Linux:** Terminal-fönstret som Finder respektive skalet öppnar döljs och stängs direkt av startfilen, som sedan lämnar appen kopplad loss från terminalen. En `.desktop`-post startar med `Terminal=false`.
 
 ## En aktiv appinstans
 
