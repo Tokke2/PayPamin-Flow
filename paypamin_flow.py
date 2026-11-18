@@ -1644,6 +1644,138 @@ def invoice_row_color_tag(row,stage=None,today=None):
     return ''
 
 
+# The search understands the same field names the list shows. A prefix limits
+# one word to one field ("kund:acme"), and both languages are accepted so the
+# syntax does not change when the UI is switched to English.
+SEARCH_FIELD_PREFIXES = {
+    'kund':'customer','customer':'customer',
+    'nr':'invoice_no','faktura':'invoice_no','invoice':'invoice_no',
+    'belopp':'amount','amount':'amount',
+    'datum':'date','date':'date','förfaller':'date','due':'date',
+    'status':'stage',
+    'epost':'email','e-post':'email','email':'email',
+    'not':'note','note':'note',
+    'valuta':'currency','currency':'currency',
+}
+SEARCH_HELP_EXAMPLES = (
+    'kund:limoeurope',
+    'nr:6475',
+    'belopp:1500',
+    'datum:2026-11',
+    'status:granska',
+    'epost:anna@',
+)
+
+
+def split_search_query(query):
+    """Split a query into (field, word) pairs.
+
+    Words are separated by any whitespace, and a quoted phrase stays one word
+    so a customer name with a space can be searched as one term. A known
+    ``field:`` prefix limits that word to one field; an unknown prefix is kept
+    as ordinary text instead of silently matching nothing.
+    """
+    tokens=[]
+    word=[];quoted=False
+    for character in str(query or ''):
+        if character=='"':
+            quoted=not quoted
+            continue
+        if character.isspace() and not quoted:
+            if word:tokens.append(''.join(word));word=[]
+            continue
+        word.append(character)
+    if word:tokens.append(''.join(word))
+    terms=[]
+    for token in tokens:
+        field=None;text=token
+        prefix,separator,rest=token.partition(':')
+        if separator and rest:
+            candidate=SEARCH_FIELD_PREFIXES.get(prefix.casefold())
+            if candidate is not None:
+                field=candidate;text=rest
+        text=' '.join(str(text).casefold().split())
+        if text:terms.append((field,text))
+    return tuple(terms)
+
+
+def _amount_search_text(value):
+    """Return every spelling of one amount that a user might type."""
+    try:number=float(value)
+    except (TypeError,ValueError):return ''
+    point=f'{number:.2f}'
+    spellings={point,point.rstrip('0').rstrip('.'),point.replace('.',',')}
+    grouped=f'{number:,.2f}'
+    spellings.add(grouped)
+    spellings.add(grouped.replace(',',' ').replace('.',','))
+    spellings.add(grouped.replace(',','\u00a0').replace('.',','))
+    return ' '.join(sorted(spelling for spelling in spellings if spelling)).casefold()
+
+
+def _date_search_text(value):
+    """Return the stored date and the long localised form of it."""
+    text=str(value or '').strip()
+    if not text:return ''
+    parts=[text]
+    try:parts.append(format_long_date(date.fromisoformat(text)))
+    except ValueError:pass
+    return ' '.join(parts).casefold()
+
+
+def invoice_search_fields(row,stage='',remaining=None):
+    """Return one lowercase searchable string per field of one invoice.
+
+    Only what is already stored is searched - nothing is fetched from disk and
+    no invoice is changed. The stage is included in both languages, so a user
+    on the English UI can type "review" and find "Granska uppgifter".
+    """
+    keys=row.keys() if hasattr(row,'keys') else ()
+    def value(name):
+        return str(row[name] or '') if name in keys else ''
+    amount=float(row['amount'] or 0) if 'amount' in keys else 0.0
+    paid=float(row['paid'] or 0) if 'paid' in keys else 0.0
+    remain=amount-paid if remaining is None else float(remaining)
+    stage_text=' '.join(part for part in (str(stage or ''),_(str(stage or ''))) if part)
+    return {
+        'customer':value('customer').casefold(),
+        'invoice_no':value('invoice_no').casefold(),
+        'email':value('email').casefold(),
+        'note':value('note').casefold(),
+        'currency':value('currency').casefold(),
+        'amount':f"{_amount_search_text(amount)} {_amount_search_text(remain)}",
+        'date':f"{_date_search_text(value('due_date'))} {_date_search_text(value('invoice_date'))} {_date_search_text(value('p1_date'))} {_date_search_text(value('p2_date'))}",
+        'stage':stage_text.casefold(),
+    }
+
+
+def invoice_matches_search(fields,terms):
+    """Require every term to be found; each term may sit in a different field."""
+    for field,text in terms:
+        haystack=fields.get(field,'') if field else ' '.join(fields.values())
+        if text not in haystack:return False
+    return True
+
+
+def invoice_search_summary(shown,total,query='',elsewhere=0):
+    """Describe the list in one line: how much is shown, and what was searched.
+
+    ``total`` is how many invoices the open tab holds on its own, so "Visar 2 av
+    4" always compares against the same tab rather than against every invoice.
+    Hits in another tab are always named, so an empty tab never reads as if the
+    invoice had disappeared.
+    """
+    query=' '.join(str(query or '').split())
+    if not query:return _('Visar {shown} av {total}',shown=shown,total=total)
+    more=0
+    if elsewhere:
+        more=_('{elsewhere} träff i andra vyer',elsewhere=elsewhere) if elsewhere==1 else _('{elsewhere} träffar i andra vyer',elsewhere=elsewhere)
+    if shown:
+        if more:return _('Visar {shown} av {total} · sökning: {query} · {more}',shown=shown,total=total,query=query,more=more)
+        return _('Visar {shown} av {total} · sökning: {query}',shown=shown,total=total,query=query)
+    if more:return _('Inga träffar i den här vyn · {more}',more=more)
+    return _('Inga träffar för ”{query}”',query=query)
+
+
 def due_reminder_invoices():
     """Return unpaid, reviewed invoices whose normal workflow is ready for P1/P2."""
     with connect() as db:
@@ -2828,8 +2960,39 @@ class ReminderApp(tk.Tk):
 
     def on_invoice_search(self,*_args):
         query=self.invoice_search_var.get().strip()
+        button=getattr(self,'clear_search_button',None)
+        if button is not None:
+            try:button.state(['!disabled'] if query else ['disabled'])
+            except tk.TclError:pass
         log_activity('ui','invoice_search_changed','completed',query=query)
         self.refresh()
+
+    def clear_invoice_search(self):
+        """Empty the search field and show the whole selected tab again."""
+        variable=getattr(self,'invoice_search_var',None)
+        if variable is None:return False
+        if not variable.get():return False
+        variable.set('')
+        focus=getattr(self,'invoice_search',None)
+        if focus is not None:
+            try:focus.focus_set()
+            except tk.TclError:pass
+        log_activity('ui','invoice_search_cleared','completed')
+        return True
+
+    def show_search_help(self):
+        """Explain the search syntax with examples that really work."""
+        examples='\n'.join(f'    {example}' for example in SEARCH_HELP_EXAMPLES)
+        body=_(
+            'Skriv ett eller flera ord. Alla ord måste finnas, men de kan finnas i olika fält.\n\n'
+            'Fälten som söks: kund, fakturanummer, belopp, datum, status, e-post, fakturatext och valuta.\n\n'
+            'Begränsa ett ord till ett fält med ett prefix:\n{examples}\n\n'
+            'Ett citattecken håller ihop ett namn med mellanslag: kund:"Acme AB".\n'
+            'Esc tömmer sökfältet.',
+            examples=examples,
+        )
+        messagebox.showinfo(_('Sökhjälp'),body,parent=self)
+        log_activity('ui','invoice_search_help_opened','completed')
 
     def sort_invoice_column(self,column):
         previous=getattr(self,'invoice_sort_column','due_date')
@@ -3195,7 +3358,7 @@ class ReminderApp(tk.Tk):
             bar=ttk.Frame(self,padding=padding);bar.pack(fill='x')
             for key,cmd,style in actions:
                 ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
-        controls=ttk.Frame(self,padding=(22,0,22,10));controls.pack(fill='x')
+        controls=ttk.Frame(self,padding=(22,0,22,8));controls.pack(fill='x')
         self.filter_options={'current':_('Aktuella'),'history':_('Historik / arkiverade / betalda'),'all':_('Alla'),'ignored':_('Ignorerade'),'debt_review':_('Kronofogden – granska')}
         self.view_tabs=ttk.Notebook(controls)
         self.filter_tabs={};self.filter_tab_ids={}
@@ -3206,13 +3369,25 @@ class ReminderApp(tk.Tk):
         self.view_tabs.pack(side='left')
         self.view_tabs.select(self.filter_tabs.get(self.current_filter_key,self.filter_tabs['current']))
         self.view_tabs.bind('<<NotebookTabChanged>>',self.on_filter_select)
+        # The search gets its own row: the tabs keep their width in a narrow
+        # window, and the result count sits right beside the field that caused
+        # it instead of disappearing under the buttons.
+        searchrow=ttk.Frame(self,padding=(22,0,22,4));searchrow.pack(fill='x')
+        self.search_status=ttk.Label(searchrow,text='',style='Sub.TLabel',justify='left',anchor='w')
+        self.search_status.pack(side='left',fill='x',expand=True)
+        ttk.Button(searchrow,text=_('Sökhjälp'),command=self.show_search_help).pack(side='right')
+        # Clearing is a visible action, not something to be guessed, and it is
+        # disabled when there is nothing to clear.
+        self.clear_search_button=ttk.Button(searchrow,text=_('Rensa'),command=self.clear_invoice_search,state='disabled')
+        self.clear_search_button.pack(side='right',padx=(6,0))
         self.invoice_search_var=tk.StringVar()
-        search=ttk.Entry(controls,textvariable=self.invoice_search_var,width=24)
+        search=ttk.Entry(searchrow,textvariable=self.invoice_search_var,width=26)
         self.invoice_search=search
-        search.pack(side='right')
-        ttk.Label(controls,text=_('Sök kund/faktura:')).pack(side='right',padx=(8,6))
+        search.pack(side='right',padx=(0,6))
+        search.bind('<Escape>',lambda event:self.clear_invoice_search())
+        ttk.Label(searchrow,text=_('Sök:')).pack(side='right',padx=(10,6))
         self.invoice_search_var.trace_add('write',self.on_invoice_search)
-        wrap=ttk.Frame(self,padding=(22,10,22,12));wrap.pack(fill='both',expand=True)
+        wrap=ttk.Frame(self,padding=(22,8,22,12));wrap.pack(fill='both',expand=True)
         cols=('invoice_no','customer','due_date','amount','remaining','p1_date','p2_send_date','email_status','stage','fee')
         self.tree=ttk.Treeview(wrap,columns=cols,show='headings',selectmode='browse')
         configure_invoice_row_colors(self.tree,getattr(self,'_high_contrast',False))
@@ -3283,19 +3458,35 @@ class ReminderApp(tk.Tk):
         with connect() as db: rows=db.execute('SELECT * FROM invoices ORDER BY due_date').fetchall()
         flt=self.current_filter_key
         search_var=getattr(self,'invoice_search_var',None)
-        query=' '.join(search_var.get().strip().casefold().split()) if search_var is not None else ''
-        visible=[]
+        query=search_var.get().strip() if search_var is not None else ''
+        terms=split_search_query(query)
+
+        def in_view(r,stage,remain):
+            if flt=='current':return not (r['ignored'] or stage in ('Avslutad','Kronofogden – granska'))
+            if flt=='history':return bool(r['ignored'] or remain<=0.005)
+            if flt=='ignored':return bool(r['ignored'])
+            if flt=='debt_review':return stage=='Kronofogden – granska'
+            return True
+
+        prepared=[]
         for r in rows:
             stage=next_stage(r)
             remain=max(0,float(r['amount'] or 0)-float(r['paid'] or 0))
-            if flt=='current' and (r['ignored'] or stage in ('Avslutad','Kronofogden – granska')):continue
-            if flt=='history' and not (r['ignored'] or remain<=0.005):continue
-            if flt=='ignored' and not r['ignored']:continue
-            if flt=='debt_review' and stage!='Kronofogden – granska':continue
-            if query:
-                searchable=' '.join(f"{r['invoice_no']} {r['customer']}".casefold().split())
-                if query not in searchable:continue
+            prepared.append((r,stage,remain,invoice_search_fields(r,stage,remain)))
+        visible=[];in_view_total=0
+        for r,stage,remain,fields in prepared:
+            if not in_view(r,stage,remain):continue
+            in_view_total+=1
+            if not invoice_matches_search(fields,terms):continue
             visible.append((r,stage,remain))
+        # A search also reports hits outside the open tab, so nobody concludes
+        # that an invoice is gone when it is only in another view.
+        elsewhere=0
+        if terms:
+            elsewhere=sum(
+                1 for r,stage,remain,fields in prepared
+                if not in_view(r,stage,remain) and invoice_matches_search(fields,terms)
+            )
         sort_column=getattr(self,'invoice_sort_column','due_date')
         def sort_key(item):
             r,stage,remain=item
@@ -3324,6 +3515,10 @@ class ReminderApp(tk.Tk):
             color_tag=invoice_row_color_tag(r,stage)
             self.tree.insert('', 'end',iid=str(r['id']),values=(r['invoice_no'],r['customer'],r['due_date'],money(float(r['amount'] or 0),r['currency']),money(remain,r['currency']),p1_display,p2_display,reminder_email_status(r),stage_display,fee),tags=(color_tag,) if color_tag else ())
         self.show_detail()
+        status=getattr(self,'search_status',None)
+        if status is not None:
+            try:status.configure(text=invoice_search_summary(len(visible),in_view_total,query,elsewhere))
+            except tk.TclError:pass
         refresh_summary=getattr(self,'_refresh_defaults_summary',None)
         if callable(refresh_summary):refresh_summary()
         # Tray refresh is best effort: a missing or stopped tray must never
