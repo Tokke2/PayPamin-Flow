@@ -309,6 +309,186 @@ class DonationDrawingTests(unittest.TestCase):
         self.assertEqual(owner.donation_canvas.calls, [])
 
 
+class RecordingWidget:
+    """Record the options a dialog frame, label or button was built with."""
+
+    def __init__(self, kind, registry, master=None, **options):
+        self.kind = kind
+        self.master = master
+        self.options = dict(options)
+        self.packed = []
+        registry.append(self)
+
+    def pack(self, **kwargs):
+        self.packed.append(kwargs)
+        return self
+
+    def configure(self, **options):
+        self.options.update(options)
+
+
+class RecordingTtk:
+    """A tiny ttk stand-in that only remembers what the dialogue builds."""
+
+    def __init__(self):
+        self.widgets = []
+
+    def _make(self, kind):
+        def build(master=None, **options):
+            return RecordingWidget(kind, self.widgets, master, **options)
+        return build
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self._make(name)
+
+    def of_kind(self, kind):
+        return [widget for widget in self.widgets if widget.kind == kind]
+
+
+class DonationDialogueLayoutTests(unittest.TestCase):
+    """The support page's layout, carried over to the app's own dialogue.
+
+    Swish keeps the real code; PayPal and Ko-fi are buttons only, so nothing in
+    this dialogue may build a second code.
+    """
+
+    def setUp(self):
+        self.app = load_headless_app(Path(tempfile.mkdtemp()))
+        self.ttk = RecordingTtk()
+        self.patches = [patch.object(self.app, "ttk", self.ttk)]
+        for patcher in self.patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.owner = SimpleNamespace(donation_amount=donations.default_amount())
+        self.owner._donation_card = lambda parent, **options: self.app.ReminderApp._donation_card(
+            self.owner, parent, **options
+        )
+        self.owner._wrap_to_width = lambda label, **options: self.app.ReminderApp._wrap_to_width(
+            self.owner, label, **options
+        )
+
+    def add_channel(self, channel, title, text, button, style, command=lambda: None):
+        return self.app.ReminderApp._donation_channel_card(
+            self.owner, self.ttk.Frame(), channel, title, text, button, style, command
+        )
+
+    def test_paypal_and_kofi_are_plain_buttons(self):
+        for channel, button, style in (
+            ("PayPal", "Öppna PayPal", "PayPal.TButton"),
+            ("Ko-fi", "Öppna Ko-fi", "Kofi.TButton"),
+        ):
+            with self.subTest(channel=channel):
+                self.ttk.widgets.clear()
+                self.add_channel(channel, "Titel", "Text", button, style)
+                buttons = self.ttk.of_kind("Button")
+                self.assertEqual([item.options["text"] for item in buttons], [button])
+                self.assertEqual(buttons[0].options["style"], style)
+                self.assertTrue(buttons[0].packed)
+                self.assertEqual(self.ttk.of_kind("Canvas"), [])
+
+    def test_every_channel_names_itself_and_explains_itself(self):
+        self.add_channel("PayPal", "Engångsgåva i SEK", "Inget konto behövs.", "Öppna PayPal", "PayPal.TButton")
+        texts = [str(widget.options.get("text", "")) for widget in self.ttk.widgets]
+        self.assertIn("PAYPAL", texts)
+        self.assertIn("Engångsgåva i SEK", texts)
+        self.assertIn("Inget konto behövs.", texts)
+
+    def test_the_channel_button_runs_its_own_command(self):
+        opened = []
+        self.add_channel("Ko-fi", "Titel", "Text", "Öppna Ko-fi", "Kofi.TButton", lambda: opened.append(True))
+        self.ttk.of_kind("Button")[0].options["command"]()
+        self.assertEqual(opened, [True])
+
+    def test_the_support_story_is_fixed_in_the_code(self):
+        self.assertEqual(len(self.app.DONATION_SUPPORT_POINTS), 3)
+        for title, text in self.app.DONATION_SUPPORT_POINTS:
+            self.assertTrue(title.strip())
+            self.assertTrue(text.strip())
+        self.assertIn("frivillig", self.app.DONATION_TRUST_LINE)
+
+    def test_the_support_story_speaks_both_languages(self):
+        swedish = [self.app.DONATION_TRUST_LINE] + [part for point in self.app.DONATION_SUPPORT_POINTS for part in point]
+        i18n.set_language("en")
+        self.addCleanup(i18n.set_language, "sv")
+        english = [i18n._(text) for text in swedish]
+        for original, translated in zip(swedish, english):
+            with self.subTest(text=original):
+                self.assertTrue(translated.strip())
+                self.assertNotEqual(translated, original)
+
+    def test_the_swish_code_is_drawn_only_once(self):
+        """One canvas, in the Swish card, and no code anywhere else."""
+        source = (ROOT / "paypamin_flow.py").read_text(encoding="utf-8")
+        start = source.index("    def show_donations(self):")
+        end = source.index("    def _run_scheduled_update_check(self):")
+        dialogue = source[start:end]
+        self.assertEqual(dialogue.count("tk.Canvas("), 1)
+        # The code belongs to Swish, so it is built after both links.
+        self.assertGreater(dialogue.index("tk.Canvas("), dialogue.index("'paypal'"))
+        self.assertGreater(dialogue.index("tk.Canvas("), dialogue.index("'kofi'"))
+        # The code is painted by the amount selector, never by a channel button.
+        self.assertNotIn("_draw_donation_qr(", dialogue)
+        self.assertEqual(dialogue.count("_open_donation_link("), 2)
+
+
+class WrappingLabel:
+    """A label that only remembers its wrap length."""
+
+    def __init__(self, wraplength=500):
+        self.options = {"wraplength": wraplength}
+        self.handlers = {}
+        self.configured = 0
+
+    def cget(self, key):
+        return self.options[key]
+
+    def configure(self, **options):
+        self.configured += 1
+        self.options.update(options)
+
+    def bind(self, sequence, handler):
+        self.handlers[sequence] = handler
+
+
+class DonationWrappingTests(unittest.TestCase):
+    """Long card text wraps to the width the card actually got."""
+
+    def setUp(self):
+        self.app = load_headless_app(Path(tempfile.mkdtemp()))
+        self.owner = SimpleNamespace()
+
+    def wrap(self, label, minimum=150):
+        return self.app.ReminderApp._wrap_to_width(self.owner, label, minimum=minimum)
+
+    def resize(self, label, width):
+        label.handlers["<Configure>"](SimpleNamespace(width=width))
+
+    def test_the_wrap_follows_the_label_width(self):
+        label = self.wrap(WrappingLabel(), minimum=150)
+        self.resize(label, 400)
+        self.assertEqual(label.cget("wraplength"), 396)
+        self.resize(label, 260)
+        self.assertEqual(label.cget("wraplength"), 256)
+
+    def test_a_narrow_card_keeps_the_minimum_instead_of_going_silly(self):
+        label = self.wrap(WrappingLabel(), minimum=150)
+        self.resize(label, 40)
+        self.assertEqual(label.cget("wraplength"), 150)
+
+    def test_an_unchanged_width_does_not_reconfigure_the_label(self):
+        label = self.wrap(WrappingLabel(wraplength=396), minimum=150)
+        self.resize(label, 400)
+        self.assertEqual(label.configured, 0)
+
+    def test_the_wrap_is_recomputed_for_every_change(self):
+        label = self.wrap(WrappingLabel(), minimum=100)
+        for width in (500, 320, 240):
+            self.resize(label, width)
+            self.assertEqual(label.cget("wraplength"), width - 4)
+
+
 class DonationPackagingTests(unittest.TestCase):
     def test_the_locked_modules_are_part_of_the_release(self):
         import app_info

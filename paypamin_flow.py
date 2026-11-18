@@ -1326,6 +1326,17 @@ def money(x,currency='SEK'):
 REMINDER_BCC = 'rl@tadega.com'
 
 
+# The support dialogue tells the same story as the support page: what a gift
+# pays for and why nothing is hidden behind it. The text lives in the code, so a
+# translation and a test can read it and no setting can rewrite it.
+DONATION_SUPPORT_POINTS = (
+    ('Underhåll', 'Uppdateringar, testade flöden och rättningar som håller appen stabil.'),
+    ('Nya funktioner', 'Det du saknar blir nästa version i stället för att ligga kvar på en lista.'),
+    ('Oberoende', 'Ingen annonsör, ingen prenumeration och ingen som bestämmer över din data.'),
+)
+DONATION_TRUST_LINE = 'Gåvan är helt frivillig. Appen är lika komplett utan den, och inget låses upp av en gåva.'
+
+
 # Words in a logo file name that say nothing about the supplier. A file called
 # "logo.svg" or "Logotyp 2026.svg" must never become a company name in a
 # customer's subject line. A leading filler such as "Standard" is kept, because
@@ -2412,19 +2423,51 @@ class ReminderApp(tk.Tk):
         log_activity('donation','open','completed',channel=channel_key,url=url)
         return True
 
-    def _donation_heading(self,parent,title,text):
-        """Add one named channel heading with its explanation."""
-        frame=ttk.Frame(parent);frame.pack(fill='x',pady=(0,10))
-        ttk.Label(frame,text=title,style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(frame,text=text,style='Sub.TLabel',wraplength=330,justify='left').pack(anchor='w')
-        return frame
+    def _wrap_to_width(self,label,minimum=200,offset=4):
+        """Wrap a label to the width it is actually given.
+
+        A fixed ``wraplength`` is a promise the layout cannot keep: a card gets
+        narrower when the window or a column shrinks and the last words are
+        clipped. The label is packed with ``fill='x'``, so its width is stable
+        and the wrap can follow it without fighting back.
+        """
+        def rewrap(event):
+            limit=max(minimum,event.width-offset)
+            try:
+                if int(label.cget('wraplength'))!=limit:label.configure(wraplength=limit)
+            except (tk.TclError,ValueError):pass
+        try:label.bind('<Configure>',rewrap)
+        except (tk.TclError,AttributeError):pass
+        return label
+
+    def _donation_card(self,parent,padx=16,pady=14,side=None,gap=10):
+        """Return one raised card on the dialogue background."""
+        card=ttk.Frame(parent,style='Card.TFrame',padding=(padx,pady))
+        if side is None:card.pack(fill='x',pady=(0,gap))
+        else:card.pack(side=side,fill='both',expand=True,padx=(0,gap))
+        return card
+
+    def _donation_channel_card(self,parent,channel,title,description,button_text,style,command,gap=10):
+        """Add one payment channel as a card with a single large button.
+
+        PayPal and Ko-fi are buttons only. They open the payment page in the
+        browser, so no code is drawn for them - a QR belongs to Swish alone.
+        """
+        card=self._donation_card(parent,side='left',gap=gap)
+        ttk.Label(card,text=channel.upper(),style='CardKicker.TLabel').pack(anchor='w')
+        ttk.Label(card,text=title,style='CardHeading.TLabel').pack(anchor='w',pady=(2,2))
+        description_label=ttk.Label(card,text=description,style='CardSub.TLabel',wraplength=210,justify='left')
+        description_label.pack(anchor='w',fill='x');self._wrap_to_width(description_label,minimum=150)
+        ttk.Button(card,text=button_text,command=command,style=style).pack(fill='x',pady=(10,0))
+        return card
 
     def show_donations(self):
         """Open the support dialogue: Swish code, PayPal and Ko-fi.
 
         Every amount and address comes from :mod:`donations`, which has no
         setter and no settings key. Nothing here is editable, and an imported
-        backup can never point a donation somewhere else.
+        backup can never point a donation somewhere else. The layout follows the
+        support page: Swish with a real code, the other two channels as buttons.
         """
         existing=getattr(self,'_donation_window',None)
         if existing is not None:
@@ -2441,48 +2484,89 @@ class ReminderApp(tk.Tk):
             w.destroy()
         w.protocol('WM_DELETE_WINDOW',close)
         form=self._dialog_form(w,padding=0)
-        head=ttk.Frame(form,padding=(26,22,26,14));head.pack(fill='x')
+        head=ttk.Frame(form,padding=(24,20,24,12));head.pack(fill='x')
         brand=ttk.Frame(head);brand.pack(anchor='w')
         if self._brand_logo:ttk.Label(brand,image=self._brand_logo).pack(side='left',padx=(0,10))
         elif self._header_icon:ttk.Label(brand,image=self._header_icon).pack(side='left',padx=(0,10))
         titles=ttk.Frame(brand);titles.pack(side='left')
         ttk.Label(titles,text=_('Stöd PayPamin Flow'),style='Title.TLabel').pack(anchor='w')
         ttk.Label(titles,text=_('Gratis · reklamfritt · inga prenumerationer'),style='Sub.TLabel').pack(anchor='w')
-        ttk.Label(head,text=_('Appen är gratis för alla, utan reklam och utan betalvägg. Din gåva går direkt till utvecklingen — nya funktioner, testade flöden och den tid det tar att hålla allt igång. Ingenting låses upp av en gåva, och appen fungerar precis likadant utan.'),wraplength=600,justify='left').pack(anchor='w',pady=(12,0))
-        ttk.Separator(form,orient='horizontal').pack(fill='x')
-        body=ttk.Frame(form,padding=(26,16,26,12));body.pack(fill='x')
+        intro=ttk.Label(
+            head,
+            text=_('Appen är gratis för alla, utan reklam och utan betalvägg. Din gåva går direkt till utvecklingen — nya funktioner, testade flöden och den tid det tar att hålla allt igång. Ingenting låses upp av en gåva, och appen fungerar precis likadant utan.'),
+            wraplength=660,justify='left',
+        )
+        intro.pack(anchor='w',fill='x',pady=(12,0));self._wrap_to_width(intro,minimum=320)
+        body=ttk.Frame(form,padding=(24,0,24,0));body.pack(fill='x')
         left=ttk.Frame(body);left.pack(side='left',fill='both',expand=True)
-        ttk.Label(left,text=_('Välj belopp'),style='Heading.TLabel').pack(anchor='w')
-        chips=ttk.Frame(left);chips.pack(anchor='w',pady=(6,0))
+        right=ttk.Frame(body);right.pack(side='left',anchor='n',padx=(16,0))
+
+        # The amount decides the Swish code and the PayPal link, which is why it
+        # sits above both. The four amounts are fixed in the code.
+        amount_card=self._donation_card(left)
+        ttk.Label(amount_card,text=_('Välj belopp'),style='CardKicker.TLabel').pack(anchor='w')
+        hint=ttk.Label(amount_card,text=_('Beloppet fylls i Swish-koden och PayPal-länken. Hos betaltjänsten kan du alltid ändra det.'),style='CardSub.TLabel',wraplength=400,justify='left')
+        hint.pack(anchor='w',fill='x',pady=(2,8));self._wrap_to_width(hint,minimum=200)
+        chips=ttk.Frame(amount_card,style='Card.TFrame');chips.pack(anchor='w')
         self.donation_buttons={}
         for value in donations.amounts():
             button=ttk.Button(chips,text=_('{amount} kr',amount=value),command=lambda amount=value:self._choose_donation_amount(amount))
             button.pack(side='left',padx=(0,6));self.donation_buttons[value]=button
-        self.donation_amount_label=ttk.Label(left,text='',style='Sub.TLabel')
-        self.donation_amount_label.pack(anchor='w',pady=(7,0))
-        ttk.Separator(left,orient='horizontal').pack(fill='x',pady=12)
-        paypal=self._donation_heading(left,'PayPal',_('Engångsgåva i SEK. Inget konto behövs för att betala med kort.'))
-        ttk.Button(paypal,text=_('Öppna PayPal'),command=lambda:self._open_donation_link(donations.paypal_link(self.donation_amount),'paypal')).pack(anchor='w',pady=(6,0))
-        kofi=self._donation_heading(left,'Ko-fi',_('Valfritt belopp, även månadsvis. Avsluta när du vill.'))
-        ttk.Button(kofi,text=_('Öppna Ko-fi'),command=lambda:self._open_donation_link(donations.kofi_link(),'kofi')).pack(anchor='w',pady=(6,0))
-        right=ttk.Frame(body);right.pack(side='left',padx=(26,0),anchor='n')
-        ttk.Label(right,text=_('Swish'),style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(right,text=_('Skanna koden med Swish-appen. Beloppet är förifyllt och går att ändra där.'),style='Sub.TLabel',wraplength=250,justify='left').pack(anchor='w',pady=(2,8))
-        self.donation_canvas=tk.Canvas(right,width=self._donation_qr_size()[0],height=self._donation_qr_size()[0],highlightthickness=0,bd=0,background='#FFFFFF')
+        self.donation_amount_label=ttk.Label(amount_card,text='',style='CardSub.TLabel')
+        self.donation_amount_label.pack(anchor='w',pady=(8,0))
+
+        channels=ttk.Frame(left);channels.pack(fill='x')
+        self._donation_channel_card(
+            channels,'PayPal',_('Engångsgåva i SEK'),
+            _('Betalning med kort. Inget konto behövs.'),
+            _('Öppna PayPal'),'PayPal.TButton',
+            lambda:self._open_donation_link(donations.paypal_link(self.donation_amount),'paypal'),
+        )
+        self._donation_channel_card(
+            channels,'Ko-fi',_('Valfritt belopp, även månadsvis'),
+            _('Avsluta när du vill, ingen bindning.'),
+            _('Öppna Ko-fi'),'Kofi.TButton',
+            lambda:self._open_donation_link(donations.kofi_link(),'kofi'),gap=0,
+        )
+
+        # Swish is the only channel with a code, and the code is drawn by the
+        # app itself in the standard payload format.
+        swish=self._donation_card(right,padx=18,pady=16)
+        ttk.Label(swish,text='Swish',style='CardKicker.TLabel').pack(anchor='w')
+        ttk.Label(swish,text=_('Skanna med Swish-appen'),style='CardHeading.TLabel').pack(anchor='w',pady=(2,2))
+        swish_hint=ttk.Label(swish,text=_('Beloppet är förifyllt och går att ändra i appen. Numret är låst.'),style='CardSub.TLabel',wraplength=230,justify='left')
+        swish_hint.pack(anchor='w',fill='x',pady=(0,8));self._wrap_to_width(swish_hint,minimum=120)
+        self.donation_canvas=tk.Canvas(swish,width=self._donation_qr_size()[0],height=self._donation_qr_size()[0],highlightthickness=0,bd=0,background='#FFFFFF')
         self.donation_canvas.pack(anchor='w')
-        self.donation_number_label=ttk.Label(right,text=_('Swishnummer: {number}',number=donations.formatted_number()),style='BodyBold.TLabel')
+        self.donation_number_label=ttk.Label(swish,text=_('Swishnummer: {number}',number=donations.formatted_number()),style='CardBody.TLabel')
         self.donation_number_label.pack(anchor='w',pady=(8,0))
-        ttk.Button(right,text=_('Kopiera nummer'),command=self._copy_swish_number).pack(anchor='w',pady=(4,0))
-        self.donation_copy_label=ttk.Label(right,text='',style='Sub.TLabel')
+        ttk.Button(swish,text=_('Kopiera nummer'),command=self._copy_swish_number).pack(anchor='w',pady=(4,0))
+        self.donation_copy_label=ttk.Label(swish,text='',style='CardSub.TLabel')
         self.donation_copy_label.pack(anchor='w')
-        self.donation_amount=donations.default_amount()
-        self._choose_donation_amount(donations.default_amount())
-        ttk.Separator(form,orient='horizontal').pack(fill='x')
-        foot=ttk.Frame(form,padding=(26,12,26,18));foot.pack(fill='x')
-        ttk.Label(foot,text=_('Låst: mottagare, länkar och belopp är fasta i koden och kan inte ändras i appen.'),style='Sub.TLabel',wraplength=600,justify='left').pack(anchor='w')
-        ttk.Label(foot,text=_('{copyright} · Skapare: {author}',copyright=APP_COPYRIGHT,author=APP_AUTHOR),style='Sub.TLabel').pack(anchor='w',pady=(6,12))
+
+        # The story sits under the channels, beside the code, so the dialogue
+        # stays short instead of leaving an empty column next to Swish.
+        why=self._donation_card(left,padx=24,pady=14,gap=0)
+        ttk.Label(why,text=_('Varför din gåva gör skillnad'),style='CardKicker.TLabel').pack(anchor='w')
+        ttk.Label(why,text=_('Du stödjer en utvecklare, inte ett bolag.'),style='CardHeading.TLabel').pack(anchor='w',pady=(2,8))
+        points=ttk.Frame(why,style='Card.TFrame');points.pack(fill='x')
+        for index,(title,text) in enumerate(DONATION_SUPPORT_POINTS):
+            column=ttk.Frame(points,style='Card.TFrame')
+            column.pack(side='left',fill='both',expand=True,padx=(0,12) if index<len(DONATION_SUPPORT_POINTS)-1 else 0)
+            ttk.Label(column,text=_(title),style='CardBody.TLabel').pack(anchor='w',fill='x')
+            point=ttk.Label(column,text=_(text),style='CardSub.TLabel',wraplength=155,justify='left')
+            point.pack(anchor='w',fill='x');self._wrap_to_width(point,minimum=110)
+        ttk.Separator(form,orient='horizontal').pack(fill='x',pady=(12,0))
+        foot=ttk.Frame(form,padding=(24,10,24,16));foot.pack(fill='x')
+        trust=ttk.Label(foot,text=_(DONATION_TRUST_LINE),style='Sub.TLabel',wraplength=660,justify='left')
+        trust.pack(anchor='w',fill='x');self._wrap_to_width(trust,minimum=320)
+        locked=ttk.Label(foot,text=_('Låst: mottagare, länkar och belopp är fasta i koden och kan inte ändras i appen.'),style='Sub.TLabel',wraplength=660,justify='left')
+        locked.pack(anchor='w',fill='x',pady=(6,0));self._wrap_to_width(locked,minimum=320)
+        ttk.Label(foot,text=_('{copyright} · Skapare: {author}',copyright=APP_COPYRIGHT,author=APP_AUTHOR),style='Sub.TLabel').pack(anchor='w',pady=(6,10))
         buttons=ttk.Frame(foot);buttons.pack(fill='x')
         ttk.Button(buttons,text=_('Stäng'),command=close,style='Accent.TButton').pack(side='right')
+        self.donation_amount=donations.default_amount()
+        self._choose_donation_amount(donations.default_amount())
         log_activity('donation','dialogue_opened','completed',amount=self.donation_amount)
         return w
 

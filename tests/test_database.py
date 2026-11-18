@@ -16,6 +16,9 @@ def load_headless_app(workspace):
     tk = types.ModuleType("tkinter")
     tk.__path__ = []
     tk.Tk = type("Tk", (), {})
+    # The real module has TclError; the stub needs it too, so an except clause
+    # in the app under test can be evaluated exactly as it is on a desktop.
+    tk.TclError = type("TclError", (Exception,), {})
     modules = {"tkinter": tk}
     for name in ("font", "ttk", "filedialog", "messagebox", "simpledialog"):
         submodule = types.ModuleType(f"tkinter.{name}")

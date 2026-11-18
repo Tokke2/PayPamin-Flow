@@ -322,6 +322,33 @@ class AccessibleStyle:
             font=font(9, "bold"), padding=(size(10), size(7)),
             focusthickness=max(2, size(2)), focuscolor=palette["focus"],
         )
+        # A card is a raised surface on the window background. The palette owns
+        # both colours, so high contrast keeps the text readable.
+        configure("Card.TFrame", background=palette["field_background"])
+        configure("CardBody.TLabel", background=palette["field_background"], foreground=palette["text"], font=font(10))
+        configure("CardSub.TLabel", background=palette["field_background"], foreground=palette["muted_text"], font=font(9))
+        configure("CardHeading.TLabel", background=palette["field_background"], foreground=palette["text"], font=font(11, "bold"))
+        configure("CardKicker.TLabel", background=palette["field_background"], foreground=palette["muted_text"], font=font(8, "bold"))
+        # Each donation channel keeps its own colour, with white text that still
+        # reaches 4.5:1. High contrast replaces them with the palette accent, so
+        # the colour never carries the meaning on its own.
+        for name, base, active in (
+            ("Swish.TButton", "#0B7A4B", "#096640"),
+            ("PayPal.TButton", "#0070BA", "#005EA6"),
+            ("Kofi.TButton", "#C0392B", "#A62F23"),
+        ):
+            configure(
+                name,
+                background=palette["accent"] if high_contrast else base,
+                foreground="#FFFFFF", font=font(9, "bold"),
+                padding=(size(12), size(9)),
+                focusthickness=max(2, size(2)), focuscolor=palette["focus"],
+            )
+            self.style.map(name, background=[
+                ("active", palette["accent_active"] if high_contrast else active),
+                ("pressed", palette["accent_active"] if high_contrast else active),
+                ("focus", palette["accent_active"] if high_contrast else active),
+            ])
         for name in ("TEntry", "TCombobox", "TSpinbox"):
             configure(
                 name, font=font(10), foreground=palette["text"], fieldbackground=palette["field_background"],

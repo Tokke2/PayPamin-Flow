@@ -343,6 +343,27 @@ class AccessibilityTests(unittest.TestCase):
         self.assertEqual(fonts.fonts["TkDefaultFont"].size, 10)
         self.assertEqual(style.configurations["Treeview"]["rowheight"], 30)
 
+    def test_donation_styles_keep_white_text_readable_in_both_palettes(self):
+        """A channel keeps its colour, but the text must stay readable.
+
+        The three donation colours are decorative: each one is checked against
+        white, and high contrast replaces them with the palette accent so no
+        meaning ever depends on the colour alone.
+        """
+        for high_contrast in (False, True):
+            fonts = FakeFontModule()
+            style = FakeStyle()
+            accessible = accessibility.AccessibleStyle(style, fonts)
+            accessible.apply(1.0, high_contrast=high_contrast)
+            for name in ("Swish.TButton", "PayPal.TButton", "Kofi.TButton"):
+                with self.subTest(style=name, high_contrast=high_contrast):
+                    colour = style.configurations[name]["background"]
+                    self.assertEqual(style.configurations[name]["foreground"], "#FFFFFF")
+                    self.assertGreaterEqual(accessibility.contrast_ratio("#FFFFFF", colour), 4.5)
+                    self.assertIn("background", style.maps[name])
+            for name in ("Card.TFrame", "CardBody.TLabel", "CardSub.TLabel", "CardHeading.TLabel", "CardKicker.TLabel"):
+                self.assertIn(name, style.configurations)
+
     def test_focus_tree_uses_visual_order_and_classic_focus_outline(self):
         root = FakeWidget("Tk")
         later = FakeWidget("TButton", x=300, y=10, height=30)
