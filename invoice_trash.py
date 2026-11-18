@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from i18n import _
+
 TRASH_TABLE = "invoice_trash"
 
 TRASH_SCHEMA = f"""CREATE TABLE IF NOT EXISTS {TRASH_TABLE} (
@@ -180,10 +182,10 @@ def empty_trash(db) -> int:
 
 
 def trash_summary(items) -> str:
-    """One factual line about what the trash holds."""
+    """One factual line about what the trash holds, in the current language."""
     count = len(list(items))
     if count == 0:
-        return "Papperskorgen är tom"
+        return _("Papperskorgen är tom")
     if count == 1:
-        return "1 faktura i papperskorgen"
-    return f"{count} fakturor i papperskorgen"
+        return _("1 faktura i papperskorgen")
+    return _("{count} fakturor i papperskorgen", count=count)

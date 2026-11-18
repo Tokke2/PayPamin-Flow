@@ -147,6 +147,8 @@ _ENGLISH = {
     "Ta bort permanent": "Delete permanently",
     "{count} fakturor tas bort för gott. Det går inte att ångra.": "{count} invoices will be removed for good. This cannot be undone.",
     "Papperskorgen är tom": "The trash is empty",
+    "1 faktura i papperskorgen": "1 invoice in the trash",
+    "{count} fakturor i papperskorgen": "{count} invoices in the trash",
     "Det finns ingenting att tömma.": "There is nothing to empty.",
     "Töm papperskorgen": "Empty the trash",
     "Allt i papperskorgen tas bort för gott. Det går inte att ångra.": "Everything in the trash will be removed for good. This cannot be undone.",

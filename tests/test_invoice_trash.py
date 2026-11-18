@@ -40,6 +40,13 @@ def add_invoice(db, invoice_no, customer="Kund AB", amount=1000.0, **extra):
     return db.execute("SELECT * FROM invoices WHERE invoice_no=?", (invoice_no,)).fetchone()
 
 
+def close_log_handlers(app):
+    """Release the log files so a temporary folder can be removed on Windows."""
+    for handler in app.logger.handlers[:]:
+        app.logger.removeHandler(handler)
+        handler.close()
+
+
 class TrashRulesTests(unittest.TestCase):
     def setUp(self):
         self.db = make_database()
@@ -159,11 +166,7 @@ class TrashAppTests(unittest.TestCase):
         self.app.init_db()
 
         def cleanup():
-            # The shared logger keeps a file handler; close it so a temporary
-            # directory is not left with an open handle on Windows.
-            for handler in self.app.logger.handlers[:]:
-                self.app.logger.removeHandler(handler)
-                handler.close()
+            close_log_handlers(self.app)
             self.temporary.cleanup()
 
         self.addCleanup(cleanup)
@@ -396,6 +399,7 @@ class ShortcutCallbackTests(unittest.TestCase):
     def setUpClass(cls):
         with tempfile.TemporaryDirectory() as temporary_directory:
             cls.module = load_headless_app(Path(temporary_directory))
+            close_log_handlers(cls.module)
 
     def wrapper(self, result):
         app = SimpleNamespace(_shortcut_callback=self.module.ReminderApp._shortcut_callback)
@@ -429,6 +433,7 @@ class FocusGuardTests(unittest.TestCase):
     def test_a_text_field_keeps_its_own_undo(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = load_headless_app(Path(temporary_directory))
+            self.addCleanup(close_log_handlers, app)
             for name in ("Entry", "TEntry", "Text", "Spinbox", "TCombobox"):
                 with self.subTest(widget=name):
                     owner = self.owner(self.Widget(name))
@@ -441,6 +446,7 @@ class FocusGuardTests(unittest.TestCase):
     def test_no_focus_means_the_shortcut_works(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = load_headless_app(Path(temporary_directory))
+            self.addCleanup(close_log_handlers, app)
             self.assertFalse(app.ReminderApp._focus_is_text_input(self.owner(None)))
 
 
@@ -453,7 +459,12 @@ class TrashWindowTests(unittest.TestCase):
         self.app = load_headless_app(self.workspace)
         self.app.DB_PATH = self.workspace / "trash-window.sqlite3"
         self.app.init_db()
-        self.addCleanup(self.temporary.cleanup)
+
+        def cleanup():
+            close_log_handlers(self.app)
+            self.temporary.cleanup()
+
+        self.addCleanup(cleanup)
         self.ttk = RecordingTtk()
         self.window = RecordingWindow("Papperskorg")
         self.owner = SimpleNamespace(
