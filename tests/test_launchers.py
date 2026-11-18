@@ -65,8 +65,15 @@ class ConsoleFreeLauncherTests(unittest.TestCase):
         fake_app = types.ModuleType("paypamin_flow")
         fake_app.main = lambda: calls.append("main")
         launcher["run"].__globals__["_report_startup_failure"] = lambda details: self.fail(details)
-        with patch.dict(sys.modules, {"paypamin_flow": fake_app}):
+        # A start through python.exe restarts itself under pythonw.exe; these
+        # tests are already running under a console interpreter, so that
+        # hand-off is faked instead of launching a second interpreter.
+        with patch.dict(sys.modules, {"paypamin_flow": fake_app}), patch(
+            "console_free.relaunch_console_free", return_value=None
+        ) as relaunch, patch("console_free.hide_own_console_window") as hide:
             self.assertEqual(launcher["run"](), 0)
+        relaunch.assert_called_once()
+        hide.assert_called_once_with()
         self.assertEqual(calls, ["main"])
 
     def test_gui_launcher_logs_and_reports_import_failure_without_tkinter(self):
@@ -75,7 +82,11 @@ class ConsoleFreeLauncherTests(unittest.TestCase):
         launcher["run"].__globals__["_show_startup_error"] = lambda message: messages.append(message) or True
         with tempfile.TemporaryDirectory() as temporary_directory:
             home = Path(temporary_directory)
-            with patch.object(Path, "home", return_value=home), patch.dict(sys.modules, {"paypamin_flow": None}):
+            with patch.object(Path, "home", return_value=home), patch.dict(
+                sys.modules, {"paypamin_flow": None}
+            ), patch("console_free.relaunch_console_free", return_value=None), patch(
+                "console_free.hide_own_console_window"
+            ):
                 self.assertEqual(launcher["run"](), 1)
             log_path = home / ".paminnelseapp" / "logs" / "app.log"
             self.assertTrue(log_path.is_file())
