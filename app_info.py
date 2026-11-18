@@ -39,6 +39,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "i18n.py",
     "import_watcher.py",
     "invoice_parser.py",
+    "invoice_trash.py",
     "learning.py",
     "ledger_import.py",
     "logo_matching.py",

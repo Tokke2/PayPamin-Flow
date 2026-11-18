@@ -449,16 +449,20 @@ class AccessibilityAppIntegrationTests(unittest.TestCase):
             focus_invoice_search=Mock(), add_invoice=Mock(), import_invoice=Mock(),
             edit_invoice=Mock(), settings=Mock(), scan_import_folder=Mock(),
             cycle_invoice_filter=Mock(), open_selected_invoice_pdf=Mock(),
-            show_file_menu=Mock(), show_help_menu=Mock(),
+            show_file_menu=Mock(), show_help_menu=Mock(), undo_last_delete=Mock(),
         )
         self.app.ReminderApp._install_accessibility_shortcuts(fake, window, main_window=True)
         self.assertIn("<Control-f>", window.bindings)
+        self.assertIn("<Control-z>", window.bindings)
         self.assertIn("<Control-plus>", window.bindings)
         self.assertIn("<F5>", window.bindings)
         self.assertIn("<F10>", window.bindings)
         self.assertIn("<Alt-h>", window.bindings)
         self.assertEqual(window.bindings["<Control-f>"](), "break")
         fake.focus_invoice_search.assert_called_once_with()
+        # Undo is a real action on the main window, not a placeholder.
+        self.assertEqual(window.bindings["<Control-z>"](), "break")
+        fake.undo_last_delete.assert_called_once_with()
         binding_count = len(window.bindings)
         self.app.ReminderApp._install_accessibility_shortcuts(fake, window, main_window=True)
         self.assertEqual(len(window.bindings), binding_count)

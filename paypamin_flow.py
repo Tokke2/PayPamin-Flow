@@ -50,6 +50,7 @@ from customer_contacts import (
     normalize_email_addresses, parse_email_addresses, save_customer_contact,
 )
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
+import invoice_trash
 from invoice_parser import (
     clean_invoice_note, extract_invoice_sections, normalize_date,
     parse_amount_value, parse_invoice_text,
@@ -579,6 +580,7 @@ def init_db():
         if 'fee_agreement' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN fee_agreement TEXT NOT NULL DEFAULT ''")
         ensure_ledger_schema(db)
         ensure_journal_schema(db)
+        invoice_trash.ensure_trash_schema(db)
         ensure_customer_contact_schema(db)
         learning.ensure_learning_schema(db)
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -3195,8 +3197,9 @@ class ReminderApp(tk.Tk):
     @staticmethod
     def _shortcut_callback(callback):
         def run(_event=None):
-            callback()
-            return 'break'
+            # A callback that answers False wants the key to keep its normal
+            # meaning in the widget (Ctrl+Z inside a text field, for instance).
+            return 'break' if callback() is not False else None
         return run
 
     def _install_accessibility_shortcuts(self,window,main_window=False):
@@ -3212,6 +3215,7 @@ class ReminderApp(tk.Tk):
         bind(f'<{modifier}-0>',self.reset_font_scale)
         if main_window:
             bind(f'<{modifier}-f>',self.focus_invoice_search)
+            bind(f'<{modifier}-z>',self.undo_last_delete)
             bind(f'<{modifier}-n>',self.add_invoice)
             bind(f'<{modifier}-o>',self.import_invoice)
             bind(f'<{modifier}-e>',self.edit_invoice)
@@ -3282,6 +3286,7 @@ class ReminderApp(tk.Tk):
             (_('Lägg till faktura manuellt'),f'{modifier}+N'),
             (_('Lägg till faktura-PDF'),f'{modifier}+O'),
             (_('Redigera vald faktura'),f'{modifier}+E / F2'),
+            (_('Ångra senaste borttagning'),f'{modifier}+Z'),
             (_('Skanna importmappen'),'F5'),
             (_('Öppna original-PDF för vald faktura'),f'{modifier}+Enter'),
             (_('Växla fakturaflik'),'Ctrl+Tab / Ctrl+Shift+Tab'),
@@ -3320,6 +3325,8 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Öppna tryckfiler'),command=self.open_print_folder)
         file_menu.add_command(label=_('Öppna logotypmapp'),command=self.open_svg_folder)
         file_menu.add_command(label=_('Rensa cache nu'),command=self.clear_cache_now)
+        file_menu.add_separator()
+        file_menu.add_command(label=_('Papperskorg'),command=self.show_trash)
         file_menu.add_separator()
         file_menu.add_command(label=_('Dölj i systemfältet'),command=self.hide_to_tray)
         file_menu.add_command(label=_('Avsluta helt'),command=self.quit_app)
@@ -3426,7 +3433,16 @@ class ReminderApp(tk.Tk):
         self._apply_menu_icons(self.row_menu)
         self._instrument_menu_actions(self.row_menu)
         self.detail=ttk.Label(self,text=_('Importera PDF eller lägg till en faktura manuellt.'),padding=(24,4,24,16),style='Sub.TLabel');self.detail.pack(fill='x')
+        # The undo offer lives above the footer and is only packed while it is
+        # relevant: a delete always leaves a visible way back, without a dialog
+        # that has to be answered before anything else can be done.
+        self.undo_bar=ttk.Frame(self,padding=(22,4,22,4))
+        self.undo_label=ttk.Label(self.undo_bar,text='',style='Sub.TLabel',justify='left')
+        self.undo_label.pack(side='left',fill='x',expand=True)
+        ttk.Button(self.undo_bar,text=_('Öppna papperskorgen'),command=self.show_trash).pack(side='right',padx=(7,0))
+        ttk.Button(self.undo_bar,text=_('Ångra'),command=self.undo_last_delete,style='Accent.TButton').pack(side='right')
         foot=ttk.Frame(self,padding=(22,0,22,12));foot.pack(fill='x')
+        self._footer=foot
         # Two rows keep every word readable: the defaults summary never has to
         # fight the buttons for horizontal space, not even at the smallest
         # allowed window size or the largest text zoom.
@@ -4798,12 +4814,214 @@ class ReminderApp(tk.Tk):
         self.refresh()
 
     def delete_invoice(self):
+        """Move the selected invoice to the trash, where it can be restored."""
         r=self.selected()
-        if r and messagebox.askyesno(_('Ta bort faktura'),_('Ta bort {invoice_no} permanent från den lokala databasen?',invoice_no=r['invoice_no'])):
-            with connect() as db:db.execute('DELETE FROM invoices WHERE id=?',(r['id'],))
-            log_activity('invoice','deleted','completed',invoice_id=r['id'],invoice_no=r['invoice_no'])
-            refresh_json_journal(parent=self)
-            self.refresh()
+        if not r:return None
+        if not messagebox.askyesno(
+            _('Ta bort faktura'),
+            _('Flytta {invoice_no} till papperskorgen? Fakturan kan återställas därifrån.',invoice_no=r['invoice_no']),
+            parent=self,
+        ):return None
+        with connect() as db:
+            trash_id=invoice_trash.delete_invoice_to_trash(db,r['id'])
+        if trash_id is None:return None
+        log_activity('invoice','deleted','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],trash_id=trash_id)
+        self._last_deleted={'trash_id':trash_id,'invoice_no':r['invoice_no'],'customer':r['customer'],'invoice_id':r['id']}
+        refresh_json_journal(parent=self)
+        self.refresh()
+        self._offer_undo_delete()
+        return trash_id
+
+    def _offer_undo_delete(self):
+        """Show one visible way back after a delete, for a minute."""
+        bar=getattr(self,'undo_bar',None)
+        label=getattr(self,'undo_label',None)
+        deleted=getattr(self,'_last_deleted',None)
+        if bar is None or label is None or not deleted:return False
+        label.configure(text=_('Faktura {invoice_no} ligger i papperskorgen.',invoice_no=deleted['invoice_no']))
+        footer=getattr(self,'_footer',None)
+        try:
+            if footer is not None:bar.pack(fill='x',before=footer)
+            else:bar.pack(fill='x')
+        except tk.TclError:
+            return False
+        job=getattr(self,'_undo_job',None)
+        if job is not None:
+            try:self.after_cancel(job)
+            except (tk.TclError,ValueError):pass
+        self._undo_job=self.after(60000,self._hide_undo_delete)
+        return True
+
+    def _hide_undo_delete(self):
+        """Take the undo offer away; the trash keeps the invoice either way."""
+        job=getattr(self,'_undo_job',None)
+        self._undo_job=None
+        if job is not None:
+            try:self.after_cancel(job)
+            except (tk.TclError,ValueError):pass
+        bar=getattr(self,'undo_bar',None)
+        if bar is not None:
+            try:bar.pack_forget()
+            except tk.TclError:pass
+
+    def _focus_is_text_input(self):
+        """True when the keyboard is in a field that has its own undo."""
+        try:widget=self.focus_get()
+        except (tk.TclError,KeyError):return False
+        if widget is None:return False
+        try:return str(widget.winfo_class()) in ('Entry','TEntry','Text','Spinbox','TSpinbox','TCombobox')
+        except (tk.TclError,AttributeError):return False
+
+    def undo_last_delete(self):
+        """Restore the invoice that was deleted last, if the trash still has it.
+
+        Ctrl+Z inside a text field belongs to that field, so the shortcut does
+        nothing there; the invoice is still waiting in the trash.
+        """
+        if self._focus_is_text_input():return False
+        deleted=getattr(self,'_last_deleted',None)
+        if not deleted:
+            messagebox.showinfo(_('Inget att ångra'),_('Ingen faktura har tagits bort i den här sessionen.'),parent=self)
+            return False
+        with connect() as db:result=invoice_trash.restore(db,deleted['trash_id'])
+        if not result['restored']:
+            messagebox.showinfo(
+                _('Kunde inte återställa'),
+                _('Faktura {invoice_no} finns inte kvar i papperskorgen.',invoice_no=deleted['invoice_no']),
+                parent=self,
+            )
+            self._last_deleted=None
+            self._hide_undo_delete()
+            return False
+        self._last_deleted=None
+        self._hide_undo_delete()
+        log_activity('invoice','delete_undone','completed',invoice_no=result['invoice_no'],invoice_id=result['id'])
+        refresh_json_journal(parent=self)
+        self.refresh()
+        messagebox.showinfo(_('Återställd'),_('Faktura {invoice_no} är tillbaka i listan.',invoice_no=result['invoice_no']),parent=self)
+        return True
+
+    def show_trash(self):
+        """Open the trash: restore, or remove for good after an explicit answer."""
+        existing=getattr(self,'_trash_window',None)
+        if existing is not None:
+            try:
+                existing.deiconify();existing.lift();existing.focus_force()
+                return existing
+            except tk.TclError:
+                pass
+        w=self._new_toplevel(_('Papperskorg'));w.resizable(True,True)
+        self._trash_window=w
+        def close():
+            self._trash_window=None
+            w.destroy()
+        w.protocol('WM_DELETE_WINDOW',close)
+        form=ttk.Frame(w,padding=20);form.pack(fill='both',expand=True)
+        ttk.Label(form,text=_('Papperskorgen'),style='Heading.TLabel').pack(anchor='w')
+        summary=ttk.Label(form,text='',style='Sub.TLabel',justify='left',wraplength=620)
+        summary.pack(anchor='w',pady=(4,10))
+        columns=('invoice_no','customer','amount','deleted_at')
+        tree=ttk.Treeview(form,columns=columns,show='headings',selectmode='extended',height=12)
+        labels={'invoice_no':_('Fakturanr'),'customer':_('Kund'),'amount':_('Fakturabelopp'),'deleted_at':_('Borttagen')}
+        widths={'invoice_no':110,'customer':220,'amount':120,'deleted_at':160}
+        for column in columns:
+            tree.heading(column,text=labels[column])
+            tree.column(column,width=self._px(widths[column]),anchor='w')
+        tree.pack(fill='both',expand=True)
+        note=ttk.Label(form,text=_('Inget tas bort automatiskt. En faktura ligger kvar här tills du återställer den eller tar bort den permanent.'),style='Sub.TLabel',justify='left',wraplength=620)
+        note.pack(anchor='w',pady=(8,0))
+        buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(12,0))
+
+        def selected_ids():
+            ids=[]
+            for item in tree.selection():
+                try:ids.append(int(item))
+                except ValueError:continue
+            return ids
+
+        def reload():
+            for item in tree.get_children():tree.delete(item)
+            with connect() as db:items=invoice_trash.trash_items(db)
+            for entry in items:
+                tree.insert('','end',iid=str(entry['id']),values=(
+                    entry['invoice_no'],entry['customer'],
+                    money(float(entry['amount'] or 0),entry['currency']),
+                    str(entry['deleted_at']).replace('T',' '),
+                ))
+            summary.configure(text=invoice_trash.trash_summary(items))
+            state=('!disabled',) if items else ('disabled',)
+            for button in (restore_button,permanent_button,empty_button):
+                try:button.state(state)
+                except tk.TclError:pass
+            return items
+
+        def restore_selected():
+            ids=selected_ids()
+            if not ids:
+                messagebox.showinfo(_('Välj faktura'),_('Markera en faktura i papperskorgen först.'),parent=w)
+                return 0
+            restored=0;renumbered=[]
+            with connect() as db:
+                for trash_id in ids:
+                    result=invoice_trash.restore(db,trash_id)
+                    if result['restored']:
+                        restored+=1
+                        if result.get('renumbered'):renumbered.append(result['invoice_no'])
+                        log_activity('invoice','restored_from_trash','completed',invoice_no=result['invoice_no'],invoice_id=result['id'])
+            if restored:
+                refresh_json_journal(parent=w)
+                self.refresh()
+            last=getattr(self,'_last_deleted',None)
+            if last and last['trash_id'] in ids:
+                # Restored from the trash window: the undo offer has done its job.
+                self._last_deleted=None
+                self._hide_undo_delete()
+            reload()
+            text=_('{count} fakturor återställda.',count=restored)
+            if renumbered:text+=' '+_('Ett nytt id användes för: {numbers}.',numbers=', '.join(renumbered))
+            messagebox.showinfo(_('Återställda'),text,parent=w)
+            return restored
+
+        def permanent_delete():
+            ids=selected_ids()
+            if not ids:
+                messagebox.showinfo(_('Välj faktura'),_('Markera en faktura i papperskorgen först.'),parent=w)
+                return 0
+            if not messagebox.askyesno(
+                _('Ta bort permanent'),
+                _('{count} fakturor tas bort för gott. Det går inte att ångra.',count=len(ids)),
+                parent=w,
+            ):return 0
+            with connect() as db:removed=invoice_trash.purge(db,ids)
+            log_activity('invoice','trash_purged','completed',count=removed)
+            reload()
+            return removed
+
+        def empty_all():
+            with connect() as db:remaining=invoice_trash.trash_count(db)
+            if not remaining:
+                messagebox.showinfo(_('Papperskorgen är tom'),_('Det finns ingenting att tömma.'),parent=w)
+                return 0
+            if not messagebox.askyesno(
+                _('Töm papperskorgen'),
+                _('Allt i papperskorgen tas bort för gott. Det går inte att ångra.'),
+                parent=w,
+            ):return 0
+            with connect() as db:removed=invoice_trash.empty_trash(db)
+            log_activity('invoice','trash_emptied','completed',count=removed)
+            reload()
+            return removed
+
+        restore_button=ttk.Button(buttons,text=_('Återställ valda'),command=restore_selected,style='Accent.TButton')
+        restore_button.pack(side='left')
+        permanent_button=ttk.Button(buttons,text=_('Ta bort permanent'),command=permanent_delete)
+        permanent_button.pack(side='left',padx=(7,0))
+        empty_button=ttk.Button(buttons,text=_('Töm papperskorgen'),command=empty_all)
+        empty_button.pack(side='left',padx=(7,0))
+        ttk.Button(buttons,text=_('Stäng'),command=close).pack(side='right')
+        reload()
+        log_activity('ui','trash_opened','completed')
+        return w
 
     def mark_reminder_email_sent(self):
         """Let the user explicitly confirm a manual send for the latest level."""
