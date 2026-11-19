@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -66,12 +67,14 @@ def read_state(path=None) -> dict:
     if not isinstance(payload, dict):
         return {}
     state = {}
-    for key in ("package_sha256", "release_id", "version", "files_fingerprint", "checked_at"):
+    for key in ("package_sha256", "source_commit", "release_id", "version", "files_fingerprint", "checked_at"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             state[key] = value.strip()
     if state.get("package_sha256") and not is_sha256(state["package_sha256"]):
         state.pop("package_sha256")
+    if state.get("source_commit") and not is_commit(state["source_commit"]):
+        state.pop("source_commit")
     return state
 
 
@@ -115,19 +118,36 @@ def restore_state(previous, path=None) -> bool:
     return clear_state(path)
 
 
+def is_commit(value) -> bool:
+    """Return whether a value is a full 40-character git commit."""
+    return bool(re.fullmatch(r"[0-9a-f]{40}", str(value or "").strip().lower()))
+
+
 def record_installed_package(
-    package_sha256,
+    package_sha256="",
     *,
     release_id: str = "",
     version: str = "",
     files_fingerprint: str = "",
+    source_commit: str = "",
     path=None,
 ) -> bool:
-    """Remember the release package the running files came from."""
-    if not is_sha256(package_sha256):
+    """Remember the release the running files came from.
+
+    ``source_commit`` is the important value now that the release is the source
+    archive at a tag: it names the exact code on disk, so the next check is a
+    string comparison instead of a download. The package hash is still recorded
+    for an installation that came from a ZIP.
+    """
+    digest = str(package_sha256 or "").strip().lower()
+    commit = str(source_commit or "").strip().lower()
+    if digest and not is_sha256(digest):
+        return False
+    if not digest and not is_commit(commit):
         return False
     values = {
-        "package_sha256": str(package_sha256).strip().lower(),
+        "package_sha256": digest if is_sha256(digest) else "",
+        "source_commit": commit if is_commit(commit) else "",
         "release_id": str(release_id or "").strip(),
         "version": str(version or "").strip(),
         "files_fingerprint": str(files_fingerprint or "").strip().lower(),
@@ -139,6 +159,12 @@ def record_installed_package(
 def installed_package_sha256(path=None) -> str:
     value = read_state(path).get("package_sha256", "")
     return value.lower() if is_sha256(value) else ""
+
+
+def installed_source_commit(path=None) -> str:
+    """Return the commit the installed files were taken from, if recorded."""
+    value = read_state(path).get("source_commit", "")
+    return value.lower() if is_commit(value) else ""
 
 
 def is_source_checkout(directory) -> bool:

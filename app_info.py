@@ -15,6 +15,13 @@ APP_DESCRIPTION_SV = "Lokal app för fakturor och betalningspåminnelser"
 APP_REPOSITORY = "Tokke2/PayPamin-Flow"
 APP_RELEASES_URL = f"https://github.com/{APP_REPOSITORY}/releases"
 APP_LATEST_RELEASE_API = f"https://api.github.com/repos/{APP_REPOSITORY}/releases/latest"
+# The release *is* the source code at the tag: GitHub generates the archive
+# itself, so nothing has to be uploaded and the two can never disagree. The
+# tag is moved to the branch's newest commit, which makes the archive the
+# newest code.
+APP_SOURCE_ARCHIVE_URL = f"https://github.com/{APP_REPOSITORY}/archive/refs/tags/{{tag}}.zip"
+APP_TAG_REF_API = f"https://api.github.com/repos/{APP_REPOSITORY}/git/ref/tags/{{tag}}"
+APP_GIT_TAG_API = f"https://api.github.com/repos/{APP_REPOSITORY}/git/tags/{{sha}}"
 MINIMIZED_START_ARG = "--minimized"
 PYTHON_RELEASE_ASSET = "PayPamin-Flow-Python.zip"
 PYTHON_RELEASE_MANIFEST = "PayPamin-Flow-Python.manifest.json"

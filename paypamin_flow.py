@@ -3198,7 +3198,7 @@ class ReminderApp(tk.Tk):
         form=ttk.Frame(w,padding=24);form.pack()
         heading=_('Uppdaterat bygge av version {version} är tillgänglig',version=release.version) if release.version==APP_VERSION else _('Version {version} är tillgänglig',version=release.version)
         ttk.Label(form,text=heading,style='Title.TLabel').pack(anchor='w')
-        change_labels={'version':_('Ny programversion'),'commit':_('Ny commit'),'files':_('Ändrade appfiler'),'commit_and_files':_('Ny commit och ändrade appfiler'),'release':_('Nytt release-bygge')}
+        change_labels={'version':_('Ny programversion'),'commit':_('Ny commit'),'files':_('Ändrade appfiler'),'source':_('Ny källkod i releasen'),'commit_and_files':_('Ny commit och ändrade appfiler'),'release':_('Nytt release-bygge')}
         change=change_labels[update_change_kind(release)]
         current_commit=APP_RELEASE_COMMIT[:12] or _('okänd');release_commit=release.release_commit[:12] or _('okänd')
         ttk.Label(form,text=_('Installerad version: {current}\nSenaste release: {latest}',current=APP_VERSION,latest=release.version),justify='left').pack(anchor='w',pady=(8,4))

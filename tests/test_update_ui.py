@@ -77,10 +77,11 @@ class UpdateUiTests(unittest.TestCase):
             self.app.ReminderApp._poll_update_check(fake, results)
         self.assertEqual(calls, [])
 
-    def test_automatic_incomplete_release_waits_without_installing(self):
+    def test_automatic_release_without_an_archive_address_waits(self):
+        """No tag means no archive, so there is nothing to install yet."""
         fake = self.fake_app()
         calls = []
-        release = ReleaseInfo("0.7.0", "v0.7.0", RELEASE.url)
+        release = ReleaseInfo("0.7.0", "", RELEASE.url)
         fake.start_update_installation = lambda release, manual: calls.append((release.version, manual))
         fake.show_update_available = lambda release: self.fail("Automatic check must not open a dialog")
         results = queue.Queue()
@@ -179,7 +180,7 @@ class UpdateUiTests(unittest.TestCase):
         self.assertTrue(fake._update_check_running)
         self.assertEqual(len(scheduled), 1)
 
-    def test_manual_dialog_disables_install_until_files_are_ready(self):
+    def test_manual_dialog_disables_install_without_a_release_archive(self):
         self.app.set_language("sv")
         window = Mock()
         fake = SimpleNamespace(_new_toplevel=lambda title: window)
@@ -191,7 +192,7 @@ class UpdateUiTests(unittest.TestCase):
             widgets.append(widget)
             return widget
 
-        release = ReleaseInfo("0.7.0", "v0.7.0", RELEASE.url)
+        release = ReleaseInfo("0.7.0", "", RELEASE.url)
         with patch.object(self.app.ttk, "Frame", side_effect=make_widget, create=True), patch.object(
             self.app.ttk, "Label", side_effect=make_widget, create=True
         ), patch.object(self.app.ttk, "Button", side_effect=make_widget, create=True), patch.object(
@@ -311,9 +312,9 @@ class UpdateUiTests(unittest.TestCase):
         compare.assert_called_once_with(release, "0.6.0")
         self.assertEqual(calls, ["200"])
 
-    def test_install_cannot_start_until_release_files_are_ready(self):
+    def test_install_cannot_start_without_a_release_archive(self):
         fake = SimpleNamespace(_update_install_running=False)
-        release = ReleaseInfo("0.7.0", "v0.7.0", RELEASE.url)
+        release = ReleaseInfo("0.7.0", "", RELEASE.url)
         with patch.object(self.app.threading, "Thread", side_effect=AssertionError("No worker may start")):
             self.app.ReminderApp.start_update_installation(fake, release, manual=False)
         self.assertFalse(fake._update_install_running)

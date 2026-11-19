@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 import update_installer
 import update_state
-from app_info import PYTHON_PACKAGE_REQUIRED_FILES, PYTHON_RELEASE_ASSET, fingerprint_package_files
+from app_info import PYTHON_PACKAGE_REQUIRED_FILES, PYTHON_RELEASE_ASSET
 from update_checker import ReleaseAsset, ReleaseInfo
 from update_installer import (
     UpdateInstallError,
@@ -27,41 +27,55 @@ from update_installer import (
 )
 
 
+SOURCE_URL = "https://github.com/Tokke2/PayPamin-Flow/archive/refs/tags/v0.7.0.zip"
+# Still used by the download-retry tests, which exercise the transport itself.
 PACKAGE_URL = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.7.0/{PYTHON_RELEASE_ASSET}"
-CHECKSUM_URL = PACKAGE_URL + ".sha256"
+SOURCE_COMMIT = "c" * 40
 
 
-def python_package(version="0.7.0", extra=None, omit=None):
+def source_archive(version="0.7.0", extra=None, omit=None, root=None):
+    """Build the shape GitHub uses for a tag: one folder wrapping the repo.
+
+    The real archive also carries ``tests/`` and ``.github/``; the update must
+    skip them instead of copying a test suite into the user's app folder.
+    """
     buffer = io.BytesIO()
     omitted = set(omit or ())
+    folder = "PayPamin-Flow-" + version if root is None else root
+    prefix = f"{folder}/" if folder else ""
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name in PYTHON_PACKAGE_REQUIRED_FILES:
             if name in omitted:
                 continue
             if name == "app_info.py":
                 content = f'APP_VERSION = "{version}"\n'.encode()
+            elif name == "build_info.py":
+                # The repository's committed stamp is stale; the installer
+                # must replace it with the release it actually installed.
+                content = b'APP_RELEASE_ID = "440160436"\n'
             elif name.endswith((".py", ".pyw")):
                 content = f"# updated {name}\n".encode()
             elif name == "requirements.txt":
                 content = b"pystray>=0.19.5\n"
             else:
                 content = b"icon"
-            archive.writestr(name, content)
+            archive.writestr(prefix + name, content)
+        archive.writestr(prefix + "tests/test_update_installer.py", b"# never installed\n")
+        archive.writestr(prefix + ".github/workflows/build.yml", b"name: build\n")
         for name, content in (extra or {}).items():
-            archive.writestr(name, content)
+            archive.writestr(prefix + name, content)
     return buffer.getvalue()
 
 
-def release_with_package(package):
-    digest = hashlib.sha256(package).hexdigest()
-    checksum = f"{digest}  {PYTHON_RELEASE_ASSET}\n".encode("ascii")
+def release_with_source(archive, *, source_url=SOURCE_URL, commit=SOURCE_COMMIT):
     release = ReleaseInfo(
         version="0.7.0",
         tag_name="v0.7.0",
         url="https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0",
-        assets=(ReleaseAsset(PYTHON_RELEASE_ASSET, PACKAGE_URL), ReleaseAsset(PYTHON_RELEASE_ASSET + ".sha256", CHECKSUM_URL)),
+        source_url=source_url,
+        source_commit=commit,
     )
-    return release, {PACKAGE_URL: package, CHECKSUM_URL: checksum}
+    return release, {source_url: archive}
 
 
 class FakeResponse:
@@ -105,7 +119,7 @@ class UpdateInstallerTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def stage(self, package=None, target=None):
-        release, responses = release_with_package(package or python_package())
+        release, responses = release_with_source(package if package is not None else source_archive())
         plan = stage_update(
             release,
             platform="linux",
@@ -126,64 +140,58 @@ class UpdateInstallerTests(unittest.TestCase):
         cleanup_update(plan)
         self.assertFalse(plan.work_dir.exists())
 
-    def test_manifest_commit_and_files_must_match_package(self):
-        source = self.root / "manifest-source"
+    def test_the_build_stamp_must_match_the_release(self):
+        """The stamp names the commit, so a tampered stamp is caught."""
+        source = self.root / "stamp-source"
         source.mkdir()
         (source / "app_info.py").write_text('APP_VERSION = "0.7.0"\n', encoding="utf-8")
-        (source / "assets").mkdir()
-        (source / "assets" / "paypamin_flow.png").write_bytes(b"icon")
-        files = {
-            path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in source.rglob("*") if path.is_file()
-        }
-        fingerprint = fingerprint_package_files(files)
-        commit = "c" * 40
-        (source / "build_info.py").write_text(
-            'APP_RELEASE_ID = "200"\n'
-            f'APP_RELEASE_COMMIT = "{commit}"\n'
-            f'APP_PACKAGE_FINGERPRINT = "{fingerprint}"\n',
-            encoding="utf-8",
-        )
         release = ReleaseInfo(
             "0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0",
-            release_id="200", release_commit=commit, package_fingerprint=fingerprint,
+            release_id="200", source_commit="c" * 40,
         )
+        update_installer.stamp_package_build(source, release)
         _validate_package_build(source, release)
 
-        original = (source / "app_info.py").read_bytes()
-        (source / "app_info.py").write_bytes(original + b"# changed\n")
-        with self.assertRaisesRegex(UpdateInstallError, "release-manifestet"):
-            _validate_package_build(source, release)
-        (source / "app_info.py").write_bytes(original)
-        (source / "build_info.py").write_text('APP_RELEASE_ID = "200"\n', encoding="utf-8")
+        (source / "app_info.py").write_text('APP_VERSION = "0.7.0"\n# changed\n', encoding="utf-8")
         with self.assertRaisesRegex(UpdateInstallError, "byggidentitet"):
             _validate_package_build(source, release)
 
-    def test_checksum_mismatch_is_rejected(self):
-        release, responses = release_with_package(python_package())
-        responses[CHECKSUM_URL] = f"{'0' * 64}  {PYTHON_RELEASE_ASSET}\n".encode()
-        with self.assertRaises(UpdateInstallError):
-            stage_update(release, platform="linux", target_path=self.target, opener=opener_for(responses))
-        self.assertEqual(list(self.target.iterdir()), [])
+        update_installer.stamp_package_build(source, release)
+        with self.assertRaisesRegex(UpdateInstallError, "byggidentitet"):
+            _validate_package_build(source, ReleaseInfo("0.7.0", "v0.7.0", release.url, source_commit="d" * 40))
 
-    def test_path_traversal_is_rejected(self):
-        package = python_package(extra={"../outside.py": "not allowed"})
-        with self.assertRaises(UpdateInstallError):
-            self.stage(package)
+    def test_only_application_files_are_taken_from_the_archive(self):
+        """The archive is the repository; tests and CI stay out of the install."""
+        plan = self.stage()
+        names = {path.relative_to(plan.source_path).as_posix() for path in plan.source_path.rglob("*") if path.is_file()}
+        self.assertIn("paypamin_flow.py", names)
+        self.assertNotIn("tests/test_update_installer.py", names)
+        self.assertNotIn(".github/workflows/build.yml", names)
+        self.assertFalse((plan.source_path / "tests").exists())
+
+    def test_the_archive_root_folder_is_stripped(self):
+        plan = self.stage(source_archive(version="0.7.0"))
+        self.assertTrue((plan.source_path / "app_info.py").is_file())
+        self.assertFalse((plan.source_path / "PayPamin-Flow-0.7.0").exists())
+
+    def test_path_traversal_never_reaches_the_disk(self):
+        """A path outside the app folder is dropped, not written."""
+        plan = self.stage(source_archive(extra={"../outside.py": "not allowed"}))
         self.assertFalse((self.root / "outside.py").exists())
+        self.assertFalse((plan.source_path.parent / "outside.py").exists())
 
-    def test_missing_python_assets_are_rejected(self):
-        release = ReleaseInfo("0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0")
+    def test_a_release_without_an_archive_address_is_rejected(self):
+        release = ReleaseInfo("0.7.0", "", "https://github.com/Tokke2/PayPamin-Flow/releases")
         with self.assertRaises(UpdateInstallError):
             stage_update(release, platform="linux", target_path=self.target)
 
     def test_missing_windows_icon_is_rejected(self):
         with self.assertRaisesRegex(UpdateInstallError, "paypamin_flow.ico"):
-            self.stage(python_package(omit={"assets/paypamin_flow.ico"}))
+            self.stage(source_archive(omit={"assets/paypamin_flow.ico"}))
 
     def test_package_version_must_match_release(self):
         with self.assertRaises(UpdateInstallError):
-            self.stage(python_package(version="0.8.0"))
+            self.stage(source_archive(version="0.8.0"))
 
     def test_install_preserves_user_data_and_rollback_restores_every_file(self):
         (self.target / "paypamin_flow.py").write_text("old application", encoding="utf-8")
@@ -313,15 +321,11 @@ class UpdateInstallerTests(unittest.TestCase):
         process.terminate.assert_not_called()
 
     def test_untrusted_download_url_is_rejected(self):
-        release, responses = release_with_package(python_package())
-        unsafe = ReleaseInfo(
-            release.version,
-            release.tag_name,
-            release.url,
-            (ReleaseAsset(PYTHON_RELEASE_ASSET, "http://example.com/update.zip"), release.assets[1]),
+        release, responses = release_with_source(
+            source_archive(), source_url="http://example.com/source.zip"
         )
         with self.assertRaises(UpdateInstallError):
-            stage_update(unsafe, platform="linux", target_path=self.target, opener=opener_for(responses))
+            stage_update(release, platform="linux", target_path=self.target, opener=opener_for(responses))
 
 
 class DownloadRetryTests(unittest.TestCase):

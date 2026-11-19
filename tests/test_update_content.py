@@ -32,7 +32,7 @@ from update_installer import (
     cleanup_update,
     evaluate_release,
     install_update,
-    read_package_content,
+    read_source_content,
     rollback_update,
     stage_update,
 )
@@ -40,6 +40,10 @@ from update_installer import (
 
 PACKAGE_URL = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/{PYTHON_RELEASE_ASSET}"
 CHECKSUM_URL = PACKAGE_URL + ".sha256"
+# The release is the tag's source archive, wrapped in one folder by GitHub.
+SOURCE_URL = "https://github.com/Tokke2/PayPamin-Flow/archive/refs/tags/v0.6.0.zip"
+SOURCE_COMMIT = "c" * 40
+ARCHIVE_ROOT = "PayPamin-Flow-0.6.0/"
 
 
 def package_bytes(version="0.6.0", overrides=None, extra=None):
@@ -58,9 +62,9 @@ def package_bytes(version="0.6.0", overrides=None, extra=None):
                 content = b"pystray>=0.19.5\n"
             else:
                 content = b"icon"
-            archive.writestr(name, content)
+            archive.writestr(ARCHIVE_ROOT + name, content)
         for name, content in (extra or {}).items():
-            archive.writestr(name, content)
+            archive.writestr(ARCHIVE_ROOT + name, content)
     return buffer.getvalue()
 
 
@@ -86,8 +90,11 @@ def release_for(package, *, version="0.6.0", release_id="444043893", digest=True
         release_id=release_id,
         package_sha256=sha if digest else "",
         package_updated_at=updated_at,
+        source_url=SOURCE_URL,
+        source_commit=SOURCE_COMMIT,
+        source_committed_at=updated_at,
     )
-    return release, {PACKAGE_URL: package, CHECKSUM_URL: checksum}
+    return release, {PACKAGE_URL: package, CHECKSUM_URL: checksum, SOURCE_URL: package}
 
 
 class FakeResponse:
@@ -123,10 +130,12 @@ def opener_for(responses):
 
 
 def write_directory(root, package):
-    """Write the files of a package into a directory, as an install would."""
+    """Write the files of an archive into a directory, as an install would."""
     with zipfile.ZipFile(io.BytesIO(package)) as archive:
         for name in archive.namelist():
-            target = Path(root) / name
+            if not name.startswith(ARCHIVE_ROOT):
+                continue
+            target = Path(root) / name[len(ARCHIVE_ROOT):]
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(archive.read(name))
 
@@ -178,7 +187,7 @@ class FileComparisonTests(unittest.TestCase):
         write_directory(self.root, package)
         with zipfile.ZipFile(io.BytesIO(package_bytes(overrides={"paypamin_flow.py": b"# newer\n"}))) as archive:
             hashes = {
-                info.filename: hashlib.sha256(archive.read(info)).hexdigest()
+                info.filename[len(ARCHIVE_ROOT):]: hashlib.sha256(archive.read(info)).hexdigest()
                 for info in archive.infolist()
             }
         difference = update_state.compare_package_files(hashes, self.root)
@@ -207,7 +216,7 @@ class FileComparisonTests(unittest.TestCase):
         (self.root / "notes.md").write_text("# notes", encoding="utf-8")
         with zipfile.ZipFile(io.BytesIO(package_bytes())) as archive:
             hashes = {
-                info.filename: hashlib.sha256(archive.read(info)).hexdigest()
+                info.filename[len(ARCHIVE_ROOT):]: hashlib.sha256(archive.read(info)).hexdigest()
                 for info in archive.infolist()
             }
         self.assertEqual(update_state.compare_package_files(hashes, self.root), update_state.PackageDiff())
@@ -292,8 +301,8 @@ class EvaluateReleaseTests(unittest.TestCase):
         result = self.evaluate(release, responses)
         self.assertEqual(result.content_state, CONTENT_CURRENT)
         self.assertFalse(is_update_available(result, "0.6.0", "111111111"))
-        # The next check is free: the comparison result was recorded.
-        self.assertEqual(update_state.installed_package_sha256(self.state_file), result.package_sha256)
+        # The next check is free: the release's commit was recorded.
+        self.assertEqual(update_state.installed_source_commit(self.state_file), SOURCE_COMMIT)
 
     def test_a_recorded_package_settles_the_question_without_a_download(self):
         release, responses = release_for(package_bytes(overrides={"tray.py": b"# newer tray\n"}))
@@ -322,19 +331,20 @@ class EvaluateReleaseTests(unittest.TestCase):
         )
         self.assertEqual(result.content_state, CONTENT_UNAVAILABLE)
         # Unknown falls back to the metadata, never to a false "up to date".
-        self.assertTrue(is_update_available(result, "0.6.0", "1"))
-        self.assertFalse(is_update_available(result, "0.6.0", "444043893"))
+        self.assertTrue(is_update_available(result, "0.6.0", "1", "a" * 40))
+        self.assertFalse(is_update_available(result, "0.6.0", "444043893", SOURCE_COMMIT))
 
     def test_content_comparison_can_be_turned_off(self):
         release, responses = release_for(package_bytes(overrides={"tray.py": b"# newer\n"}))
         result = evaluate_release(release, current_version="0.6.0", directory=self.app_dir, state_file=self.state_file, opener=opener_for(responses), compare_content=False)
         self.assertEqual(result.content_state, "")
 
-    def test_the_probe_reads_the_files_without_extracting_them(self):
+    def test_the_probe_reads_the_archive_without_extracting_it(self):
         release, responses = release_for(package_bytes())
-        content = read_package_content(release, opener=opener_for(responses))
-        self.assertEqual(content.package_sha256, hashlib.sha256(responses[PACKAGE_URL]).hexdigest())
+        content = read_source_content(release, opener=opener_for(responses))
+        self.assertEqual(content.root, ARCHIVE_ROOT.rstrip("/"))
         self.assertEqual(len(content.files), len(PYTHON_PACKAGE_REQUIRED_FILES))
+        # Nothing is written next to the app while only comparing.
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["app"])
 
 
@@ -409,6 +419,62 @@ class OlderReleaseTests(unittest.TestCase):
         )
         text = app.ReminderApp._no_update_message(SimpleNamespace(), release, "abcdef123456")
         self.assertIn("nyare än releasen", text)
+
+
+class SourceCommitTests(unittest.TestCase):
+    """The release is the tag's source archive, so its commit is the identity."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.app_dir = self.root / "app"
+        self.app_dir.mkdir()
+        self.state_file = self.root / "installed-release.json"
+        # Installing writes the record through the module's own path, so that
+        # path belongs to the test too.
+        patcher = patch.object(update_state, "state_path", lambda directory=None: self.state_file)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_recorded_commit_settles_the_question_without_a_download(self):
+        release, responses = release_for(package_bytes())
+        update_state.record_installed_package(source_commit=SOURCE_COMMIT, path=self.state_file)
+        opener = opener_for(responses)
+        result = evaluate_release(
+            release, current_version="0.6.0", directory=self.app_dir,
+            state_file=self.state_file, opener=opener,
+        )
+        self.assertEqual(result.content_state, CONTENT_CURRENT)
+        self.assertEqual(opener.requests, [], "the same commit must not download anything")
+        self.assertFalse(is_update_available(result, "0.6.0"))
+
+    def test_a_different_commit_is_an_update_without_a_download(self):
+        release, responses = release_for(package_bytes())
+        update_state.record_installed_package(source_commit="d" * 40, path=self.state_file)
+        opener = opener_for(responses)
+        result = evaluate_release(
+            release, current_version="0.6.0", directory=self.app_dir,
+            state_file=self.state_file, opener=opener,
+        )
+        self.assertEqual(result.content_state, "source_differs")
+        self.assertEqual(opener.requests, [])
+        self.assertTrue(is_update_available(result, "0.6.0"))
+        self.assertEqual(update_change_kind(result, "0.6.0", "d" * 40), "source")
+
+    def test_the_installed_copy_records_the_commit_it_came_from(self):
+        """The next check must be a comparison, not another download."""
+        release, responses = release_for(package_bytes())
+        plan = stage_update(
+            release, platform="linux", target_path=self.app_dir,
+            log_path=self.root / "update.log", opener=opener_for(responses),
+        )
+        self.addCleanup(cleanup_update, plan)
+        installed = install_update(plan)
+        self.addCleanup(cleanup_update, installed)
+        self.assertEqual(update_state.installed_source_commit(self.state_file), SOURCE_COMMIT)
+        stamp = (self.app_dir / "build_info.py").read_text(encoding="utf-8")
+        self.assertIn(f'APP_RELEASE_COMMIT = "{SOURCE_COMMIT}"', stamp)
 
 
 class InstalledRecordTests(unittest.TestCase):

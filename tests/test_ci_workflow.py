@@ -51,9 +51,11 @@ class WorkflowGuardTests(unittest.TestCase):
     def test_pull_requests_still_run_the_same_matrix(self):
         self.assertIn("pull_request:", self.workflow)
 
-    def test_release_workflow_keeps_its_publish_job(self):
+    def test_the_release_carries_the_source_code_instead_of_an_upload(self):
+        """Nothing is uploaded: GitHub's archive for the tag is the release."""
         self.assertIn("types: [published]", self.workflow)
-        self.assertIn("publish-python-package:", self.workflow)
+        self.assertNotIn("publish-python-package:", self.workflow)
+        self.assertNotIn("gh release upload", self.workflow)
 
     def test_permissions_stay_read_only_at_the_top_level(self):
         self.assertIn("permissions:\n  contents: read\n", self.workflow)
@@ -70,33 +72,23 @@ class WorkflowGuardTests(unittest.TestCase):
         self.assertIn("python assets/verify_branding.py", self.workflow)
         self.assertTrue((ROOT / "assets" / "verify_branding.py").is_file())
 
-    def test_release_carries_only_the_package_and_its_checksum(self):
-        """A release has exactly two files; the manifest is a local record."""
-        publish_block = self.workflow.split("publish-python-package:", 1)[1]
-        self.assertIn("gh release upload", publish_block)
-        self.assertIn("release-assets/PayPamin-Flow-Python.zip ", publish_block)
-        self.assertIn("release-assets/PayPamin-Flow-Python.zip.sha256", publish_block)
-        # Never publish the build manifest or a wildcard that would pick it up.
-        self.assertNotIn("release-assets/*", publish_block)
-        self.assertNotIn(".manifest.json\n            --clobber", publish_block)
-        # The packaging step drops the locally built manifest before upload.
-        self.assertIn("rm -f release-assets/*.manifest.json", self.workflow)
+    def test_release_assets_are_never_uploaded(self):
+        """The release is the tag's source archive; an upload would break that."""
+        self.assertNotIn("gh release upload", self.workflow)
+        self.assertNotIn("upload-artifact", self.workflow)
+        self.assertNotIn("download-artifact", self.workflow)
 
-    def test_a_push_to_the_working_branch_refreshes_the_release(self):
-        """The release is not a frozen snapshot while the app is 0.6.0."""
+    def test_a_push_to_the_working_branch_moves_the_tag(self):
+        """Moving the tag is what makes the release carry the newest code."""
         block = self.workflow.split("refresh-release-files:", 1)
         self.assertEqual(len(block), 2, "build.yml has no release refresh job")
         refresh = block[1]
         self.assertIn("github.event_name == 'push'", refresh)
         self.assertIn("startsWith(github.ref, 'refs/heads/arena/')", refresh)
-        self.assertIn("gh release upload", refresh)
-        self.assertIn("release-assets/PayPamin-Flow-Python.zip ", refresh)
-        self.assertIn("release-assets/PayPamin-Flow-Python.zip.sha256", refresh)
-        # Only the two release files, never a wildcard.
-        self.assertNotIn("release-assets/*", refresh)
-        self.assertIn("--clobber", refresh)
-        # The tag follows the files, so tag, release and code stay together.
         self.assertIn("git/refs/tags/$tag", refresh)
+        # The page is rewritten from the commit the tag now points at.
+        self.assertIn("packaging/release_description.py", refresh)
+        self.assertIn("releases/$release_id", refresh)
 
     def test_the_release_is_never_refreshed_from_main(self):
         """The work lives on the branch, so main is not a publish source.
@@ -110,12 +102,6 @@ class WorkflowGuardTests(unittest.TestCase):
         self.assertIsNotNone(requirement)
         self.assertNotIn("refs/heads/main", requirement.group(0))
 
-    def test_the_release_page_is_rewritten_from_the_uploaded_zip(self):
-        """A stale checksum on the page makes a refreshed release look stale."""
-        refresh = self.workflow.split("refresh-release-files:", 1)[1]
-        self.assertIn("packaging/release_description.py", refresh)
-        self.assertIn("releases/$release_id", refresh)
-
     def test_the_workflow_never_merges_or_opens_a_pull_request(self):
         """Merging is the owner's decision and is never automated."""
         lowered = self.workflow.lower()
@@ -123,16 +109,9 @@ class WorkflowGuardTests(unittest.TestCase):
             with self.subTest(command=forbidden):
                 self.assertNotIn(forbidden, lowered)
 
-    def test_the_package_is_stamped_with_the_release_it_belongs_to(self):
-        """A build from main carries the release identity of its version."""
-        self.assertIn("steps.release-identity.outputs.release_id", self.workflow)
-        self.assertIn("releases/tags/$tag", self.workflow)
-
-    def test_workflow_only_publishes_for_releases(self):
-        publish_block = self.workflow.split("publish-python-package:", 1)[1]
-        requirement = re.search(r"^    if: .*$", publish_block, re.MULTILINE)
-        self.assertIsNotNone(requirement)
-        self.assertIn("github.event_name == 'release'", requirement.group(0))
+    def test_the_desktop_job_runs_the_suite_on_every_push(self):
+        self.assertIn("unittest discover -s tests", self.workflow)
+        self.assertIn("python assets/verify_branding.py", self.workflow)
 
 
 if __name__ == "__main__":

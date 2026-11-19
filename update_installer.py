@@ -1,8 +1,11 @@
 """In-app, console-free updates for the Python-source PayPamin Flow app.
 
-The release asset is one cross-platform Python ZIP. Files are verified and
-compiled before installation, replaced atomically, and can be rolled back if
-starting the updated app fails. User data directories are never package paths.
+The release is the source archive GitHub generates for the release tag, so the
+app updates from exactly the code the tag points at - nothing is uploaded and
+nothing can drift. Only application-owned files are taken from the archive;
+tests and CI configuration are ignored. Files are verified and compiled before
+installation, replaced atomically, and rolled back if the updated app fails to
+start. User data directories are never package paths.
 """
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ from urllib.parse import urlparse
 
 from app_info import (
     APP_NAME,
+    APP_SOURCE_ARCHIVE_URL,
     APP_VERSION,
     PYTHON_PACKAGE_REQUIRED_FILES,
     PYTHON_RELEASE_ASSET,
@@ -41,6 +45,7 @@ import update_state
 from update_checker import (
     CONTENT_CURRENT,
     CONTENT_DIFFERS,
+    CONTENT_SOURCE_DIFFERS,
     CONTENT_STALE,
     CONTENT_UNAVAILABLE,
     STALE_FILE_MARGIN_SECONDS,
@@ -63,6 +68,9 @@ _LOG_ERROR_MARKERS = re.compile(
 )
 MAX_CHECKSUM_BYTES = 65_536
 MAX_PACKAGE_FILES = 500
+# A source archive of this project is about 1.2 MB compressed. The limit only
+# exists so a wrong URL can never fill the disk.
+MAX_SOURCE_ARCHIVE_BYTES = 32 * 1024 * 1024
 # A content check downloads the release ZIP, so it is bounded well above the
 # real package size (about one megabyte) and never used for installation.
 CONTENT_PROBE_MAX_BYTES = 60 * 1024 * 1024
@@ -87,9 +95,10 @@ class UpdatePlan:
     target_path: Path
     work_dir: Path
     log_path: Path
-    # SHA-256 of the downloaded ZIP, recorded once the files are in place so
-    # the next check can compare content instead of guessing from a version.
+    # SHA-256 of the downloaded archive, kept as a record of what was installed.
     package_sha256: str = ""
+    # The commit the archive was generated from: the release's identity.
+    source_commit: str = ""
 
 
 @dataclass
@@ -137,7 +146,12 @@ def platform_key(value: str | None = None) -> str:
 def _github_https_url(value: str) -> str:
     parsed = urlparse(value)
     host = (parsed.hostname or '').lower()
-    trusted = host in {'github.com', 'www.github.com', 'api.github.com'} or host.endswith('.githubusercontent.com')
+    # codeload hosts the archives GitHub generates for a tag; the release is
+    # that archive, so following the redirect there is the normal path.
+    trusted = (
+        host in {'github.com', 'www.github.com', 'api.github.com', 'codeload.github.com'}
+        or host.endswith('.githubusercontent.com')
+    )
     if parsed.scheme != 'https' or not trusted:
         raise UpdateInstallError(_('Uppdateringspaketet har en osäker nedladdningsadress.'))
     return value
@@ -282,6 +296,109 @@ def read_package_content(
     return PackageContent(package_sha256=digest, files=files)
 
 
+@dataclass(frozen=True)
+class SourceArchive:
+    """A downloaded release archive and the archive root GitHub wrapped it in."""
+
+    path: Path
+    root: str
+    files: dict
+
+
+def source_archive_root(names) -> str:
+    """Return the single top-level folder a GitHub archive wraps everything in.
+
+    ``https://github.com/<owner>/<repo>/archive/refs/tags/v0.6.0.zip`` unpacks
+    to ``PayPamin-Flow-0.6.0/...``. Stripping that one folder is what makes the
+    archive usable as an application folder; a ZIP without a single shared root
+    keeps its own layout.
+    """
+    roots = set()
+    for name in names:
+        parts = PurePosixPath(str(name)).parts
+        if len(parts) < 2:
+            return ""
+        roots.add(parts[0])
+        if len(roots) > 1:
+            return ""
+    return roots.pop() if len(roots) == 1 else ""
+
+
+def _archive_member_name(name: str, root: str) -> str:
+    """Return the path inside the application, or an empty string to skip it."""
+    text = str(name).replace("\\", "/").strip("/")
+    if root:
+        prefix = root + "/"
+        if not text.startswith(prefix):
+            return ""
+        text = text[len(prefix):]
+    if not text or text.endswith("/"):
+        return ""
+    return text
+
+
+def read_source_content(
+    release: ReleaseInfo,
+    *,
+    work_dir: Path | None = None,
+    opener=None,
+) -> SourceArchive:
+    """Download the release archive once and index the files it ships.
+
+    The archive is GitHub's own source archive for the tag, so its content is
+    exactly the commit the release points at. Only files the application owns
+    are indexed: the archive also carries tests and CI configuration, which
+    belong to the repository but must never be written into an installation.
+    Nothing is extracted to the installation from here.
+    """
+    url = release.source_url or (
+        APP_SOURCE_ARCHIVE_URL.format(tag=release.tag_name) if release.tag_name else ""
+    )
+    if not url:
+        raise UpdateInstallError(_("Releasen saknar en nedladdningsadress för källkoden."))
+    # A caller that is going to install keeps the archive for extraction; a
+    # caller that only compares deletes it as soon as the files are hashed.
+    owned = work_dir is None
+    folder = Path(tempfile.mkdtemp(prefix="paypamin-flow-source-")) if owned else Path(work_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    archive_path = folder / "source.zip"
+    _download(url, archive_path, max_bytes=MAX_SOURCE_ARCHIVE_BYTES, opener=opener)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            infos = [info for info in archive.infolist() if not info.is_dir()]
+            root = source_archive_root(info.filename for info in infos)
+            files = {}
+            for info in infos:
+                name = _archive_member_name(info.filename, root)
+                if not name or not is_python_package_file(name):
+                    continue
+                hasher = hashlib.sha256()
+                with archive.open(info) as source:
+                    for block in iter(lambda: source.read(1024 * 1024), b""):
+                        hasher.update(block)
+                files[name] = hasher.hexdigest()
+    except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+        if owned:
+            shutil.rmtree(folder, ignore_errors=True)
+        raise UpdateInstallError(_("Källkodsarkivet är skadat: {error}", error=exc)) from exc
+    if not files:
+        if owned:
+            shutil.rmtree(folder, ignore_errors=True)
+        raise UpdateInstallError(_("Källkodsarkivet innehåller inga programfiler."))
+    missing = sorted(set(PYTHON_PACKAGE_REQUIRED_FILES) - set(files))
+    if missing:
+        if owned:
+            shutil.rmtree(folder, ignore_errors=True)
+        raise UpdateInstallError(
+            _("Källkodsarkivet saknar nödvändiga filer: {files}", files=", ".join(missing))
+        )
+    archive = SourceArchive(path=archive_path, root=root, files=files)
+    if owned:
+        # Only the index is needed for a comparison.
+        shutil.rmtree(folder, ignore_errors=True)
+    return archive
+
+
 def _release_is_older_than_files(release: ReleaseInfo, release_files, directory) -> bool:
     """Return whether the release ZIP predates the installed package files.
 
@@ -290,7 +407,9 @@ def _release_is_older_than_files(release: ReleaseInfo, release_files, directory)
     comparison alone cannot do. A missing or unparsable timestamp means "do
     not guess": the difference is then treated as a normal update.
     """
-    stamp = str(getattr(release, "package_updated_at", "") or "").strip()
+    stamp = str(
+        getattr(release, "source_committed_at", "") or getattr(release, "package_updated_at", "")
+    ).strip()
     if not stamp:
         return False
     try:
@@ -334,17 +453,25 @@ def evaluate_release(
     if release.content_state:
         return release
 
+    # The release is the source archive at the tag's commit, so the recorded
+    # commit of the installed copy answers the question outright: equal means
+    # the same code, different means newer or older, and nothing is downloaded.
+    local_commit = update_state.installed_source_commit(state_file)
+    if release.source_commit and local_commit:
+        state = CONTENT_CURRENT if release.source_commit == local_commit else CONTENT_SOURCE_DIFFERS
+        return replace(release, content_state=state)
+
     local_hash = update_state.installed_package_sha256(state_file)
-    release_hash = release_package_sha256(release, opener=opener)
+    release_hash = release_package_sha256(release, opener=opener) if release.assets else ""
     if release_hash and local_hash:
         state = CONTENT_CURRENT if release_hash == local_hash else CONTENT_DIFFERS
         return replace(release, package_sha256=release_hash, content_state=state)
 
     target = Path(directory) if directory else Path(__file__).resolve().parent
     try:
-        content = read_package_content(release, opener=opener)
+        content = read_source_content(release, opener=opener)
     except (UpdateInstallError, OSError):
-        # Offline, or the asset is still uploading: say so instead of
+        # Offline, or the archive is still being generated: say so instead of
         # pretending the installed files are up to date.
         return replace(release, content_state=CONTENT_UNAVAILABLE)
     difference = update_state.compare_package_files(content.files, target)
@@ -354,19 +481,14 @@ def evaluate_release(
             # Different, but in the wrong direction: the release predates the
             # installed files, so installing it would be a downgrade.
             state = CONTENT_STALE
-        return replace(
-            release,
-            package_sha256=content.package_sha256,
-            content_state=state,
-            changed_files=difference.files,
-        )
+        return replace(release, content_state=state, changed_files=difference.files)
     update_state.record_installed_package(
-        content.package_sha256,
         release_id=release.release_id,
         version=release.version,
+        source_commit=release.source_commit,
         path=state_file,
     )
-    return replace(release, package_sha256=content.package_sha256, content_state=CONTENT_CURRENT)
+    return replace(release, content_state=CONTENT_CURRENT)
 
 
 def _package_version(source_path: Path) -> str:
@@ -383,63 +505,101 @@ def _package_version(source_path: Path) -> str:
     raise UpdateInstallError(_("Uppdateringspaketets versionsinformation är ogiltig."))
 
 
-def _validate_package_build(source_path: Path, release: ReleaseInfo) -> None:
-    """Match new-manifest packages to their commit and exact shipped files."""
-    if not release.package_fingerprint:
-        return
+def _shipped_fingerprint(source_path: Path) -> str:
+    """Hash every application file except the build stamp itself."""
     file_hashes = {
         path.relative_to(source_path).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in source_path.rglob("*")
         if path.is_file() and path.name != "build_info.py"
     }
-    actual_fingerprint = fingerprint_package_files(file_hashes)
-    if not hmac.compare_digest(actual_fingerprint, release.package_fingerprint.lower()):
-        raise UpdateInstallError(_("Uppdateringspaketet stämmer inte med release-manifestet."))
+    return fingerprint_package_files(file_hashes)
+
+
+def stamp_package_build(source_path: Path, release: ReleaseInfo) -> str:
+    """Write ``build_info.py`` so the installed copy names its own release.
+
+    The repository's ``build_info.py`` cannot be trusted for this: it is
+    committed once and then never changes, while the release moves with every
+    push. Stamping it after extraction is what lets the next update check
+    answer "is this the same code?" with a single string comparison instead of
+    a download.
+    """
+    fingerprint = _shipped_fingerprint(source_path)
+    commit = (release.source_commit or release.release_commit or "").strip().lower()
+    release_id = str(release.release_id or "").strip()
+    lines = ['"""Official release identity for same-version commit and file checks."""', ""]
+    if release_id:
+        lines.append(f'APP_RELEASE_ID = "{release_id}"')
+    if commit:
+        lines.append(f'APP_RELEASE_COMMIT = "{commit}"')
+    lines.append(f'APP_PACKAGE_FINGERPRINT = "{fingerprint}"')
+    (source_path / "build_info.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return fingerprint
+
+
+def _validate_package_build(source_path: Path, release: ReleaseInfo) -> None:
+    """Verify the stamp written after extraction matches the release.
+
+    There is no uploaded manifest any more, so the check is that the archive
+    really is the code the tag points at: the commit written into the stamp has
+    to be the release's own, and the fingerprint has to describe the files that
+    are now on disk.
+    """
+    expected_commit = (release.source_commit or release.release_commit or "").strip().lower()
     try:
         tree = ast.parse((source_path / "build_info.py").read_bytes())
-        values = {}
-        for node in tree.body:
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        values[target.id] = node.value.value
     except (OSError, SyntaxError) as exc:
         raise UpdateInstallError(_("Uppdateringspaketets byggidentitet stämmer inte med releasen.")) from exc
-    expected = {
-        "APP_RELEASE_ID": release.release_id,
-        "APP_RELEASE_COMMIT": release.release_commit.lower(),
-        "APP_PACKAGE_FINGERPRINT": release.package_fingerprint.lower(),
-    }
-    if any(values.get(name) != value for name, value in expected.items()):
+    values = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    values[target.id] = node.value.value
+    if expected_commit and values.get("APP_RELEASE_COMMIT", "").lower() != expected_commit:
+        raise UpdateInstallError(_("Uppdateringspaketets byggidentitet stämmer inte med releasen."))
+    if not hmac.compare_digest(str(values.get("APP_PACKAGE_FINGERPRINT", "")).lower(), _shipped_fingerprint(source_path)):
         raise UpdateInstallError(_("Uppdateringspaketets byggidentitet stämmer inte med releasen."))
 
 
-def _extract_python_package(archive_path: Path, source_path: Path, expected_version: str) -> None:
+def _extract_source_tree(archive_path: Path, source_path: Path, root: str, expected_version: str) -> None:
+    """Write the application's files from a GitHub archive into ``source_path``.
+
+    The archive is the repository, so it also holds tests and CI configuration.
+    Only files the application owns are written: an installation must never
+    gain a ``tests`` folder or a workflow file, and the allow-list is the same
+    one the updater has always used.
+    """
     try:
         with zipfile.ZipFile(archive_path) as archive:
             infos = [info for info in archive.infolist() if not info.is_dir()]
-            if not infos or len(infos) > MAX_PACKAGE_FILES:
+            if not infos or len(infos) > MAX_PACKAGE_FILES * 4:
                 raise UpdateInstallError(_("Uppdateringspaketet har ogiltigt innehåll."))
-            if sum(info.file_size for info in infos) > MAX_DOWNLOAD_BYTES:
-                raise UpdateInstallError(_("Uppdateringspaketet är för stort."))
-            names = [info.filename for info in infos]
-            if len(names) != len(set(names)) or len(names) != len({name.casefold() for name in names}):
-                raise UpdateInstallError(_("Uppdateringspaketet innehåller dubbletter av filnamn."))
+            selected = []
+            seen = set()
             for info in infos:
-                if not is_python_package_file(info.filename):
-                    raise UpdateInstallError(
-                        _("Filen är inte tillåten i uppdateringspaketet: {name}", name=info.filename)
-                    )
+                name = _archive_member_name(info.filename, root)
+                if not name:
+                    continue
+                if not is_python_package_file(name):
+                    continue
+                if name in seen or name.casefold() in seen:
+                    raise UpdateInstallError(_("Uppdateringspaketet innehåller dubbletter av filnamn."))
+                seen.add(name)
+                seen.add(name.casefold())
                 mode = info.external_attr >> 16
                 if mode and stat.S_ISLNK(mode):
                     raise UpdateInstallError(_("Uppdateringspaketet innehåller en symbolisk länk."))
-            missing = sorted(set(PYTHON_PACKAGE_REQUIRED_FILES) - set(names))
+                selected.append((info, name))
+            missing = sorted(set(PYTHON_PACKAGE_REQUIRED_FILES) - seen)
             if missing:
                 raise UpdateInstallError(
                     _("Uppdateringspaketet saknar nödvändiga filer: {files}", files=", ".join(missing))
                 )
-            for info in infos:
-                relative = PurePosixPath(info.filename)
+            if sum(info.file_size for info, _ in selected) > MAX_DOWNLOAD_BYTES:
+                raise UpdateInstallError(_("Uppdateringspaketet är för stort."))
+            for info, name in selected:
+                relative = PurePosixPath(name)
                 target = source_path.joinpath(*relative.parts)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(info) as source, target.open("wb") as destination:
@@ -459,14 +619,13 @@ def _extract_python_package(archive_path: Path, source_path: Path, expected_vers
                 version=_package_version(source_path),
             )
         )
-    for path in source_path.iterdir():
-        if path.suffix.lower() in {".py", ".pyw"}:
-            try:
-                compile(path.read_bytes(), str(path), "exec")
-            except (OSError, SyntaxError) as exc:
-                raise UpdateInstallError(
-                    _("Python-filen i uppdateringen är ogiltig: {name}", name=path.name)
-                ) from exc
+    for path in source_path.rglob("*.py"):
+        try:
+            compile(path.read_bytes(), str(path), "exec")
+        except (OSError, SyntaxError) as exc:
+            raise UpdateInstallError(
+                _("Python-filen i uppdateringen är ogiltig: {name}", name=path.name)
+            ) from exc
 
 
 def stage_update(
@@ -477,51 +636,24 @@ def stage_update(
     log_path: Path | None = None,
     opener=None,
 ) -> UpdatePlan:
-    """Download and validate a Python update without changing the running app."""
+    """Download and validate the release's source archive without changing the app."""
 
     if getattr(sys, "frozen", False) and target_path is None:
         raise UpdateInstallError(
             _("Den här installationen kan inte uppdatera sig själv. Använd Python-versionen av PayPamin Flow.")
         )
     selected_platform = platform or platform_key()
-    assets = {asset.name: asset for asset in release.assets}
-    asset = assets.get(PYTHON_RELEASE_ASSET)
-    checksum_asset = assets.get(PYTHON_RELEASE_ASSET + '.sha256')
-    if asset is None or checksum_asset is None:
-        # Name the missing file so the log says whether the ZIP or the sidecar
-        # is still uploading on GitHub.
-        missing = [
-            name
-            for name, item in (
-                (PYTHON_RELEASE_ASSET, asset),
-                (PYTHON_RELEASE_ASSET + ".sha256", checksum_asset),
-            )
-            if item is None
-        ]
-        raise UpdateInstallError(
-            _("Releasen saknar Python-paket eller SHA-256-kontrollsumma för den här plattformen. Saknas: {files}", files=", ".join(missing))
-        )
 
     work_dir = Path(tempfile.mkdtemp(prefix="paypamin-flow-python-update-"))
-    archive_path = work_dir / "update.zip"
-    checksum_path = work_dir / "update.sha256"
     source_path = work_dir / "source"
     source_path.mkdir()
     try:
-        _download_asset(checksum_asset, checksum_path, max_bytes=MAX_CHECKSUM_BYTES, opener=opener)
-        actual_hash = _download_asset(asset, archive_path, opener=opener)
-        try:checksum_text = checksum_path.read_text(encoding="ascii")
-        except (OSError,UnicodeError) as exc:raise UpdateInstallError(_("Releasens SHA-256-kontrollsumma är ogiltig.")) from exc
-        expected_hash = ''
-        for line in checksum_text.splitlines():
-            parts = line.strip().split(maxsplit=1)
-            if len(parts) == 2 and parts[1].lstrip('*') == PYTHON_RELEASE_ASSET:
-                expected_hash = parts[0].lower();break
-        if len(expected_hash) != 64 or any(character not in "0123456789abcdef" for character in expected_hash):
-            raise UpdateInstallError(_("Releasens SHA-256-kontrollsumma är ogiltig."))
-        if not hmac.compare_digest(actual_hash, expected_hash):
-            raise UpdateInstallError(_("SHA-256-kontrollsumman stämmer inte. Uppdateringen avbröts."))
-        _extract_python_package(archive_path, source_path, release.version)
+        archive = read_source_content(release, work_dir=work_dir, opener=opener)
+        archive_hash = hashlib.sha256(archive.path.read_bytes()).hexdigest()
+        _extract_source_tree(archive.path, source_path, archive.root, release.version)
+        # The archive's own build_info.py is the repository's stale copy, so the
+        # identity of the release is written here, from the release itself.
+        stamp_package_build(source_path, release)
         _validate_package_build(source_path, release)
         plan = UpdatePlan(
             release=release,
@@ -530,9 +662,10 @@ def stage_update(
             target_path=(target_path or Path(__file__).resolve().parent).resolve(),
             work_dir=work_dir,
             log_path=log_path or Path.home() / ".paminnelseapp" / "logs" / "app.log",
-            package_sha256=actual_hash.lower(),
+            package_sha256=archive_hash,
+            source_commit=(release.source_commit or release.release_commit or "").lower(),
         )
-        _log(plan, f"Validated Python update {release.version}")
+        _log(plan, f"Validated Python update {release.version} from {plan.source_commit or 'the release'}")
         return plan
     except Exception:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -607,11 +740,12 @@ def install_update(plan: UpdatePlan) -> InstalledUpdate:
                 shutil.copy2(target, backup)
             _replace_file(source, target)
             installed.replacements.append(Replacement(target=target, backup=backup, existed=existed))
-        if plan.package_sha256:
+        if plan.package_sha256 or plan.source_commit:
             update_state.record_installed_package(
                 plan.package_sha256,
                 release_id=plan.release.release_id,
                 version=plan.release.version,
+                source_commit=plan.source_commit,
             )
         _log(plan, f"Installed Python update {plan.release.version}; restart pending")
         return installed

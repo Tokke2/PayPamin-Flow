@@ -23,6 +23,7 @@ from update_checker import (
     is_newer_version,
     is_update_available,
     missing_release_assets,
+    source_archive_url,
     update_change_kind,
     version_key,
 )
@@ -138,14 +139,16 @@ class UpdateCheckerTests(unittest.TestCase):
         )
         self.assertTrue(is_update_available(without_manifest, "0.6.0", **current))
 
-    def test_release_assets_must_be_complete_before_install(self):
-        url = "https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/"
-        package = ReleaseAsset(PYTHON_RELEASE_ASSET, url + PYTHON_RELEASE_ASSET)
-        checksum = ReleaseAsset(PYTHON_RELEASE_ASSET + ".sha256", url + PYTHON_RELEASE_ASSET + ".sha256")
-        release = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0", assets=(package,))
-        self.assertEqual(missing_release_assets(release), (PYTHON_RELEASE_ASSET + ".sha256",))
-        release = ReleaseInfo("0.6.0", "v0.6.0", release.url, assets=(package, checksum))
-        self.assertEqual(missing_release_assets(release), ())
+    def test_a_release_needs_the_source_archive_before_it_can_be_installed(self):
+        """The release is the tag's source archive, so that is what must exist."""
+        tag_only = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0")
+        self.assertEqual(missing_release_assets(tag_only), (), "a tag always has an archive address")
+        source = ReleaseInfo(
+            "0.6.0", "v0.6.0", tag_only.url,
+            source_url=source_archive_url("v0.6.0"), source_commit="a" * 40,
+        )
+        self.assertEqual(missing_release_assets(source), ())
+        self.assertEqual(missing_release_assets(ReleaseInfo("0.6.0", "", tag_only.url)), (missing_release_assets(ReleaseInfo("0.6.0", "", tag_only.url))[0],))
 
     def test_update_change_kind_distinguishes_version_commit_and_files(self):
         release = ReleaseInfo(
@@ -204,7 +207,11 @@ class UpdateCheckerTests(unittest.TestCase):
         release = fetch_latest_release(opener=opener)
         self.assertEqual(release.release_commit, commit)
         self.assertEqual(release.package_fingerprint, manifest["package_fingerprint"])
-        self.assertEqual(calls, [APP_LATEST_RELEASE_API, manifest_url])
+        # The tag's commit is read too: it is what the release actually is.
+        self.assertEqual(
+            calls,
+            [APP_LATEST_RELEASE_API, f"https://api.github.com/repos/Tokke2/PayPamin-Flow/git/ref/tags/v0.6.0", manifest_url],
+        )
 
     def test_rejects_manifest_whose_file_fingerprint_is_wrong(self):
         commit = "a" * 40

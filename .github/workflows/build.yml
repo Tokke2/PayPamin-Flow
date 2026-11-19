@@ -64,86 +64,15 @@ jobs:
         run: python assets/verify_branding.py
       - name: Verify desktop imports
         run: python -c "import tkinter; import fitz; import reportlab; import PIL; import cv2; import tray; import paypamin_flow"
-      - name: Resolve the release this build belongs to
-        if: runner.os == 'Linux'
-        id: release-identity
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          version=$(python -c "import app_info; print(app_info.APP_VERSION)")
-          tag="v$version"
-          release_id="${{ github.event.release.id }}"
-          if [ -z "$release_id" ]; then
-            # A push to main or a manual dispatch belongs to the existing
-            # release for this version: it is refreshed in place, so its ID is
-            # the build identity.
-            release_id=$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq .id 2>/dev/null || true)
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
-          if [ -n "$release_id" ]; then
-            echo "Building for release $tag (id $release_id)"
-          else
-            echo "No release for $tag yet; this build stays a test build"
-          fi
-      - name: Package Python application, SHA-256 and build manifest
-        if: runner.os == 'Linux'
-        env:
-          RELEASE_ID: ${{ steps.release-identity.outputs.release_id }}
-        run: |
-          args=()
-          if [ -n "$RELEASE_ID" ]; then
-            args=(--release-id "$RELEASE_ID" --release-commit "$(git rev-parse HEAD)")
-          fi
-          python packaging/package_release.py --output release-assets "${args[@]}"
-          # A release carries exactly two files: the Python ZIP and its
-          # SHA-256 sidecar. The build manifest remains a local build record,
-          # so it is not uploaded with the release.
-          rm -f release-assets/*.manifest.json
-          cat release-assets/PayPamin-Flow-Python.zip.sha256
-      - name: Upload Python release package
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: PayPamin-Flow-Python-release
-          path: release-assets/
-          if-no-files-found: error
-
-  publish-python-package:
-    name: Publish Python package
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-    needs: desktop
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download Python package
-        uses: actions/download-artifact@v4
-        with:
-          name: PayPamin-Flow-Python-release
-          path: release-assets
-      - name: Attach Python package to GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
-        run: |
-          gh release upload "$RELEASE_TAG" \
-            release-assets/PayPamin-Flow-Python.zip \
-            release-assets/PayPamin-Flow-Python.zip.sha256 \
-            --clobber --repo "$REPOSITORY"
-
   refresh-release-files:
-    name: Refresh the release's files
-    # While the application is still 0.6.0 the release is not a frozen
-    # snapshot: every push to a working branch rebuilds the package and replaces
-    # the ZIP in the release that carries this version, so the files in the
-    # release are always the newest ones. The work happens on the branch and is
-    # never merged, so main is deliberately not the source: a push to main would
-    # publish code that no branch contains. The tag moves to the branch commit,
-    # so tag, release and files keep pointing at the same place. The app compares
-    # the release's files with its own, which is what makes a rebuilt 0.6.0 an
-    # update.
+    name: Point the release at the branch's code
+    # The release *is* the source code at its tag: GitHub generates the archive
+    # itself, so there is nothing to upload and the two can never disagree.
+    # Every push to a working branch moves the tag to that commit, which makes
+    # the release carry the newest code; the app updates from that archive.
+    # main is deliberately not a source: the work is never merged, so a
+    # release built from main would carry code no branch contains. Nothing here
+    # merges or opens a pull request.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/')
     needs: desktop
     runs-on: ubuntu-latest
@@ -156,12 +85,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Download Python package
-        uses: actions/download-artifact@v4
-        with:
-          name: PayPamin-Flow-Python-release
-          path: release-assets
-      - name: Replace the package files and move the tag
+      - name: Move the tag and describe the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
@@ -173,28 +97,14 @@ jobs:
             echo "No release $tag exists yet; nothing to refresh"
             exit 0
           fi
-          gh release upload "$tag" \
-            release-assets/PayPamin-Flow-Python.zip \
-            release-assets/PayPamin-Flow-Python.zip.sha256 \
-            --clobber --repo "$REPOSITORY"
-          checksum=$(cut -d' ' -f1 release-assets/PayPamin-Flow-Python.zip.sha256)
-          echo "Release $tag now carries $checksum from $COMMIT"
-          # The page must describe the file that is actually there. Numbers
-          # from an older build (the old checksum, an old file count) are what
-          # makes a refreshed release look untouched, so the package block is
-          # rewritten from the ZIP that was just uploaded. Everything else in
-          # the description is kept as it is.
-          python packaging/release_description.py \
-            --tag "$tag" --repository "$REPOSITORY" \
-            --archive release-assets/PayPamin-Flow-Python.zip \
-            --sidecar release-assets/PayPamin-Flow-Python.zip.sha256 \
-            --commit "$COMMIT" --output release-body.md
+          # The tag follows the branch, so the archive GitHub generates for it -
+          # the one the app downloads - is this commit.
+          gh api -X PATCH "repos/$REPOSITORY/git/refs/tags/$tag" \
+            -f sha="$COMMIT" -F force=true > /dev/null
           release_id=$(gh api "repos/$REPOSITORY/releases/tags/$tag" --jq .id)
+          python packaging/release_description.py \
+            --tag "$tag" --repository "$REPOSITORY" --commit "$COMMIT" \
+            --output release-body.md
           gh api -X PATCH "repos/$REPOSITORY/releases/$release_id" \
             -F body=@release-body.md > /dev/null
-          echo "Release $tag now describes the uploaded package"
-          # The tag follows the files, so a checkout of the tag and the ZIP are
-          # the same code. A failure here is reported, never hidden.
-          if ! gh api -X PATCH "repos/$REPOSITORY/git/refs/tags/$tag" -f sha="$COMMIT" -F force=true > /dev/null; then
-            echo "::warning::The package was replaced but the tag $tag could not be moved to $COMMIT"
-          fi
+          echo "Release $tag now points at $COMMIT and its source archive is that code"

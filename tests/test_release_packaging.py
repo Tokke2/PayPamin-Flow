@@ -17,7 +17,7 @@ from app_info import (
     is_python_package_file,
 )
 from update_checker import ReleaseInfo
-from update_installer import _extract_python_package, _validate_package_build
+from update_installer import _extract_source_tree, _validate_package_build
 from ui_icons import ICON_NAMES
 
 
@@ -94,7 +94,7 @@ class ReleasePackagingTests(unittest.TestCase):
             self.assertIn(f'APP_PACKAGE_FINGERPRINT = "{manifest["package_fingerprint"]}"', build_info)
             self.assertEqual(manifest["commit"], commit)
             validated = output / "validated"
-            _extract_python_package(asset, validated, APP_VERSION)
+            _extract_source_tree(asset, validated, "", APP_VERSION)
             _validate_package_build(validated, ReleaseInfo(
                 APP_VERSION,
                 f"v{APP_VERSION}",
@@ -175,7 +175,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertNotIn("paypaminn_flow.py", names)
                 self.assertNotIn("paypaminn_flow.pyw", names)
             validated = output / "validated"
-            _extract_python_package(asset, validated, APP_VERSION)
+            _extract_source_tree(asset, validated, "", APP_VERSION)
             self.assertTrue((validated / "paypamin_flow.py").is_file())
             self.assertTrue((validated / "activity_log.py").is_file())
             self.assertTrue((validated / "log_archive.py").is_file())

@@ -1,97 +1,59 @@
 #!/usr/bin/env python3
-"""Rewrite the package block of the release description from the real ZIP.
+"""Rewrite the description of a release that carries the source code.
 
-The release is rebuilt in place while the application is still 0.6.0, so the
-release page can otherwise describe a file that is no longer there: an old
-checksum, an old file count and an old size, which makes a refreshed release
-look untouched. This writes the facts about the ZIP that was just uploaded and
-leaves every other sentence in the description alone.
+The release has no uploaded files any more: GitHub generates a source archive
+for the tag, and that archive is what the app updates from. The page therefore
+describes the commit, not a ZIP - and it must say when the tag last moved,
+because GitHub keeps showing the release's original publication date while the
+code underneath is replaced.
 
-The block is delimited so it can be replaced instead of appended on the next
-build:
+The block is delimited so it can be replaced instead of appended:
 
-    <!-- paket -->
+    <!-- release -->
     ...
-    <!-- /paket -->
+    <!-- /release -->
 
-Everything outside the markers is kept byte for byte, so the release notes that
-were written by hand survive every refresh.
+Everything outside the markers is kept byte for byte, so hand-written release
+notes survive every refresh.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import sys
-import zipfile
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
-OPENING = "<!-- paket -->"
-CLOSING = "<!-- /paket -->"
+OPENING = "<!-- release -->"
+CLOSING = "<!-- /release -->"
 
 
-def archive_facts(archive: Path, sidecar: Path | None = None) -> dict:
-    """Return size, file count and checksum for a release ZIP.
-
-    The checksum is read from the sidecar when it is present, because that file
-    is what a downloader checks against, and it is verified against the ZIP so a
-    stale sidecar can never be published as if it described the upload.
-    """
-    archive = Path(archive)
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    entries = 0
-    with zipfile.ZipFile(archive) as package:
-        entries = len([name for name in package.namelist() if not name.endswith("/")])
-    sidecar = Path(sidecar) if sidecar else archive.with_suffix(archive.suffix + ".sha256")
-    if sidecar.is_file():
-        recorded = sidecar.read_text(encoding="utf-8").split()
-        if recorded and recorded[0] != digest:
-            raise SystemExit(
-                f"{sidecar.name} describes {recorded[0]}, but {archive.name} is {digest}"
-            )
-    return {
-        "name": archive.name,
-        "entries": entries,
-        "size": archive.stat().st_size,
-        "sha256": digest,
-    }
-
-
-def package_block(facts: dict, commit: str, built: str | None = None) -> str:
-    """Build the replacement block for one uploaded package.
-
-    The date is part of the block on purpose. GitHub keeps the release's
-    original publication date when its files are replaced, so the release list
-    still says the release is a week old while the ZIP beside it is minutes
-    old. The date line is the one place the page can say plainly which build is
-    actually there.
-    """
-    short = commit[:7] if commit else ""
-    origin = f" (byggt av `{short}`)" if short else ""
+def package_block(commit: str, tag: str = "", built: str | None = None) -> str:
+    """Build the block that describes the source archive on the release page."""
+    short = str(commit or "").strip()[:7]
     built = built or datetime.now(timezone.utc).date().isoformat()
-    kilobytes = facts["size"] / 1024
-    return "\n".join((
-        OPENING,
-        f"**Paketet i releasen**{origin}",
-        "",
-        f"- Uppdaterad: {built}",
-        f"- `{facts['name']}` – {facts['entries']} filer, {kilobytes:.0f} kB",
-        f"- sha256: `{facts['sha256']}`",
-        "- Releasen består av exakt dessa två filer; `.sha256` innehåller samma "
-        "kontrollsumma som ZIP:en.",
-        CLOSING,
-    ))
+    lines = [OPENING, "**Releasen är källkoden på taggen.**", ""]
+    lines.append(f"- Uppdaterad: {built}")
+    if short:
+        lines.append(f"- Commit: `{short}`")
+    if tag:
+        lines.append(f"- Tag: `{tag}`")
+    lines.append(
+        "- Ladda ner **Source code (zip)** nedan. Appen hämtar samma arkiv automatiskt, "
+        "så det finns inget separat paket att hålla reda på."
+    )
+    lines.append(CLOSING)
+    return "\n".join(lines)
 
 
 def replace_block(body: str, block: str) -> str:
     """Swap the delimited block, or put one first when there is none yet.
 
     A description written before this existed has no markers, so the block is
-    placed at the top and the original text follows unchanged. Text that
-    happens to contain only one of the markers is treated as if it had none:
-    guessing which half to keep would silently delete someone's notes.
+    placed at the top and the original text follows unchanged. Text that holds
+    only one of the markers is treated as if it had none: guessing which half
+    to keep would silently delete someone's notes.
     """
     body = body or ""
     if OPENING in body and CLOSING in body:
@@ -101,13 +63,11 @@ def replace_block(body: str, block: str) -> str:
     return f"{block}\n\n{body}".rstrip() + "\n"
 
 
-def describe_package(
+def describe_release(
     *,
     tag: str,
     repository: str,
-    archive: Path,
     commit: str = "",
-    sidecar: Path | None = None,
     built: str | None = None,
 ) -> str:
     """Read the release body from GitHub and return the rewritten description."""
@@ -115,25 +75,21 @@ def describe_package(
         ["gh", "api", f"repos/{repository}/releases/tags/{tag}", "--jq", ".body // \"\""],
         check=True, capture_output=True, text=True,
     ).stdout
-    return replace_block(body, package_block(archive_facts(archive, sidecar), commit, built))
+    return replace_block(body, package_block(commit, tag, built))
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--repository", required=True)
-    parser.add_argument("--archive", required=True, type=Path)
-    parser.add_argument("--sidecar", type=Path)
     parser.add_argument("--commit", default="")
-    parser.add_argument("--built", help="Date the package was built (default: today, UTC)")
+    parser.add_argument("--built", help="Date the tag moved (default: today, UTC)")
     parser.add_argument("--output", type=Path, help="Write the description here instead of stdout")
     arguments = parser.parse_args(argv)
-    description = describe_package(
+    description = describe_release(
         tag=arguments.tag,
         repository=arguments.repository,
-        archive=arguments.archive,
         commit=arguments.commit,
-        sidecar=arguments.sidecar,
         built=arguments.built,
     )
     if arguments.output:

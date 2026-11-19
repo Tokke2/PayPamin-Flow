@@ -13,9 +13,13 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from app_info import (
+    APP_GIT_TAG_API,
     APP_LATEST_RELEASE_API,
     APP_NAME,
     APP_RELEASES_URL,
+    APP_REPOSITORY,
+    APP_SOURCE_ARCHIVE_URL,
+    APP_TAG_REF_API,
     APP_VERSION,
     PYTHON_PACKAGE_REQUIRED_FILES,
     PYTHON_RELEASE_ASSET,
@@ -29,6 +33,8 @@ from i18n import _
 UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
 MAX_MANIFEST_BYTES = 1_000_000
 MAX_CHECKSUM_BYTES = 65_536
+# The tag and commit lookups return a few hundred bytes each.
+MAX_TAG_BYTES = 65_536
 # Comparing content tells whether the files differ, never which set is newer.
 # A release whose ZIP was last uploaded before the installed files were
 # written cannot be an update, whatever the version says.
@@ -36,6 +42,10 @@ STALE_FILE_MARGIN_SECONDS = 3600
 # The outcome of comparing the release's files with the installed ones.
 CONTENT_CURRENT = "current"
 CONTENT_DIFFERS = "differs"
+# The release is the source archive at a commit, and that commit is not the
+# one the installed copy was built from. The files were never compared, so the
+# outcome is recorded separately from a file comparison.
+CONTENT_SOURCE_DIFFERS = "source_differs"
 CONTENT_STALE = "stale"
 CONTENT_UNAVAILABLE = "unavailable"
 
@@ -70,6 +80,15 @@ class ReleaseInfo:
     # When GitHub last received the ZIP, used to tell an update from an older
     # release that simply does not contain the files on disk.
     package_updated_at: str = ""
+    # The commit the release tag points at. The release is the source archive
+    # GitHub builds from that commit, so this single value says exactly which
+    # code is in the release - no package digest, no manifest and no download.
+    source_commit: str = ""
+    # When that commit was written, used to tell an update from an older
+    # release that merely lacks the files on disk.
+    source_committed_at: str = ""
+    # Where the archive can be downloaded, filled in from the tag.
+    source_url: str = ""
     # Filled in by ``update_installer.evaluate_release`` after the files in the
     # release have actually been compared with the installed ones.
     content_state: str = ""
@@ -92,6 +111,69 @@ def is_newer_version(candidate: str, current: str = APP_VERSION) -> bool:
     return version_key(candidate) > version_key(current)
 
 
+def source_archive_url(tag_name: str) -> str:
+    """Return the archive GitHub generates for a tag, or an empty string.
+
+    The release carries no uploaded file: the source archive *is* the release.
+    Asking GitHub for the tag's archive is the same thing a visitor gets from
+    the Source code link, so the app and the download page can never disagree
+    about which code is current.
+    """
+    tag = str(tag_name or "").strip()
+    if not tag or "/" in tag or ".." in tag:
+        return ""
+    return APP_SOURCE_ARCHIVE_URL.format(tag=tag)
+
+
+def _fetch_tag_identity(tag_name: str, timeout: int, opener) -> tuple[str, str]:
+    """Return ``(commit, committed_at)`` for a release tag.
+
+    GitHub's release payload only carries ``target_commitish``, which is a
+    branch name once the release has moved with its tag, so the tag's own
+    reference is read instead. An annotated tag points at a tag object, which
+    has to be followed once more to reach the commit.
+    """
+    open_request = opener or urlopen
+    tag = str(tag_name or "").strip()
+    if not tag:
+        return "", ""
+    try:
+        with open_request(_github_request(APP_TAG_REF_API.format(tag=tag)), timeout=timeout) as response:
+            payload = json.loads(response.read(MAX_TAG_BYTES).decode("utf-8"))
+        if not isinstance(payload, dict):
+            return "", ""
+        target = payload.get("object") or {}
+        if not isinstance(target, dict):
+            return "", ""
+        sha = str(target.get("sha") or "").strip().lower()
+        if str(target.get("type") or "") == "tag":
+            with open_request(_github_request(APP_GIT_TAG_API.format(sha=sha)), timeout=timeout) as response:
+                annotated = json.loads(response.read(MAX_TAG_BYTES).decode("utf-8"))
+            inner = (annotated.get("object") or {}) if isinstance(annotated, dict) else {}
+            sha = str(inner.get("sha") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            return "", ""
+    except Exception:  # noqa: BLE001 - an unreadable tag simply means "unknown"
+        return "", ""
+    committed_at = _commit_date(sha, timeout, open_request)
+    return sha, committed_at
+
+
+def _commit_date(commit: str, timeout: int, open_request) -> str:
+    """Return the commit's own timestamp, or an empty string."""
+    try:
+        with open_request(
+            _github_request(f"https://api.github.com/repos/{APP_REPOSITORY}/commits/{commit}"),
+            timeout=timeout,
+        ) as response:
+            payload = json.loads(response.read(MAX_TAG_BYTES).decode("utf-8"))
+        detail = (payload.get("commit") or {}) if isinstance(payload, dict) else {}
+        author = (detail.get("committer") or detail.get("author") or {}) if isinstance(detail, dict) else {}
+        return str(author.get("date") or "").strip()
+    except Exception:  # noqa: BLE001 - a missing date must never break a check
+        return ""
+
+
 def is_update_available(
     release: ReleaseInfo,
     current_version: str = APP_VERSION,
@@ -101,12 +183,13 @@ def is_update_available(
 ) -> bool:
     """Decide whether a release carries anything the installed copy lacks.
 
-    Newer versions are always eligible. For the same version the files inside
-    the release are compared with the installed ones (see
-    ``update_installer.evaluate_release``); when that comparison could not be
-    made, complete commit/file metadata on both sides is used instead, and
-    finally the numeric release ID, which changed on every publication before
-    releases were refreshed in place.
+    Newer versions are always eligible. For the same version the tag's commit
+    is compared with the commit the installed copy was built from, which is
+    exact: the release is the source archive at that commit, so equal commits
+    mean equal code and nothing has to be downloaded to prove it. When either
+    side has no commit, the files are compared instead (see
+    ``update_installer.evaluate_release``), and as a last resort the numeric
+    release ID is used.
     """
     if is_newer_version(release.version, current_version):
         return True
@@ -115,7 +198,7 @@ def is_update_available(
 
     # The files themselves were compared. That answer is the strongest one
     # there is, so it decides even when the commit or the release ID differ.
-    if release.content_state == CONTENT_DIFFERS:
+    if release.content_state in (CONTENT_DIFFERS, CONTENT_SOURCE_DIFFERS):
         return True
     if release.content_state == CONTENT_CURRENT:
         return False
@@ -123,6 +206,11 @@ def is_update_available(
         # The files differ, but the release is older than they are: installing
         # it would replace newer work with older files.
         return False
+
+    if release.source_commit and current_release_commit:
+        # The release is the source archive at exactly this commit, so the
+        # comparison is exact in both directions and costs no download.
+        return release.source_commit.lower() != current_release_commit.lower()
 
     if (
         current_release_commit
@@ -146,12 +234,16 @@ def is_update_available(
 
 
 def missing_release_assets(release: ReleaseInfo) -> tuple[str, ...]:
-    """Return package files that must exist before installation can start."""
-    available = {asset.name for asset in release.assets}
-    return tuple(
-        name for name in (PYTHON_RELEASE_ASSET, PYTHON_RELEASE_ASSET + ".sha256")
-        if name not in available
-    )
+    """Return what a release lacks before it can be installed.
+
+    The release is the source archive GitHub builds for its tag, so the only
+    thing that can be missing is the archive address itself - which is derived
+    from the tag and therefore practically always present. The name is kept so
+    every caller and log line keeps meaning.
+    """
+    if release.source_url or release.tag_name:
+        return ()
+    return (_("källkodsarkivet"),)
 
 
 def update_change_kind(
@@ -163,8 +255,13 @@ def update_change_kind(
     """Describe the verified reason for an available update."""
     if is_newer_version(release.version, current_version):
         return "version"
+    if release.content_state == CONTENT_SOURCE_DIFFERS:
+        return "source"
     if release.content_state == CONTENT_DIFFERS:
         return "files"
+    if release.source_commit and current_release_commit:
+        if release.source_commit.lower() != current_release_commit.lower():
+            return "source"
     commit_changed = bool(
         release.release_commit and current_release_commit
         and release.release_commit.lower() != current_release_commit.lower()
@@ -357,6 +454,11 @@ def fetch_latest_release(timeout: int = 8, opener=None) -> ReleaseInfo:
                     updated_at=str(item.get("updated_at") or "").strip(),
                 )
             )
+        source_commit, source_committed_at = _fetch_tag_identity(tag_name, timeout, open_request)
+        if source_commit:
+            # The tag's commit outranks target_commitish, which becomes a
+            # branch name as soon as the release follows the branch.
+            release_commit = source_commit
         release = ReleaseInfo(
             version=canonical_version(tag_name),
             tag_name=tag_name,
@@ -365,7 +467,10 @@ def fetch_latest_release(timeout: int = 8, opener=None) -> ReleaseInfo:
             release_id=release_id,
             release_commit=release_commit,
             package_sha256=package_asset_sha256(assets),
-            package_updated_at=package_asset_updated_at(assets),
+            package_updated_at=package_asset_updated_at(assets) or source_committed_at,
+            source_commit=source_commit,
+            source_committed_at=source_committed_at,
+            source_url=source_archive_url(tag_name),
         )
         return _load_release_build_manifest(release, timeout, open_request)
     except HTTPError as exc:
