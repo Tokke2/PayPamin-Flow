@@ -136,12 +136,15 @@ jobs:
   refresh-release-files:
     name: Refresh the release's files
     # While the application is still 0.6.0 the release is not a frozen
-    # snapshot: every push to main rebuilds the package and replaces the ZIP in
-    # the release that carries this version, so the files in the release are
-    # always the newest ones. The tag moves to the same commit, so tag, release
-    # and files keep pointing at the same place. The app compares the release's
-    # files with its own, which is what makes a rebuilt 0.6.0 an update.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # snapshot: every push to a working branch rebuilds the package and replaces
+    # the ZIP in the release that carries this version, so the files in the
+    # release are always the newest ones. The work happens on the branch and is
+    # never merged, so main is deliberately not the source: a push to main would
+    # publish code that no branch contains. The tag moves to the branch commit,
+    # so tag, release and files keep pointing at the same place. The app compares
+    # the release's files with its own, which is what makes a rebuilt 0.6.0 an
+    # update.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/arena/')
     needs: desktop
     runs-on: ubuntu-latest
     concurrency:
@@ -176,6 +179,20 @@ jobs:
             --clobber --repo "$REPOSITORY"
           checksum=$(cut -d' ' -f1 release-assets/PayPamin-Flow-Python.zip.sha256)
           echo "Release $tag now carries $checksum from $COMMIT"
+          # The page must describe the file that is actually there. Numbers
+          # from an older build (the old checksum, an old file count) are what
+          # makes a refreshed release look untouched, so the package block is
+          # rewritten from the ZIP that was just uploaded. Everything else in
+          # the description is kept as it is.
+          python packaging/release_description.py \
+            --tag "$tag" --repository "$REPOSITORY" \
+            --archive release-assets/PayPamin-Flow-Python.zip \
+            --sidecar release-assets/PayPamin-Flow-Python.zip.sha256 \
+            --commit "$COMMIT" --output release-body.md
+          release_id=$(gh api "repos/$REPOSITORY/releases/tags/$tag" --jq .id)
+          gh api -X PATCH "repos/$REPOSITORY/releases/$release_id" \
+            -F body=@release-body.md > /dev/null
+          echo "Release $tag now describes the uploaded package"
           # The tag follows the files, so a checkout of the tag and the ZIP are
           # the same code. A failure here is reported, never hidden.
           if ! gh api -X PATCH "repos/$REPOSITORY/git/refs/tags/$tag" -f sha="$COMMIT" -F force=true > /dev/null; then

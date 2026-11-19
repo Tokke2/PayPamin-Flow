@@ -82,13 +82,13 @@ class WorkflowGuardTests(unittest.TestCase):
         # The packaging step drops the locally built manifest before upload.
         self.assertIn("rm -f release-assets/*.manifest.json", self.workflow)
 
-    def test_a_push_to_main_refreshes_the_files_in_the_release(self):
+    def test_a_push_to_the_working_branch_refreshes_the_release(self):
         """The release is not a frozen snapshot while the app is 0.6.0."""
         block = self.workflow.split("refresh-release-files:", 1)
         self.assertEqual(len(block), 2, "build.yml has no release refresh job")
         refresh = block[1]
         self.assertIn("github.event_name == 'push'", refresh)
-        self.assertIn("refs/heads/main", refresh)
+        self.assertIn("startsWith(github.ref, 'refs/heads/arena/')", refresh)
         self.assertIn("gh release upload", refresh)
         self.assertIn("release-assets/PayPamin-Flow-Python.zip ", refresh)
         self.assertIn("release-assets/PayPamin-Flow-Python.zip.sha256", refresh)
@@ -97,6 +97,31 @@ class WorkflowGuardTests(unittest.TestCase):
         self.assertIn("--clobber", refresh)
         # The tag follows the files, so tag, release and code stay together.
         self.assertIn("git/refs/tags/$tag", refresh)
+
+    def test_the_release_is_never_refreshed_from_main(self):
+        """The work lives on the branch, so main is not a publish source.
+
+        A refresh from main would put code in the release that no branch
+        contains and that the session's own branch would then report as an
+        update in the wrong direction.
+        """
+        refresh = self.workflow.split("refresh-release-files:", 1)[1]
+        requirement = re.search(r"^    if: .*$", refresh, re.MULTILINE)
+        self.assertIsNotNone(requirement)
+        self.assertNotIn("refs/heads/main", requirement.group(0))
+
+    def test_the_release_page_is_rewritten_from_the_uploaded_zip(self):
+        """A stale checksum on the page makes a refreshed release look stale."""
+        refresh = self.workflow.split("refresh-release-files:", 1)[1]
+        self.assertIn("packaging/release_description.py", refresh)
+        self.assertIn("releases/$release_id", refresh)
+
+    def test_the_workflow_never_merges_or_opens_a_pull_request(self):
+        """Merging is the owner's decision and is never automated."""
+        lowered = self.workflow.lower()
+        for forbidden in ("gh pr merge", "gh pr create", "pulls", "merge --", "git merge"):
+            with self.subTest(command=forbidden):
+                self.assertNotIn(forbidden, lowered)
 
     def test_the_package_is_stamped_with_the_release_it_belongs_to(self):
         """A build from main carries the release identity of its version."""
