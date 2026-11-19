@@ -20,6 +20,58 @@ class TrayUnavailable(RuntimeError):
         self.hint = hint
 
 
+def native_icon_size(platform_name: str | None = None, metrics: Callable[[int], int] | None = None) -> int | None:
+    """Return the pixel size the desktop draws a tray icon at, if it is known.
+
+    Windows asks the notification area for ``SM_CXSMICON`` pixels: 16 at 100 %
+    scaling, 20 at 125 % and 24 at 150 %. pystray re-encodes whatever image it
+    is given into a single virtual icon file, so a 32 px bitmap becomes a file
+    with 16/24/32 px entries and Windows has to stretch one of those into the
+    requested size. On a 125 % display that means a 16 px entry blown up to
+    20 px, which is exactly the soft, smudged mark that gives the tray a worse
+    icon than the taskbar. Rendering the mark at the requested size first lets
+    Windows load a pixel-perfect entry instead.
+
+    The metric is only trusted when it is a plausible icon size, because a
+    failed ``GetSystemMetrics`` call returns 0 and must not break the tray.
+    Other platforms report no size: macOS reads the bitmap at both 1x and 2x,
+    and Linux panels scale the 48 px mark themselves.
+    """
+    platform_name = platform_name or sys.platform
+    if not platform_name.startswith("win"):
+        return None
+    if metrics is None:
+        try:
+            import ctypes
+
+            metrics = ctypes.windll.user32.GetSystemMetrics
+        except Exception:
+            return None
+    try:
+        size = int(metrics(49))  # SM_CXSMICON
+    except Exception:
+        return None
+    return size if 12 <= size <= 256 else None
+
+
+def fit_icon(image, size: int | None):
+    """Return ``image`` rendered at exactly ``size`` pixels square.
+
+    The mark has fully transparent corners, and resampling straight RGBA
+    blends the black behind those corners into the edge, which produces the
+    grey halo that reads as a blurry icon. Resampling in Pillow's
+    premultiplied ``RGBa`` mode and converting back avoids that.
+    """
+    if not size:
+        return image
+    current = getattr(image, "size", None)
+    if not isinstance(current, tuple) or current == (size, size):
+        return image
+    from PIL import Image
+
+    return image.convert("RGBa").resize((size, size), Image.LANCZOS).convert("RGBA")
+
+
 def backend_hint(error: Exception) -> str:
     """Return a platform-specific explanation for a missing tray backend.
 
@@ -78,10 +130,13 @@ class TrayController:
         export_label: Callable[[], str] | None = None,
         status_label: Callable[[], str] | None = None,
         on_error: Callable[[Exception], None] | None = None,
+        icon_size: int | None = None,
     ) -> None:
         self.name = name
         self.identifier = identifier
         self.icon_path = Path(icon_path)
+        # ``None`` asks the platform; ``0`` disables resizing entirely.
+        self.icon_size = icon_size
         self.scheduler = scheduler
         self.on_open = on_open
         self.on_update = on_update
@@ -178,6 +233,8 @@ class TrayController:
 
             with Image.open(self.icon_path) as source:
                 image = source.convert("RGBA").copy()
+            size = self.icon_size if self.icon_size is not None else native_icon_size()
+            image = fit_icon(image, size)
             menu = self._menu(pystray)
             icon = pystray.Icon(self.identifier, image, self.name, menu)
         except Exception as exc:

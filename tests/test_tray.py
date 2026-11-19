@@ -46,6 +46,7 @@ class FakeIcon:
 
     def __init__(self, identifier, image, name, menu):
         self.identifier = identifier
+        self.image = image
         self.name = name
         self.menu = menu
         self.started = False
@@ -526,6 +527,82 @@ class TrayIconSizeTests(unittest.TestCase):
     def test_missing_platform_bitmap_falls_back_to_the_large_icon(self):
         with patch.object(self.app, "ICON_DIR", Path(self.temporary.name) / "empty"):
             self.assertEqual(self.app.tray_icon_path("win32").name, "paypamin_flow_256.png")
+
+
+class TrayIconPixelSizeTests(unittest.TestCase):
+    """The tray mark must be drawn at the exact size the desktop asks for.
+
+    Handing Windows a 32 px bitmap makes its shell stretch a 16 px entry into
+    the 20 px a 125 % display wants, which is why the notification area looked
+    softer than the taskbar even though both use the same artwork.
+    """
+
+    def test_windows_size_comes_from_the_small_icon_metric(self):
+        calls = []
+
+        def metrics(index):
+            calls.append(index)
+            return 20
+
+        self.assertEqual(tray.native_icon_size("win32", metrics), 20)
+        self.assertEqual(calls, [49])  # SM_CXSMICON
+
+    def test_other_platforms_leave_the_bitmap_to_the_os(self):
+        for platform_name in ("darwin", "linux"):
+            with self.subTest(platform=platform_name):
+                self.assertIsNone(tray.native_icon_size(platform_name, lambda index: 20))
+
+    def test_a_failed_metric_never_breaks_the_tray(self):
+        self.assertIsNone(tray.native_icon_size("win32", lambda index: 0))
+
+        def broken(index):
+            raise OSError("user32 is unavailable")
+
+        self.assertIsNone(tray.native_icon_size("win32", broken))
+
+    def test_fit_icon_renders_the_exact_pixel_size(self):
+        with Image.open(Path(__file__).resolve().parents[1] / "assets" / "paypamin_flow_32.png") as source:
+            sharp = tray.fit_icon(source.convert("RGBA"), 20)
+        self.assertEqual(sharp.size, (20, 20))
+        self.assertEqual(sharp.mode, "RGBA")
+
+    def test_fit_icon_keeps_the_corners_transparent(self):
+        with Image.open(Path(__file__).resolve().parents[1] / "assets" / "paypamin_flow_32.png") as source:
+            sharp = tray.fit_icon(source.convert("RGBA"), 20)
+        for corner in ((0, 0), (19, 0), (19, 19)):
+            with self.subTest(corner=corner):
+                self.assertLess(sharp.getpixel(corner)[3], 64)
+        # The teal sweep owns the bottom-left corner, so it must stay opaque.
+        self.assertGreater(sharp.getpixel((0, 19))[3], 128)
+
+    def test_fit_icon_leaves_the_image_alone_without_a_size(self):
+        with Image.open(Path(__file__).resolve().parents[1] / "assets" / "paypamin_flow_32.png") as source:
+            image = source.convert("RGBA")
+        self.assertIs(tray.fit_icon(image, None), image)
+
+    def test_start_hands_pystray_the_exact_size(self):
+        fake_pystray = types.ModuleType("pystray")
+        fake_pystray.Icon = FakeIcon
+        fake_pystray.Menu = FakeMenu
+        fake_pystray.MenuItem = FakeMenuItem
+        with patch.dict(sys.modules, {"pystray": fake_pystray}):
+            controller = tray.TrayController(
+                name="PayPamin Flow",
+                identifier="paypamin-flow",
+                icon_path=Path(__file__).resolve().parents[1] / "assets" / "paypamin_flow_32.png",
+                scheduler=lambda callback: None,
+                on_open=lambda: None,
+                on_update=lambda: None,
+                on_exit=lambda: None,
+                open_label=lambda: "Open",
+                update_label=lambda: "Update app",
+                exit_label=lambda: "Exit",
+                icon_size=20,
+            )
+            controller.start()
+            self.addCleanup(controller.stop)
+        icon = FakeIcon.instances[-1]
+        self.assertEqual(icon.image.size, (20, 20))
 
 
 if __name__ == "__main__":
