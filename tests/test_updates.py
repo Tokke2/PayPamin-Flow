@@ -213,6 +213,53 @@ class UpdateCheckerTests(unittest.TestCase):
             [APP_LATEST_RELEASE_API, f"https://api.github.com/repos/Tokke2/PayPamin-Flow/git/ref/tags/v0.6.0", manifest_url],
         )
 
+    def test_the_release_is_identified_by_its_tag_commit(self):
+        """The release is the archive at that commit, so the commit is enough."""
+        commit = "b" * 40
+        responses = {
+            APP_LATEST_RELEASE_API: payload(assets=[]),
+            "https://api.github.com/repos/Tokke2/PayPamin-Flow/git/ref/tags/v0.6.0": {
+                "ref": "refs/tags/v0.6.0",
+                "object": {"sha": commit, "type": "commit"},
+            },
+            f"https://api.github.com/repos/Tokke2/PayPamin-Flow/commits/{commit}": {
+                "sha": commit,
+                "commit": {"committer": {"date": "2026-11-19T14:26:03Z"}},
+            },
+        }
+        release = fetch_latest_release(opener=lambda request, timeout: FakeResponse(responses[request.full_url]))
+        self.assertEqual(release.source_commit, commit)
+        self.assertEqual(release.source_committed_at, "2026-11-19T14:26:03Z")
+        self.assertEqual(release.release_commit, commit)
+        self.assertEqual(release.source_url, source_archive_url("v0.6.0"))
+        self.assertEqual(release.assets, ())
+
+    def test_an_annotated_tag_is_followed_to_its_commit(self):
+        commit = "c" * 40
+        tag_object = "d" * 40
+        responses = {
+            APP_LATEST_RELEASE_API: payload(assets=[]),
+            "https://api.github.com/repos/Tokke2/PayPamin-Flow/git/ref/tags/v0.6.0": {
+                "object": {"sha": tag_object, "type": "tag"},
+            },
+            f"https://api.github.com/repos/Tokke2/PayPamin-Flow/git/tags/{tag_object}": {
+                "object": {"sha": commit, "type": "commit"},
+            },
+            f"https://api.github.com/repos/Tokke2/PayPamin-Flow/commits/{commit}": {
+                "commit": {"committer": {"date": "2026-11-19T14:26:03Z"}},
+            },
+        }
+        release = fetch_latest_release(opener=lambda request, timeout: FakeResponse(responses[request.full_url]))
+        self.assertEqual(release.source_commit, commit)
+
+    def test_an_unreadable_tag_leaves_the_release_without_a_commit(self):
+        """A failed tag lookup must never break the check itself."""
+        release = fetch_latest_release(opener=lambda request, timeout: FakeResponse(payload(assets=[])))
+        self.assertEqual(release.source_commit, "")
+        self.assertEqual(release.source_committed_at, "")
+        # Without a commit the version and release ID still decide.
+        self.assertTrue(is_update_available(release, "0.6.0", "1"))
+
     def test_rejects_manifest_whose_file_fingerprint_is_wrong(self):
         commit = "a" * 40
         manifest = build_manifest(commit)

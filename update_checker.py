@@ -35,6 +35,8 @@ MAX_MANIFEST_BYTES = 1_000_000
 MAX_CHECKSUM_BYTES = 65_536
 # The tag and commit lookups return a few hundred bytes each.
 MAX_TAG_BYTES = 65_536
+# One commit's metadata (message plus the changed files) can exceed 64 kB.
+MAX_COMMIT_BYTES = 1_000_000
 # Comparing content tells whether the files differ, never which set is newer.
 # A release whose ZIP was last uploaded before the installed files were
 # written cannot be an update, whatever the version says.
@@ -166,7 +168,10 @@ def _commit_date(commit: str, timeout: int, open_request) -> str:
             _github_request(f"https://api.github.com/repos/{APP_REPOSITORY}/commits/{commit}"),
             timeout=timeout,
         ) as response:
-            payload = json.loads(response.read(MAX_TAG_BYTES).decode("utf-8"))
+            # The commit endpoint carries the full message and a list of
+            # changed files, so the cap is generous: a truncated body would
+            # fail to parse and lose the date entirely.
+            payload = json.loads(response.read(MAX_COMMIT_BYTES).decode("utf-8"))
         detail = (payload.get("commit") or {}) if isinstance(payload, dict) else {}
         author = (detail.get("committer") or detail.get("author") or {}) if isinstance(detail, dict) else {}
         return str(author.get("date") or "").strip()
