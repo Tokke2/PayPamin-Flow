@@ -84,6 +84,15 @@ class PackageBlockTests(unittest.TestCase):
         block = description.package_block(self.facts(), "")
         self.assertNotIn("byggt av `", block)
 
+    def test_the_block_states_when_the_package_was_built(self):
+        """GitHub keeps the old publication date, so the date must be visible."""
+        block = description.package_block(self.facts(), "abc1234", built="2026-11-19")
+        self.assertIn("Uppdaterad: 2026-11-19", block)
+
+    def test_the_date_defaults_to_today_in_utc(self):
+        block = description.package_block(self.facts(), "abc1234")
+        self.assertIn(description.datetime.now(description.timezone.utc).date().isoformat(), block)
+
     def test_the_two_files_are_described_as_the_whole_release(self):
         block = description.package_block(self.facts(), "abc1234")
         self.assertIn("exakt dessa två filer", block)

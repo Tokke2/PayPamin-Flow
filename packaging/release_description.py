@@ -25,6 +25,7 @@ import json
 import subprocess
 import sys
 import zipfile
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 OPENING = "<!-- paket -->"
@@ -58,15 +59,24 @@ def archive_facts(archive: Path, sidecar: Path | None = None) -> dict:
     }
 
 
-def package_block(facts: dict, commit: str) -> str:
-    """Build the replacement block for one uploaded package."""
+def package_block(facts: dict, commit: str, built: str | None = None) -> str:
+    """Build the replacement block for one uploaded package.
+
+    The date is part of the block on purpose. GitHub keeps the release's
+    original publication date when its files are replaced, so the release list
+    still says the release is a week old while the ZIP beside it is minutes
+    old. The date line is the one place the page can say plainly which build is
+    actually there.
+    """
     short = commit[:7] if commit else ""
-    built = f" (byggt av `{short}`)" if short else ""
+    origin = f" (byggt av `{short}`)" if short else ""
+    built = built or datetime.now(timezone.utc).date().isoformat()
     kilobytes = facts["size"] / 1024
     return "\n".join((
         OPENING,
-        f"**Paketet i releasen**{built}",
+        f"**Paketet i releasen**{origin}",
         "",
+        f"- Uppdaterad: {built}",
         f"- `{facts['name']}` – {facts['entries']} filer, {kilobytes:.0f} kB",
         f"- sha256: `{facts['sha256']}`",
         "- Releasen består av exakt dessa två filer; `.sha256` innehåller samma "
@@ -98,13 +108,14 @@ def describe_package(
     archive: Path,
     commit: str = "",
     sidecar: Path | None = None,
+    built: str | None = None,
 ) -> str:
     """Read the release body from GitHub and return the rewritten description."""
     body = subprocess.run(
         ["gh", "api", f"repos/{repository}/releases/tags/{tag}", "--jq", ".body // \"\""],
         check=True, capture_output=True, text=True,
     ).stdout
-    return replace_block(body, package_block(archive_facts(archive, sidecar), commit))
+    return replace_block(body, package_block(archive_facts(archive, sidecar), commit, built))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -114,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--archive", required=True, type=Path)
     parser.add_argument("--sidecar", type=Path)
     parser.add_argument("--commit", default="")
+    parser.add_argument("--built", help="Date the package was built (default: today, UTC)")
     parser.add_argument("--output", type=Path, help="Write the description here instead of stdout")
     arguments = parser.parse_args(argv)
     description = describe_package(
@@ -122,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         archive=arguments.archive,
         commit=arguments.commit,
         sidecar=arguments.sidecar,
+        built=arguments.built,
     )
     if arguments.output:
         arguments.output.write_text(description, encoding="utf-8")
