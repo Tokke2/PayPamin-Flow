@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Callable
+from quiet_faults import report_fault
 
 
 class TrayUnavailable(RuntimeError):
@@ -164,7 +165,7 @@ class TrayController:
             self.scheduler(callback)
         except Exception:
             # Tk may already have been destroyed by an explicit full exit.
-            pass
+            report_fault()
 
     def _status_text(self) -> str:
         if self.status_label is None:
@@ -206,7 +207,7 @@ class TrayController:
             try:
                 items.append(pystray.Menu.SEPARATOR)
             except Exception:
-                pass
+                report_fault()
         items.append(pystray.MenuItem(
             lambda item: self.exit_label(),
             lambda icon, item: self._dispatch(self.on_exit),
@@ -262,7 +263,7 @@ class TrayController:
         try:
             self.icon.title = text
         except Exception:
-            pass
+            report_fault()
 
     def notify(self, message: str, title: str | None = None) -> bool:
         """Show a tray balloon if the backend supports it; never raise.
@@ -286,4 +287,4 @@ class TrayController:
             try:
                 icon.stop()
             except Exception:
-                pass
+                report_fault()

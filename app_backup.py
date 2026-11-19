@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 
 from app_info import APP_NAME, APP_VERSION
 from i18n import _
+from quiet_faults import report_fault
 
 BACKUP_FORMAT = 1
 DATABASE_MEMBER = "data/paminnelseapp.sqlite3"
@@ -152,7 +153,7 @@ def create_backup(
             try:
                 destination.chmod(0o600)
             except OSError:
-                pass
+                report_fault()
             return destination
     except BackupError:
         raise
@@ -163,7 +164,7 @@ def create_backup(
             try:
                 os.unlink(temporary_name)
             except FileNotFoundError:
-                pass
+                report_fault()
 
 
 def _validate_member(info: zipfile.ZipInfo) -> str:
@@ -245,7 +246,7 @@ def _remove(path: Path) -> None:
         try:
             path.unlink()
         except FileNotFoundError:
-            pass
+            report_fault()
 
 
 def _install_replacement(source: Path, target: Path, *, directory: bool):
@@ -289,7 +290,7 @@ def _discard_predecessors(installed) -> None:
         except OSError:
             # The restore is already complete; leftover hidden predecessors
             # can be removed later and must not be reported as data loss.
-            pass
+            report_fault()
 
 
 def restore_backup(archive: str | Path, paths: BackupPaths) -> Path:

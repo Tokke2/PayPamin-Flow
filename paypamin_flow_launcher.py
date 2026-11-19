@@ -12,6 +12,7 @@ import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
+from quiet_faults import report_fault
 
 APP_NAME = "PayPamin Flow"
 
@@ -63,7 +64,7 @@ def _show_startup_error(message: str) -> bool:
             root.destroy()
         return True
     except Exception:
-        pass
+        report_fault()
 
     try:
         if sys.platform.startswith("win"):
@@ -101,7 +102,7 @@ def _show_startup_error(message: str) -> bool:
                 if result.returncode == 0:
                     return True
     except Exception:
-        pass
+        report_fault()
     return False
 
 
@@ -114,7 +115,7 @@ def _report_startup_failure(details: str) -> None:
             refresh_error_log(log_path.parent)
         except Exception:
             # The original startup.log remains available even if aggregation fails.
-            pass
+            report_fault()
     message = _startup_message(details, log_path)
     if not _show_startup_error(message):
         print(message, file=sys.stderr)
@@ -149,7 +150,7 @@ def run() -> int:
             return relaunched
     except Exception:
         # A console-free start must never be the reason the app does not start.
-        pass
+        report_fault()
     try:
         from paypamin_flow import main
 

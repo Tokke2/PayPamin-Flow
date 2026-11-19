@@ -11,6 +11,7 @@ from functools import wraps
 from pathlib import Path
 
 from app_info import APP_SLUG
+from quiet_faults import report_fault
 
 
 # Activity events are structured JSON lines. They get their own file so
@@ -61,7 +62,7 @@ def log_activity(component, action, status="completed", *, level=logging.INFO, e
         )
     except Exception:
         # Diagnostics must never prevent the underlying application action.
-        pass
+        report_fault()
     return event
 
 

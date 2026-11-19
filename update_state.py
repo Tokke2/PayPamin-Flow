@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app_info import is_python_package_file
+from quiet_faults import report_fault
 
 STATE_FILENAME = "installed-release.json"
 MAX_STATE_BYTES = 64 * 1024
@@ -96,7 +97,7 @@ def write_state(values, path=None) -> bool:
             try:
                 Path(temporary_name).unlink()
             except OSError:
-                pass
+                report_fault()
         return True
     except OSError:
         return False

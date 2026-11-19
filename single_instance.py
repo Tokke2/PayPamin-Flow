@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from quiet_faults import report_fault
 
 
 class SingleInstance:
@@ -82,7 +83,7 @@ class SingleInstance:
 
                 ctypes.windll.kernel32.CloseHandle(self._mutex_handle)
             except Exception:
-                pass
+                report_fault()
             self._mutex_handle = None
         if self._lock_file is not None:
             try:
@@ -90,11 +91,11 @@ class SingleInstance:
 
                 fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
             except Exception:
-                pass
+                report_fault()
             try:
                 self._lock_file.close()
             except OSError:
-                pass
+                report_fault()
             self._lock_file = None
 
     def _read_state(self) -> dict | None:
@@ -131,7 +132,7 @@ class SingleInstance:
             try:
                 temporary.unlink(missing_ok=True)
             except OSError:
-                pass
+                report_fault()
 
     def _start_activation_server(self) -> None:
         self._token = secrets.token_hex(32)
@@ -153,7 +154,7 @@ class SingleInstance:
             try:
                 server.close()
             except OSError:
-                pass
+                report_fault()
             self._server = None
             raise
 
@@ -190,12 +191,12 @@ class SingleInstance:
             try:
                 client.sendall(json.dumps(response).encode("ascii") + b"\n")
             except OSError:
-                pass
+                report_fault()
             finally:
                 try:
                     client.close()
                 except OSError:
-                    pass
+                    report_fault()
 
     def activate_existing(self) -> bool:
         """Ask the published owner to show its window; never send data elsewhere."""
@@ -251,7 +252,7 @@ class SingleInstance:
             try:
                 server.close()
             except OSError:
-                pass
+                report_fault()
         thread, self._thread = self._thread, None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1.0)
@@ -261,7 +262,7 @@ class SingleInstance:
                 try:
                     self.state_path.unlink()
                 except OSError:
-                    pass
+                    report_fault()
         self._owned = False
         self._token = ""
         self._release_platform_lock()

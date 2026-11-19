@@ -54,6 +54,7 @@ from update_checker import (
     release_package_sha256,
     version_key,
 )
+from quiet_faults import report_fault
 
 DOWNLOAD_TIMEOUT = 90
 # GitHub answers 502/503/504 while a release asset is still being generated,
@@ -132,7 +133,7 @@ def _log(plan: UpdatePlan, message: str) -> None:
         with plan.log_path.open("a", encoding="utf-8") as handle:
             handle.write(f"{stamp} {level} {message}\n")
     except OSError:
-        pass
+        report_fault()
 
 
 def platform_key(value: str | None = None) -> str:
@@ -232,7 +233,7 @@ def _download_asset(
         try:
             destination.unlink()
         except OSError:
-            pass
+            report_fault()
         wait(delay)
         delay *= 2
     if isinstance(last_error, UpdateInstallError):
@@ -683,7 +684,7 @@ def _replace_file(source: Path, target: Path) -> None:
         try:
             temporary.unlink()
         except FileNotFoundError:
-            pass
+            report_fault()
 
 
 def _check_target_parents(root: Path, relative: PurePosixPath) -> None:
@@ -753,7 +754,7 @@ def install_update(plan: UpdatePlan) -> InstalledUpdate:
         try:
             rollback_update(installed)
         except UpdateInstallError:
-            pass
+            report_fault()
         shutil.rmtree(plan.work_dir, ignore_errors=True)
         if isinstance(exc, UpdateInstallError):
             raise
@@ -786,7 +787,7 @@ def mark_update_ready() -> bool:
             try:
                 temporary.unlink()
             except (FileNotFoundError, OSError):
-                pass
+                report_fault()
     os.environ.pop(UPDATE_READY_FILE_ENV, None)
     os.environ.pop(UPDATE_READY_TOKEN_ENV, None)
     return True
@@ -818,7 +819,7 @@ def stop_updated_app(process) -> None:
             process.wait(timeout=2)
     except Exception:
         # Rollback must still run if a child already exited or cannot be killed.
-        pass
+        report_fault()
 
 
 def wait_for_update_restart(installed: InstalledUpdate, process, timeout=UPDATE_RESTART_TIMEOUT_SECONDS) -> None:

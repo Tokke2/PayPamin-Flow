@@ -139,6 +139,7 @@ from accessibility import (
     stepped_font_scale,
     system_high_contrast,
 )
+from quiet_faults import log_summary, report_fault
 
 IMPORT_WATCH_INTERVAL_MS = 5000
 LEDGER_REMINDER_INTERVAL_MS = 15 * 60 * 1000
@@ -293,6 +294,10 @@ def _archive_previous_day_logs():
 
 def _refresh_and_archive_logs():
     """Capture unresolved errors, then archive yesterday and prune old days."""
+    # Faults that were swallowed by a handler are written as they happen; this
+    # adds the tally, so a site that fails on every repaint shows up as one
+    # line with a count instead of a hundred identical warnings.
+    log_summary(logger)
     report=refresh_error_log(LOG_DIR)
     archive=_archive_previous_day_logs()
     if archive.changed:
@@ -1265,7 +1270,7 @@ def reminder_fee_for_level(row,level):
         snapshot=read_reminder_snapshot(row_value(row,'p1_snapshot',''))
         if snapshot:
             try:return float(snapshot['terms'].get('fee') or 0)
-            except (TypeError,ValueError):pass
+            except (TypeError,ValueError):report_fault()
     return reminder_fee_for(row)
 
 
@@ -1620,7 +1625,7 @@ def p2_due_date(row):
             saved_deadline=snapshot['terms'].get('payment_deadline_days')
             if saved_deadline not in (None,''):deadline_days=int(saved_deadline)
         except (TypeError,ValueError):
-            pass
+            report_fault()
     return p1_date+timedelta(days=max(interval_days,deadline_days))
 
 
@@ -1691,7 +1696,7 @@ def fit_invoice_columns(tree,widths,available,px=None):
         if last in fitted:fitted[last]+=available-sum(fitted.values())
     for column,value in fitted.items():
         try:tree.column(column,width=value)
-        except Exception:pass
+        except Exception:report_fault()
     return fitted
 
 
@@ -1733,16 +1738,16 @@ def repaint_app_palette(app):
             pixel_scale=getattr(app,'dpi_scale',1.0),theme=theme,
         )
     try:app.configure(bg=palette['background'])
-    except tk.TclError:pass
+    except tk.TclError:report_fault()
     for label in list(getattr(app,'_header_backgrounds',()) or ()):
         try:label.configure(bg=palette['background'])
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
     tree=getattr(app,'tree',None)
     if tree is not None:configure_invoice_row_colors(tree,high_contrast,theme)
     windows=[app]+[child for child in app.winfo_children() if child.winfo_class()=='Toplevel']
     for window in windows:
         try:window.configure(bg=palette['background'])
-        except (tk.TclError,AttributeError):pass
+        except (tk.TclError,AttributeError):report_fault()
         apply_widget_contrast(window,high_contrast,theme)
         prepare_focus_tree(window,high_contrast)
     for menu in (getattr(app,'main_menu',None),getattr(app,'file_menu',None),getattr(app,'help_menu',None),getattr(app,'row_menu',None)):
@@ -1857,7 +1862,7 @@ def _date_search_text(value):
     if not text:return ''
     parts=[text]
     try:parts.append(format_long_date(date.fromisoformat(text)))
-    except ValueError:pass
+    except ValueError:report_fault()
     return ' '.join(parts).casefold()
 
 
@@ -2242,7 +2247,7 @@ class ReminderApp(tk.Tk):
         log_activity('tray','open_window','started')
         self.deiconify();self.lift()
         try:self.focus_force()
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
         if sys.platform.startswith('win'):
             self.after_idle(lambda:configure_windows_window_icon(self))
         self.after_idle(self._maybe_show_ledger_reminder)
@@ -2330,7 +2335,7 @@ class ReminderApp(tk.Tk):
         text=self._defaults_summary_text()
         try:
             if str(summary.cget('text'))!=text:summary.configure(text=text)
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
 
     def confirm_quit(self):
         """Ask once before the whole application, including the tray, exits."""
@@ -2348,7 +2353,7 @@ class ReminderApp(tk.Tk):
         if self.tray is None or not self.tray.running:
             try:
                 if self.state()=='iconic':self.deiconify()
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
             hint=''
             try:
                 from tray import backend_hint
@@ -2377,7 +2382,7 @@ class ReminderApp(tk.Tk):
             try:shown=bool(tray_icon.notify(message,_('Fönstret ligger i systemfältet')))
             except Exception:shown=False
         try:set_setting('tray_hint_shown','1')
-        except Exception:pass
+        except Exception:report_fault()
         logger.info('First hide to system tray explained; balloon shown=%s',shown)
         log_activity('tray','first_hide_hint','completed',balloon=shown)
 
@@ -2654,9 +2659,9 @@ class ReminderApp(tk.Tk):
         x=area_left+max(0,(area_width-width)//2)
         y=area_top+max(0,(area_height-height)//2)
         try:self.geometry(f'{width}x{height}+{x}+{y}')
-        except Exception:pass
+        except Exception:report_fault()
         try:self.minsize(min(int(round(940*scale)),width),min(int(round(560*scale)),height))
-        except Exception:pass
+        except Exception:report_fault()
 
     # Columns that carry free text are the ones allowed to grow when the window
     # is wider than the table; the numeric columns keep their width so figures
@@ -2684,10 +2689,10 @@ class ReminderApp(tk.Tk):
         pending=getattr(self,'_invoice_fit_job',None)
         if pending is not None:
             try:self.after_cancel(pending)
-            except (tk.TclError,ValueError):pass
+            except (tk.TclError,ValueError):report_fault()
         px=getattr(self,'_px',None)
         try:self._invoice_fit_job=self.after_idle(lambda:fit_invoice_columns(tree,widths,width,px))
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
 
     def _configure_macos_desktop_events(self):
         """Match macOS conventions without changing the cross-platform flow.
@@ -2789,11 +2794,11 @@ class ReminderApp(tk.Tk):
         self.donation_amount=amount
         for value,button in getattr(self,'donation_buttons',{}).items():
             try:button.configure(style='Accent.TButton' if value==amount else 'TButton')
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         label=getattr(self,'donation_amount_label',None)
         if label is not None:
             try:label.configure(text=_('Valt belopp: {amount} kr',amount=amount))
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         self._draw_donation_qr(amount)
 
     def _copy_swish_number(self):
@@ -2835,9 +2840,9 @@ class ReminderApp(tk.Tk):
             limit=max(minimum,event.width-offset)
             try:
                 if int(label.cget('wraplength'))!=limit:label.configure(wraplength=limit)
-            except (tk.TclError,ValueError):pass
+            except (tk.TclError,ValueError):report_fault()
         try:label.bind('<Configure>',rewrap)
-        except (tk.TclError,AttributeError):pass
+        except (tk.TclError,AttributeError):report_fault()
         return label
 
     def _donation_card(self,parent,padx=16,pady=14,side=None,gap=10):
@@ -2875,7 +2880,7 @@ class ReminderApp(tk.Tk):
                 existing.deiconify();existing.lift();existing.focus_force()
                 return existing
             except tk.TclError:
-                pass
+                report_fault()
         w=self._new_toplevel(_('Stöd PayPamin Flow'))
         self._donation_window=w
         w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
@@ -2980,7 +2985,7 @@ class ReminderApp(tk.Tk):
             logger.info('Scheduled update check stopped because the window closed')
             return
         try:self.after(UPDATE_CHECK_INTERVAL_MS,self._run_scheduled_update_check)
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
 
     def _update_button_idle_text(self):
         return _('Uppdatering tillgänglig') if getattr(self,'_available_update',None) is not None else _('Uppdatera appen')
@@ -3010,7 +3015,7 @@ class ReminderApp(tk.Tk):
         button=getattr(self,'update_button',None)
         if not button:return
         try:button.configure(text=self._update_button_idle_text(),state='normal')
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
         restyle_update_button(self)
 
     def _set_update_check_busy(self,busy):
@@ -3018,7 +3023,7 @@ class ReminderApp(tk.Tk):
         button=getattr(self,'update_button',None)
         if not button:return
         try:button.configure(text=_('Söker…') if busy else self._update_button_idle_text(),state='disabled' if busy else 'normal')
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
         if not busy:restyle_update_button(self)
 
     def _set_update_install_busy(self,busy,stage=None):
@@ -3030,7 +3035,7 @@ class ReminderApp(tk.Tk):
         labels={'download':_('Hämtar och verifierar…'),'install':_('Installerar filer…'),'restart':_('Startar om…')}
         text=labels.get(getattr(self,'_update_install_stage',None),_('Uppdaterar…')) if busy else self._update_button_idle_text()
         try:button.configure(text=text,state='disabled' if busy else 'normal')
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
         if not busy:restyle_update_button(self)
 
     def check_for_updates(self,manual=False,force=False):
@@ -3261,7 +3266,7 @@ class ReminderApp(tk.Tk):
         button=getattr(self,'clear_search_button',None)
         if button is not None:
             try:button.state(['!disabled'] if query else ['disabled'])
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         log_activity('ui','invoice_search_changed','completed',query=query)
         self.refresh()
 
@@ -3274,7 +3279,7 @@ class ReminderApp(tk.Tk):
         focus=getattr(self,'invoice_search',None)
         if focus is not None:
             try:focus.focus_set()
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         log_activity('ui','invoice_search_cleared','completed')
         return True
 
@@ -3465,7 +3470,7 @@ class ReminderApp(tk.Tk):
             try:enabled,system=result_queue.get_nowait()
             except queue.Empty:
                 try:self.after(100,poll)
-                except tk.TclError:pass
+                except tk.TclError:report_fault()
                 return
             self._contrast_check_running=False
             changed=False
@@ -3481,7 +3486,7 @@ class ReminderApp(tk.Tk):
                     logger.info('Desktop theme changed: choice=%s applied=%s',self._theme_setting,resolved)
             if changed:self._apply_accessibility_palette()
             try:self.after(SYSTEM_CONTRAST_POLL_INTERVAL_MS,self._poll_system_contrast)
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         poll()
 
     def set_font_scale(self,value,persist=True):
@@ -3500,16 +3505,16 @@ class ReminderApp(tk.Tk):
         if tree is not None:
             for column,width in getattr(self,'_invoice_column_widths',{}).items():
                 try:tree.column(column,width=self._px(width))
-                except tk.TclError:pass
+                except tk.TclError:report_fault()
             self._fit_invoice_columns()
         scale_var=getattr(self,'_font_scale_var',None)
         if scale_var is not None:
             try:scale_var.set(font_scale_label(self.ui_font_scale))
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         help_label=getattr(self,'_keyboard_help_scale_label',None)
         if help_label is not None:
             try:help_label.configure(text=_('Textstorlek: {scale}. Alla kontroller nås med Tab och har synlig fokusmarkering.',scale=font_scale_label(self.ui_font_scale)))
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         high_contrast=getattr(self,'_high_contrast',False)
         theme=getattr(self,'_theme','light')
         for window in [self]+[child for child in self.winfo_children() if child.winfo_class()=='Toplevel']:
@@ -3568,10 +3573,10 @@ class ReminderApp(tk.Tk):
 
     def _open_keyboard_menu(self,menu):
         try:menu.unpost()
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
         menu.tk_popup(self.winfo_rootx()+12,self.winfo_rooty()+30)
         try:menu.grab_release()
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
         return 'break'
 
     def show_file_menu(self):
@@ -3585,7 +3590,7 @@ class ReminderApp(tk.Tk):
         if search is not None:
             search.focus_set()
             try:search.selection_range(0,'end')
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         return 'break'
 
     def cycle_invoice_filter(self,direction):
@@ -3602,7 +3607,7 @@ class ReminderApp(tk.Tk):
         if existing is not None:
             try:
                 if existing.winfo_exists():existing.deiconify();existing.lift();existing.focus_force();return existing
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         previous_grab=self.grab_current() or None
         w=self._new_toplevel(_('Kortkommandon och tillgänglighet'));w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
         self._keyboard_help_window=w
@@ -3611,7 +3616,7 @@ class ReminderApp(tk.Tk):
             if previous_grab is not None:
                 try:
                     if previous_grab.winfo_exists():previous_grab.grab_set()
-                except (tk.TclError,AttributeError):pass
+                except (tk.TclError,AttributeError):report_fault()
         w.protocol('WM_DELETE_WINDOW',close_help)
         form=self._dialog_form(w,padding=22)
         ttk.Label(form,text=_('Kortkommandon och tillgänglighet'),style='Title.TLabel').pack(anchor='w',pady=(0,10))
@@ -3811,7 +3816,7 @@ class ReminderApp(tk.Tk):
             limit=max(240,event.width-4)
             try:
                 if int(summary.cget('wraplength'))!=limit:summary.configure(wraplength=limit)
-            except (tk.TclError,ValueError):pass
+            except (tk.TclError,ValueError):report_fault()
         summary.bind('<Configure>',wrap_summary)
         row=ttk.Frame(foot);row.pack(fill='x',pady=(6,0))
         ttk.Button(row,text=_('Ta bort vald'),command=self.delete_invoice,style='Danger.TButton').pack(side='left')
@@ -3903,7 +3908,7 @@ class ReminderApp(tk.Tk):
         status=getattr(self,'search_status',None)
         if status is not None:
             try:status.configure(text=invoice_search_summary(len(visible),in_view_total,query,elsewhere))
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
         refresh_summary=getattr(self,'_refresh_defaults_summary',None)
         if callable(refresh_summary):refresh_summary()
         # Tray refresh is best effort: a missing or stopped tray must never
@@ -4004,19 +4009,19 @@ class ReminderApp(tk.Tk):
         menu=getattr(self,'row_menu',None)
         if menu is None:return
         try:menu.unpost()
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
         try:menu.grab_release()
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
 
     def close_invoice_preview(self,win,doc):
         """Release the modal grab and close both PDF and window on every exit."""
         try:win.grab_release()
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
         try:doc.close()
         finally:
             try:
                 if win.winfo_exists():win.destroy()
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
 
     def reminder_logo_files(self):
         """Return every SVG logo the user can choose for a reminder."""
@@ -4656,7 +4661,7 @@ class ReminderApp(tk.Tk):
             logger.exception('Automatic import folder watch failed')
         if not ui_is_alive(self):return
         try:self.after(IMPORT_WATCH_INTERVAL_MS,self._run_scheduled_import_scan)
-        except tk.TclError:pass
+        except tk.TclError:report_fault()
 
     def scan_import_folder(self,automatic=False,paths=None):
         if getattr(self,'_import_scan_running',False):return
@@ -5221,7 +5226,7 @@ class ReminderApp(tk.Tk):
         job=getattr(self,'_undo_job',None)
         if job is not None:
             try:self.after_cancel(job)
-            except (tk.TclError,ValueError):pass
+            except (tk.TclError,ValueError):report_fault()
         self._undo_job=self.after(60000,self._hide_undo_delete)
         return True
 
@@ -5231,11 +5236,11 @@ class ReminderApp(tk.Tk):
         self._undo_job=None
         if job is not None:
             try:self.after_cancel(job)
-            except (tk.TclError,ValueError):pass
+            except (tk.TclError,ValueError):report_fault()
         bar=getattr(self,'undo_bar',None)
         if bar is not None:
             try:bar.pack_forget()
-            except tk.TclError:pass
+            except tk.TclError:report_fault()
 
     def _focus_is_text_input(self):
         """True when the keyboard is in a field that has its own undo."""
@@ -5282,7 +5287,7 @@ class ReminderApp(tk.Tk):
                 existing.deiconify();existing.lift();existing.focus_force()
                 return existing
             except tk.TclError:
-                pass
+                report_fault()
         w=self._new_toplevel(_('Papperskorg'));w.resizable(True,True)
         self._trash_window=w
         def close():
@@ -5325,7 +5330,7 @@ class ReminderApp(tk.Tk):
             state=('!disabled',) if items else ('disabled',)
             for button in (restore_button,permanent_button,empty_button):
                 try:button.state(state)
-                except tk.TclError:pass
+                except tk.TclError:report_fault()
             return items
 
         def restore_selected():
@@ -5903,7 +5908,7 @@ class ReminderApp(tk.Tk):
         finally:
             if temporary_pdf is not None:
                 try:temporary_pdf.unlink()
-                except FileNotFoundError:pass
+                except FileNotFoundError:report_fault()
                 except OSError:logger.warning('Temporary reminder PDF could not be removed: %s',temporary_pdf)
 
     def write_pdf(self,path,r,level,fee,today,remaining,total,p2_warning,logo_path='',reminder_terms=None):
@@ -5942,7 +5947,7 @@ class ReminderApp(tk.Tk):
                         self.canv.saveState();self.canv.scale(self.scale,self.scale);renderPDF.draw(self.drawing,self.canv,0,0)
                     except Exception as exc:
                         try:self.canv.restoreState()
-                        except Exception:pass
+                        except Exception:report_fault()
                         raise LogoEmbedError(_('SVG-logotypen kunde inte bäddas in: {path}\n{error}',path=logo_path,error=exc)) from exc
                     self.canv.restoreState()
             brand=LogoFlowable(drawing,70*mm,28*mm)
@@ -6013,7 +6018,7 @@ class ReminderApp(tk.Tk):
         win=self._new_toplevel(_('Granska inlärning'));win.geometry('1000x600');win.minsize(780,430)
         try:
             if parent is not None:parent.grab_release()
-        except Exception:pass
+        except Exception:report_fault()
         buttons=ttk.Frame(win,padding=(16,10));buttons.pack(side='bottom',fill='x')
         ttk.Separator(win,orient='horizontal').pack(side='bottom',fill='x')
         form=ttk.Frame(win,padding=16);form.pack(fill='both',expand=True)
@@ -6074,13 +6079,13 @@ class ReminderApp(tk.Tk):
             win.destroy()
             try:
                 if parent is not None and parent.winfo_exists():parent.grab_set()
-            except Exception:pass
+            except Exception:report_fault()
         ttk.Button(buttons,text=_('Stäng'),command=close).pack(side='right')
         win.protocol('WM_DELETE_WINDOW',close)
         refresh()
         if parent is not None:
             try:win.transient(parent)
-            except Exception:pass
+            except Exception:report_fault()
         win.focus_force()
         log_activity('learning','review_opened','completed')
 
@@ -6254,7 +6259,7 @@ class ReminderApp(tk.Tk):
             pending=getattr(w,'_settings_reflow_job',None)
             if pending:
                 try:w.after_cancel(pending)
-                except Exception:pass
+                except Exception:report_fault()
             w._settings_reflow_job=w.after_idle(reflow)
         surface.canvas.bind('<Configure>',schedule_reflow,add='+')
         reflow(available_width)
@@ -6263,7 +6268,7 @@ class ReminderApp(tk.Tk):
                 max_width=max(520,available_width),
                 max_height=max(320,area_height-140) if area_height else 720,
             )
-        except Exception:pass
+        except Exception:report_fault()
         fit_window_to_screen(w,min_width=520,min_height=360)
         def save():
             try:

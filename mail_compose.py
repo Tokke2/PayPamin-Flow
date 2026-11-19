@@ -11,6 +11,7 @@ import time
 from email.message import EmailMessage
 from email.policy import SMTP
 from pathlib import Path
+from quiet_faults import report_fault
 
 
 USERCHOICE_MAILTO_KEY = (
@@ -195,7 +196,7 @@ def write_thunderbird_draft(content, pdf_path, directory=None):
             try:
                 draft_path.unlink()
             except OSError:
-                pass
+                report_fault()
         raise
     return draft_path
 
@@ -223,6 +224,6 @@ def open_thunderbird_draft(executable, content, pdf_path):
         try:
             draft_path.unlink()
         except OSError:
-            pass
+            report_fault()
         raise
     return True

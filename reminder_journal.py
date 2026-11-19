@@ -25,6 +25,7 @@ from customer_contacts import (
     normalize_email_addresses,
 )
 from i18n import _
+from quiet_faults import report_fault
 
 JOURNAL_FORMAT = 1
 JOURNAL_FILENAME = "reminder_journal.json"
@@ -154,7 +155,7 @@ def _atomic_text(path: Path, text: str) -> Path:
         try:
             path.chmod(0o600)
         except OSError:
-            pass
+            report_fault()
         return path
     except OSError as exc:
         raise JournalError(_("JSON-journalen kunde inte skrivas: {error}", error=exc)) from exc
@@ -163,7 +164,7 @@ def _atomic_text(path: Path, text: str) -> Path:
             try:
                 temporary.unlink()
             except OSError:
-                pass
+                report_fault()
 
 
 def _write_payload(path: Path, payload: dict) -> Path:
@@ -204,7 +205,7 @@ def _legacy_events(invoices, settings):
                     terms.update(snapshot["terms"])
                 language = str(snapshot.get("language") or language)
             except (TypeError, ValueError, AttributeError):
-                pass
+                report_fault()
             event_id = reminder_event_id(row.get("invoice_no"), level, reminder_date)
             yield {
                 "event_id": event_id,
@@ -403,7 +404,7 @@ def _write_weekly_files_backup(destination, import_dir, export_dir, excluded=())
         try:
             destination.chmod(0o600)
         except OSError:
-            pass
+            report_fault()
     except (OSError, zipfile.BadZipFile) as exc:
         raise JournalError(_("Veckokopian av import- och exportmapparna kunde inte skapas: {error}", error=exc)) from exc
     finally:
@@ -411,7 +412,7 @@ def _write_weekly_files_backup(destination, import_dir, export_dir, excluded=())
             try:
                 temporary.unlink()
             except OSError:
-                pass
+                report_fault()
 
 
 def create_weekly_backup(
@@ -435,7 +436,7 @@ def create_weekly_backup(
             json_valid = True
         except JournalError:
             # Replace a damaged copy atomically from the live database.
-            pass
+            report_fault()
     files_valid = files_destination is None or _valid_weekly_files_backup(files_destination)
     if json_valid and files_valid:
         return None
@@ -454,7 +455,7 @@ def create_weekly_backup(
         try:
             destination.chmod(0o600)
         except OSError:
-            pass
+            report_fault()
         if files_destination is not None:
             _write_weekly_files_backup(
                 files_destination, import_dir, export_dir,
@@ -468,7 +469,7 @@ def create_weekly_backup(
             try:
                 temporary.unlink()
             except OSError:
-                pass
+                report_fault()
 
 
 def _invoice_values(invoice, now):

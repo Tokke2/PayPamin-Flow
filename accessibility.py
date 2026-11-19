@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import sys
+from quiet_faults import report_fault
 
 FONT_SCALE_SETTING = "ui_font_scale"
 FONT_SCALE_MIN = 0.8
@@ -359,7 +360,7 @@ def system_high_contrast(platform=None, environ=None, runner=None):
                 from AppKit import NSWorkspace
                 return bool(NSWorkspace.sharedWorkspace().accessibilityDisplayShouldIncreaseContrast())
             except Exception:
-                pass
+                report_fault()
         output = _setting_output(
             ["/usr/bin/defaults", "read", "NSGlobalDomain", "accessibilityDisplayShouldIncreaseContrast"],
             runner,
@@ -739,7 +740,7 @@ def apply_widget_contrast(root, high_contrast=False, theme="light"):
                 if str(widget.winfo_toplevel().cget("menu")) == str(widget):
                     background = palette["background"]
             except Exception:
-                pass
+                report_fault()
             _configure_if_supported(
                 widget, background=background, foreground=palette["text"],
                 activebackground=palette["selected_background"], activeforeground=palette["selected_text"],
@@ -754,7 +755,7 @@ def apply_widget_contrast(root, high_contrast=False, theme="light"):
         root._accessibility_high_contrast = bool(high_contrast)
         root._accessibility_theme = palette["dark"]
     except Exception:
-        pass
+        report_fault()
     return palette
 
 
@@ -954,7 +955,7 @@ class ResponsiveGrid:
                     column, weight=1 if column < columns else 0,
                 )
             except Exception:
-                pass
+                report_fault()
         cell_width = self._cell_width(columns, width)
         row = 0
         column = 0
@@ -994,7 +995,7 @@ class ResponsiveGrid:
                         wraplength=max(self.MIN_LABEL_WRAP, self.width - 8),
                     )
                 except Exception:
-                    pass
+                    report_fault()
             return
         if item["kind"] != "cell":
             return
@@ -1005,13 +1006,13 @@ class ResponsiveGrid:
                     wraplength=max(self.MIN_LABEL_WRAP, cell_width - 8),
                 )
             except Exception:
-                pass
+                report_fault()
         entry = item.get("entry")
         if entry is not None and cell_width > 0:
             try:
                 entry.configure(width=max(8, min(16, (cell_width - 16) // 9)))
             except Exception:
-                pass
+                report_fault()
 
 
 class ScrollableForm:
@@ -1140,7 +1141,7 @@ class ScrollableForm:
                 requested = max(viewport_width, int(self.form.winfo_reqwidth()))
                 self.canvas.itemconfigure(self.item, width=requested)
         except Exception:
-            pass
+            report_fault()
         self._content_changed()
 
     def _sync_horizontal_scrollbar(self):
@@ -1152,7 +1153,7 @@ class ScrollableForm:
             else:
                 self.horizontal.grid_remove()
         except Exception:
-            pass
+            report_fault()
 
 
 def _visual_geometry(item):
@@ -1208,13 +1209,13 @@ def _usable_focus_widget(widget) -> bool:
         if str(widget.cget("state")).lower() == "disabled":
             return False
     except Exception:
-        pass
+        report_fault()
     try:
         takefocus = str(widget.cget("takefocus")).lower()
         if takefocus in {"0", "false", "no", "off"}:
             return False
     except Exception:
-        pass
+        report_fault()
     return True
 
 
@@ -1327,7 +1328,7 @@ def _insert_text_tab(widget):
     try:
         widget.insert("insert", "\t")
     except Exception:
-        pass
+        report_fault()
     return "break"
 
 
@@ -1344,7 +1345,7 @@ def prepare_focus_tree(root, high_contrast=None):
     try:
         root._accessibility_high_contrast = bool(high_contrast)
     except Exception:
-        pass
+        report_fault()
     focusable = []
 
     def visit(widget):
@@ -1358,7 +1359,7 @@ def prepare_focus_tree(root, high_contrast=None):
             try:
                 widget.configure(takefocus=1)
             except Exception:
-                pass
+                report_fault()
             focusable.append(widget)
         if widget_class in CLASSIC_FOCUS_CLASSES:
             try:
@@ -1368,7 +1369,7 @@ def prepare_focus_tree(root, high_contrast=None):
                     highlightbackground=palette["classic_focus_background"],
                 )
             except Exception:
-                pass
+                report_fault()
         for child in _children(widget):
             visit(child)
 
@@ -1395,15 +1396,15 @@ def prepare_focus_tree(root, high_contrast=None):
         try:
             widget.bind("<FocusIn>", lambda _event, current=widget: reveal_widget(current), add="+")
         except Exception:
-            pass
+            report_fault()
         if _widget_class(widget) == "Text":
             try:
                 widget.bind("<Control-Tab>", lambda _event, current=widget: _insert_text_tab(current), add="+")
             except Exception:
-                pass
+                report_fault()
         if installed:
             try:
                 widget._accessibility_focus_bindings = True
             except Exception:
-                pass
+                report_fault()
     return order

@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
+from quiet_faults import report_fault
 
 ERROR_LOG_NAME = "errors.log"
 RESOLVED_ERROR_STATE = "resolved-errors.json"
@@ -174,7 +175,7 @@ def _atomic_write(path: Path, payload: str, *, prefix: str) -> None:
         try:
             temporary.unlink(missing_ok=True)
         except OSError:
-            pass
+            report_fault()
 
 
 def _source_logs(log_dir: Path, output_path: Path) -> list[Path]:
@@ -279,7 +280,7 @@ def resolve_errors(
         try:
             archive_path.unlink(missing_ok=True)
         except OSError:
-            pass
+            report_fault()
         raise
 
     timestamp = resolved_at.isoformat()

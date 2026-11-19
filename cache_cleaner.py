@@ -13,6 +13,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from quiet_faults import report_fault
 
 DEFAULT_MAX_AGE_HOURS = 24
 TEMP_DIRECTORY_PREFIXES = (
@@ -42,7 +43,7 @@ def _remove_stale_file(path: Path, cutoff: float, report: CleanupReport) -> None
         report.removed_files += 1
         report.freed_bytes += details.st_size
     except FileNotFoundError:
-        pass
+        report_fault()
     except OSError:
         report.errors += 1
 
@@ -87,7 +88,7 @@ def _remove_stale_temp_directory(path: Path, cutoff: float, report: CleanupRepor
         report.removed_directories += 1
         report.freed_bytes += total_bytes
     except FileNotFoundError:
-        pass
+        report_fault()
     except OSError:
         report.errors += 1
 
@@ -114,7 +115,7 @@ def clean_cache(
                 bytecode_dir.rmdir()
                 report.removed_directories += 1
     except FileNotFoundError:
-        pass
+        report_fault()
     except OSError:
         report.errors += 1
 

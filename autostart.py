@@ -13,6 +13,7 @@ from pathlib import Path
 
 from app_info import APP_DESCRIPTION, APP_DESCRIPTION_SV, APP_ID, APP_NAME, APP_SLUG, MINIMIZED_START_ARG
 from i18n import _
+from quiet_faults import report_fault
 
 SOURCE_DIR = Path(__file__).resolve().parent
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", SOURCE_DIR))
@@ -120,7 +121,7 @@ def _remove_legacy_windows_run_value() -> None:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
             winreg.DeleteValue(key, WINDOWS_VALUE_NAME)
     except FileNotFoundError:
-        pass
+        report_fault()
 
 
 def _windows_powershell() -> Path:
@@ -189,7 +190,7 @@ def _create_windows_shortcut(shortcut_path: Path, command: list[str]) -> None:
         try:
             temporary_path.unlink(missing_ok=True)
         except OSError:
-            pass
+            report_fault()
 
 
 def _set_windows_autostart(enabled: bool) -> None:

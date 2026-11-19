@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
+from quiet_faults import report_fault
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ def extract_org_numbers(text) -> set[str]:
         try:
             values.add(normalize_org_number(match.group(1)))
         except ValueError:
-            pass
+            report_fault()
     return values
 
 
@@ -96,7 +97,7 @@ def extract_bankgiro_numbers(text) -> set[str]:
         try:
             values.add(normalize_bankgiro_number(match.group(1)))
         except ValueError:
-            pass
+            report_fault()
     return values
 
 
@@ -143,7 +144,7 @@ def svg_logo_aliases(path) -> list[str]:
                 if 3 <= len(value) <= 120:
                     aliases.add(value)
         except (OSError, ET.ParseError):
-            pass
+            report_fault()
     return sorted(
         alias for alias in aliases
         if normalize_name(alias) and normalize_name(alias) not in _GENERIC_LOGO_NAMES
