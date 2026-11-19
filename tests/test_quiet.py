@@ -8,6 +8,7 @@ reprinted, so a callback that fails on every repaint cannot drown the log.
 """
 import ast
 import logging
+import shutil
 import sys
 import tempfile
 import unittest
@@ -128,47 +129,45 @@ class ReportTests(unittest.TestCase):
 class ErrorLogTests(unittest.TestCase):
     """The promise is that a swallowed defect reaches ``errors.log``."""
 
+    def setUp(self):
+        quiet_faults.reset()
+        self.addCleanup(quiet_faults.reset)
+        # A plain TemporaryDirectory cannot be removed while the handler still
+        # holds the file open, which Windows reports as WinError 32. The folder
+        # is therefore cleaned up last, after the handler has been closed.
+        self.folder = Path(tempfile.mkdtemp(prefix="quiet-faults-"))
+        self.addCleanup(shutil.rmtree, self.folder, True)
+        record = logging.getLogger(quiet_faults.LOGGER_NAME)
+        patcher = mock.patch.object(record, "propagate", False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.handler = logging.FileHandler(self.folder / "app.log", encoding="utf-8")
+        self.handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        record.addHandler(self.handler)
+        self.addCleanup(record.removeHandler, self.handler)
+        self.addCleanup(self.handler.close)
+
+    def flush(self):
+        self.handler.flush()
+
     def test_an_unexpected_fault_ends_up_in_the_consolidated_error_log(self):
-        with tempfile.TemporaryDirectory() as folder:
-            logs = Path(folder)
-            record = logging.getLogger("paypamin-flow.quiet")
-            record.propagate = False
-            handler = logging.FileHandler(logs / "app.log", encoding="utf-8")
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-            record.addHandler(handler)
-            self.addCleanup(record.removeHandler, handler)
-            self.addCleanup(handler.close)
-            quiet_faults.reset()
-            self.addCleanup(quiet_faults.reset)
+        quiet_faults.report_fault(ValueError("fee is not a number"), site="paypamin_flow:reminder_fee")
+        self.flush()
+        self.assertIn("ERROR", (self.folder / "app.log").read_text(encoding="utf-8"))
 
-            quiet_faults.report_fault(ValueError("fee is not a number"), site="paypamin_flow:reminder_fee")
-            handler.flush()
-            contents = (logs / "app.log").read_text(encoding="utf-8")
-            self.assertIn("ERROR", contents)
-
-            error_log.refresh_error_log(logs)
-            consolidated = (logs / error_log.ERROR_LOG_NAME).read_text(encoding="utf-8")
-            self.assertIn("paypamin_flow:reminder_fee", consolidated)
+        error_log.refresh_error_log(self.folder)
+        consolidated = (self.folder / error_log.ERROR_LOG_NAME).read_text(encoding="utf-8")
+        self.assertIn("paypamin_flow:reminder_fee", consolidated)
 
     def test_expected_noise_does_not_claim_to_be_an_unresolved_error(self):
-        with tempfile.TemporaryDirectory() as folder:
-            logs = Path(folder)
-            record = logging.getLogger("paypamin-flow.quiet")
-            record.propagate = False
-            handler = logging.FileHandler(logs / "app.log", encoding="utf-8")
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-            record.addHandler(handler)
-            self.addCleanup(record.removeHandler, handler)
-            self.addCleanup(handler.close)
-            quiet_faults.reset()
-            self.addCleanup(quiet_faults.reset)
+        quiet_faults.report_fault(TclError("window has been destroyed"), site="ui:repaint")
+        self.flush()
+        self.assertIn("WARNING", (self.folder / "app.log").read_text(encoding="utf-8"))
 
-            quiet_faults.report_fault(TclError("window has been destroyed"), site="ui:repaint")
-            handler.flush()
-            error_log.refresh_error_log(logs)
-            consolidated = logs / error_log.ERROR_LOG_NAME
-            text = consolidated.read_text(encoding="utf-8") if consolidated.exists() else ""
-            self.assertNotIn("ui:repaint", text)
+        error_log.refresh_error_log(self.folder)
+        consolidated = self.folder / error_log.ERROR_LOG_NAME
+        text = consolidated.read_text(encoding="utf-8") if consolidated.exists() else ""
+        self.assertNotIn("ui:repaint", text)
 
 
 class NoSilentHandlerTests(unittest.TestCase):
