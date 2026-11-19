@@ -84,8 +84,8 @@ class DisplayScaleTests(unittest.TestCase):
         style = RecordingStyle()
         accessible = self.app.AccessibleStyle(style, FakeFontModule(), "Test Sans")
         accessible.apply(1.0, pixel_scale=1.5)
-        # A pixel metric follows the display: 10 px * 1.5.
-        self.assertEqual(style.options("TButton")["padding"], (15, 10))
+        # A pixel metric follows the display: 12x8 px * 1.5.
+        self.assertEqual(style.options("TButton")["padding"], (18, 12))
         # A point size does not: Tk already applies the screen DPI to points.
         self.assertEqual(style.options("TLabel")["font"], ("Test Sans", 10))
         accessible.apply(1.5, pixel_scale=1.0)

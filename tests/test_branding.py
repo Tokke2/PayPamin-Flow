@@ -341,7 +341,8 @@ class WindowIconTests(unittest.TestCase):
         self.assertEqual(native_icon.call_args_list[0], call(fake))
         fake.after_idle.assert_called_once()
         self.assertEqual(native_icon.call_args_list, [call(fake), call(fake)])
-        self.assertEqual(len(fake._window_icons), 4)
+        # 16, 32, 48, 256 and 512 px: a HiDPI taskbar gets a real bitmap.
+        self.assertEqual(len(fake._window_icons), 5)
         self.assertIsNotNone(fake._brand_logo)
         self.assertEqual(fake._action_icons, {})
 

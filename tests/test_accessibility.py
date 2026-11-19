@@ -336,12 +336,12 @@ class AccessibilityTests(unittest.TestCase):
         accessible = accessibility.AccessibleStyle(style, fonts)
         accessible.apply(1.5)
         self.assertEqual(fonts.fonts["TkDefaultFont"].size, 15)
-        self.assertEqual(style.configurations["Treeview"]["rowheight"], 45)
+        self.assertEqual(style.configurations["Treeview"]["rowheight"], 48)
         self.assertEqual(style.configurations["Sub.TLabel"]["foreground"], accessibility.MUTED_TEXT)
         self.assertIn(("focus", accessibility.FOCUS), style.maps["TButton"]["focuscolor"])
         accessible.apply(1.0)
         self.assertEqual(fonts.fonts["TkDefaultFont"].size, 10)
-        self.assertEqual(style.configurations["Treeview"]["rowheight"], 30)
+        self.assertEqual(style.configurations["Treeview"]["rowheight"], 32)
 
     def test_donation_styles_keep_white_text_readable_in_both_palettes(self):
         """A channel keeps its colour, but the text must stay readable.
@@ -503,7 +503,9 @@ class AccessibilityAppIntegrationTests(unittest.TestCase):
         with patch.object(self.app, "set_setting") as save, patch.object(self.app, "refresh_json_journal") as journal:
             result = self.app.ReminderApp.set_font_scale(fake, 1.5)
         self.assertEqual(result, 1.5)
-        fake._accessibility_style.apply.assert_called_once_with(1.5, high_contrast=False, pixel_scale=1.0)
+        fake._accessibility_style.apply.assert_called_once_with(
+            1.5, high_contrast=False, pixel_scale=1.0, theme="light"
+        )
         save.assert_called_once_with(self.app.FONT_SCALE_SETTING, "1.5")
         journal.assert_called_once_with(parent=fake)
 

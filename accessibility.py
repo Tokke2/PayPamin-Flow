@@ -17,22 +17,62 @@ FONT_SCALE_MIN = 0.8
 FONT_SCALE_MAX = 2.0
 FONT_SCALE_CHOICES = (0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0)
 
-BACKGROUND = "#F3F5F8"
-TEXT = "#1F2A3D"
-MUTED_TEXT = "#475467"
+# The light theme is a quiet, slightly cool paper: one background for the
+# window, a white surface for anything that holds data, and one border colour
+# that every edge shares. Text is one step darker than before so the extra
+# spacing below never costs readability.
+BACKGROUND = "#F4F6FA"
+SURFACE = "#FFFFFF"
+SURFACE_ALT = "#EDF1F8"
+BORDER = "#D3DCE8"
+TEXT = "#1B2735"
+MUTED_TEXT = "#4E5C70"
 # The UI ink is the exact navy of the brand mark (#0B2447), and the pressed
 # state goes one step darker (#06152C), so a button, a heading and the icon
 # read as one design instead of three slightly different dark blues.
 TITLE_TEXT = "#0B2447"
 ACCENT = "#0B2447"
 ACCENT_ACTIVE = "#06152C"
+ACCENT_TEXT = "#FFFFFF"
 FOCUS = "#005A9C"
 FOCUS_BACKGROUND = "#DCEAFF"
 SELECTED_BACKGROUND = "#C7DDF5"
 SELECTED_TEXT = "#102A43"
 FIELD_BACKGROUND = "#FFFFFF"
 CLASSIC_FOCUS_BACKGROUND = "#B8C4D2"
-CANVAS_BACKGROUND = "#E4E9F0"
+CANVAS_BACKGROUND = "#E8EDF4"
+HEADING_BACKGROUND = "#E8EEF6"
+# A destructive action is allowed one quiet signal: red text on the normal
+# surface, never a filled red button that shouts louder than the work itself.
+DANGER_TEXT = "#B42318"
+HEADING_TEXT = "#0B2447"
+TROUGH_BACKGROUND = "#E3E9F2"
+
+# The dark theme keeps the same structure and the same names. Nothing is pure
+# black and nothing is pure white: the background is a deep ink, surfaces sit
+# one step above it, and the accent switches to a blue that white text still
+# clears 4.5:1 against.
+DARK_BACKGROUND = "#0E1622"
+DARK_SURFACE = "#1C2836"
+DARK_SURFACE_ALT = "#243244"
+DARK_BORDER = "#2B3A4E"
+DARK_TEXT = "#E6EDF6"
+DARK_MUTED_TEXT = "#A3B2C6"
+DARK_TITLE_TEXT = "#FFFFFF"
+DARK_ACCENT = "#2F66CC"
+DARK_ACCENT_ACTIVE = "#25549F"
+DARK_ACCENT_TEXT = "#FFFFFF"
+DARK_FOCUS = "#79B8FF"
+DARK_FOCUS_BACKGROUND = "#22344A"
+DARK_SELECTED_BACKGROUND = "#27466E"
+DARK_SELECTED_TEXT = "#FFFFFF"
+DARK_FIELD_BACKGROUND = "#101A26"
+DARK_CLASSIC_FOCUS_BACKGROUND = "#3A4B62"
+DARK_CANVAS_BACKGROUND = "#0E1622"
+DARK_HEADING_BACKGROUND = "#1C2836"
+DARK_DANGER_TEXT = "#FFB4AB"
+DARK_HEADING_TEXT = "#DAE5F2"
+DARK_TROUGH_BACKGROUND = "#101A26"
 
 # A deliberate, platform-independent high-contrast palette.  It is used when
 # the operating system reports that high contrast is enabled; normal app
@@ -136,16 +176,30 @@ def contrast_ratio(first: str, second: str) -> float:
     return (light + 0.05) / (dark + 0.05)
 
 
-def contrast_palette(high_contrast=False):
-    """Return one complete UI palette, including classic Tk widget colors."""
+def is_dark_theme(theme) -> bool:
+    """Return True only for the dark theme, whatever spelling it arrives in."""
+    return str(theme or "").strip().casefold() in {"dark", "mörkt", "morkt"}
+
+
+def contrast_palette(high_contrast=False, theme="light"):
+    """Return one complete UI palette, including classic Tk widget colors.
+
+    ``theme`` picks the light or dark set; high contrast replaces both with a
+    single black/white palette, because a user who asks for maximum contrast
+    must not have to wonder which theme they were in.
+    """
     if high_contrast:
         return {
             "background": HIGH_CONTRAST_BACKGROUND,
+            "surface": HIGH_CONTRAST_BACKGROUND,
+            "surface_alt": HIGH_CONTRAST_BACKGROUND,
+            "border": HIGH_CONTRAST_FOCUS,
             "text": HIGH_CONTRAST_TEXT,
             "muted_text": HIGH_CONTRAST_MUTED_TEXT,
             "title_text": HIGH_CONTRAST_TITLE_TEXT,
             "accent": HIGH_CONTRAST_ACCENT,
             "accent_active": HIGH_CONTRAST_ACCENT_ACTIVE,
+            "accent_text": HIGH_CONTRAST_TEXT,
             "focus": HIGH_CONTRAST_FOCUS,
             "focus_background": HIGH_CONTRAST_FOCUS_BACKGROUND,
             "selected_background": HIGH_CONTRAST_SELECTED_BACKGROUND,
@@ -155,15 +209,46 @@ def contrast_palette(high_contrast=False):
             "canvas_background": HIGH_CONTRAST_CANVAS_BACKGROUND,
             "heading_background": HIGH_CONTRAST_BACKGROUND,
             "heading_text": HIGH_CONTRAST_TEXT,
+            "danger_text": HIGH_CONTRAST_FOCUS,
             "trough_background": HIGH_CONTRAST_BACKGROUND,
+            "dark": True,
+        }
+    if is_dark_theme(theme):
+        return {
+            "background": DARK_BACKGROUND,
+            "surface": DARK_SURFACE,
+            "surface_alt": DARK_SURFACE_ALT,
+            "border": DARK_BORDER,
+            "text": DARK_TEXT,
+            "muted_text": DARK_MUTED_TEXT,
+            "title_text": DARK_TITLE_TEXT,
+            "accent": DARK_ACCENT,
+            "accent_active": DARK_ACCENT_ACTIVE,
+            "accent_text": DARK_ACCENT_TEXT,
+            "focus": DARK_FOCUS,
+            "focus_background": DARK_FOCUS_BACKGROUND,
+            "selected_background": DARK_SELECTED_BACKGROUND,
+            "selected_text": DARK_SELECTED_TEXT,
+            "field_background": DARK_FIELD_BACKGROUND,
+            "classic_focus_background": DARK_CLASSIC_FOCUS_BACKGROUND,
+            "canvas_background": DARK_CANVAS_BACKGROUND,
+            "heading_background": DARK_HEADING_BACKGROUND,
+            "heading_text": DARK_HEADING_TEXT,
+            "danger_text": DARK_DANGER_TEXT,
+            "trough_background": DARK_TROUGH_BACKGROUND,
+            "dark": True,
         }
     return {
         "background": BACKGROUND,
+        "surface": SURFACE,
+        "surface_alt": SURFACE_ALT,
+        "border": BORDER,
         "text": TEXT,
         "muted_text": MUTED_TEXT,
         "title_text": TITLE_TEXT,
         "accent": ACCENT,
         "accent_active": ACCENT_ACTIVE,
+        "accent_text": ACCENT_TEXT,
         "focus": FOCUS,
         "focus_background": FOCUS_BACKGROUND,
         "selected_background": SELECTED_BACKGROUND,
@@ -171,10 +256,51 @@ def contrast_palette(high_contrast=False):
         "field_background": FIELD_BACKGROUND,
         "classic_focus_background": CLASSIC_FOCUS_BACKGROUND,
         "canvas_background": CANVAS_BACKGROUND,
-        "heading_background": "#E3E9F2",
-        "heading_text": "#0B2447",
-        "trough_background": "#E6EBF3",
+        "heading_background": HEADING_BACKGROUND,
+        "heading_text": HEADING_TEXT,
+        "danger_text": DANGER_TEXT,
+        "trough_background": TROUGH_BACKGROUND,
+        "dark": False,
     }
+
+
+# A UI font is chosen once and then used for every style, so the app does not
+# mix two sans-serifs that both look almost right. The list is ordered by what
+# each platform ships and by what reads best in a dense invoice table.
+FONT_STACKS = {
+    "win": ("Segoe UI", "Segoe UI Variable Text", "Tahoma", "Verdana", "Arial"),
+    "darwin": ("SF Pro Text", "Helvetica Neue", "Lucida Grande", "Arial"),
+    "linux": (
+        "Inter", "Cantarell", "Ubuntu", "Noto Sans", "DejaVu Sans",
+        "Liberation Sans", "FreeSans",
+    ),
+}
+
+
+def preferred_font_families(platform=None) -> tuple[str, ...]:
+    """Return the font families worth trying on this desktop, best first."""
+    name = str(platform or sys.platform).casefold()
+    if name.startswith("win"):
+        return FONT_STACKS["win"]
+    if name == "darwin":
+        return FONT_STACKS["darwin"]
+    return FONT_STACKS["linux"]
+
+
+def choose_font_family(available, platform=None, fallback: str = "") -> str:
+    """Pick the first preferred family the system actually has.
+
+    ``available`` is whatever the toolkit reports, so a family is only chosen
+    when it can really be rendered; otherwise the caller's own default is kept
+    rather than a name Tk would silently substitute.
+    """
+    names = [str(name).strip() for name in (available or ()) if str(name).strip()]
+    lookup = {name.casefold(): name for name in names}
+    for family in preferred_font_families(platform):
+        found = lookup.get(family.casefold())
+        if found:
+            return found
+    return str(fallback or "")
 
 
 def _setting_output(command, runner=None):
@@ -276,7 +402,7 @@ class AccessibleStyle:
         else:
             self.font_family = "TkDefaultFont"
 
-    def apply(self, scale, high_contrast=False, pixel_scale=1.0):
+    def apply(self, scale, high_contrast=False, pixel_scale=1.0, theme="light"):
         """Restyle the whole toolkit.
 
         ``scale`` zooms the text and ``pixel_scale`` converts a 96-DPI design
@@ -284,6 +410,10 @@ class AccessibleStyle:
         points and are already scaled by Tk from the screen DPI, so they must
         not be multiplied twice; paddings, row heights and focus rings are
         pixels and do need it. The two are kept apart for exactly that reason.
+
+        ``theme`` is the resolved light or dark theme. Every colour comes from
+        :func:`contrast_palette`, so a theme change repaints the whole toolkit
+        and high contrast still wins over both.
         """
         scale = normalize_font_scale(scale)
         try:
@@ -291,7 +421,9 @@ class AccessibleStyle:
         except (TypeError, ValueError):
             pixels = 1.0
         self.high_contrast = bool(high_contrast)
-        palette = contrast_palette(self.high_contrast)
+        self.theme = "dark" if is_dark_theme(theme) and not high_contrast else "light"
+        palette = contrast_palette(self.high_contrast, theme)
+        self.palette = palette
         for name, font in self.fonts.items():
             try:
                 font.configure(size=scaled_number(self.base_sizes[name], scale))
@@ -306,29 +438,29 @@ class AccessibleStyle:
             else (self.font_family, scaled_number(points, scale), weight)
         )
         configure = self.style.configure
+        accent_text = palette["accent_text"]
         configure("TFrame", background=palette["background"])
         configure("TLabel", background=palette["background"], foreground=palette["text"], font=font(10))
-        configure("Title.TLabel", background=palette["background"], foreground=palette["title_text"], font=font(19, "bold"))
-        configure("Heading.TLabel", background=palette["background"], foreground=palette["text"], font=font(11, "bold"))
-        configure("BodyBold.TLabel", background=palette["background"], foreground=palette["text"], font=font(9, "bold"))
+        configure("Title.TLabel", background=palette["background"], foreground=palette["title_text"], font=font(21, "bold"))
+        configure("Heading.TLabel", background=palette["background"], foreground=palette["title_text"], font=font(12, "bold"))
+        configure("BodyBold.TLabel", background=palette["background"], foreground=palette["text"], font=font(10, "bold"))
         configure("Sub.TLabel", background=palette["background"], foreground=palette["muted_text"], font=font(9))
-        configure(
-            "TButton", font=font(9), padding=(size(10), size(7)),
-            foreground=palette["text"], background=palette["field_background"],
-            focusthickness=max(2, size(2)), focuscolor=palette["focus"],
-        )
-        configure(
-            "Accent.TButton", background=palette["accent"], foreground="#FFFFFF",
-            font=font(9, "bold"), padding=(size(10), size(7)),
-            focusthickness=max(2, size(2)), focuscolor=palette["focus"],
-        )
+        # A button is a quiet surface with a hairline border, so a toolbar of
+        # them reads as a row of controls rather than as a block of colour.
+        self._configure_button("TButton", palette, font(10), size, palette["surface"], palette["text"], palette["border"])
+        self._configure_button("Accent.TButton", palette, font(10, "bold"), size, palette["accent"], accent_text, palette["accent"])
+        # A borderless button disappears into the surface it sits on and only
+        # shows itself on hover; the destructive one keeps the normal button
+        # shape and is marked by colour and by its own words.
+        self._configure_button("Quiet.TButton", palette, font(9), size, palette["background"], palette["muted_text"], palette["border"])
+        self._configure_button("Danger.TButton", palette, font(9), size, palette["surface"], palette["danger_text"], palette["border"])
         # A card is a raised surface on the window background. The palette owns
         # both colours, so high contrast keeps the text readable.
-        configure("Card.TFrame", background=palette["field_background"])
-        configure("CardBody.TLabel", background=palette["field_background"], foreground=palette["text"], font=font(10))
-        configure("CardSub.TLabel", background=palette["field_background"], foreground=palette["muted_text"], font=font(9))
-        configure("CardHeading.TLabel", background=palette["field_background"], foreground=palette["text"], font=font(11, "bold"))
-        configure("CardKicker.TLabel", background=palette["field_background"], foreground=palette["muted_text"], font=font(8, "bold"))
+        configure("Card.TFrame", background=palette["surface"])
+        configure("CardBody.TLabel", background=palette["surface"], foreground=palette["text"], font=font(10))
+        configure("CardSub.TLabel", background=palette["surface"], foreground=palette["muted_text"], font=font(9))
+        configure("CardHeading.TLabel", background=palette["surface"], foreground=palette["text"], font=font(11, "bold"))
+        configure("CardKicker.TLabel", background=palette["surface"], foreground=palette["muted_text"], font=font(8, "bold"))
         # Each donation channel keeps its own colour, with white text that still
         # reaches 4.5:1. High contrast replaces them with the palette accent, so
         # the colour never carries the meaning on its own.
@@ -340,8 +472,8 @@ class AccessibleStyle:
             configure(
                 name,
                 background=palette["accent"] if high_contrast else base,
-                foreground="#FFFFFF", font=font(9, "bold"),
-                padding=(size(12), size(9)),
+                foreground="#FFFFFF", font=font(10, "bold"),
+                padding=(size(14), size(10)), relief="flat", borderwidth=0,
                 focusthickness=max(2, size(2)), focuscolor=palette["focus"],
             )
             self.style.map(name, background=[
@@ -352,24 +484,38 @@ class AccessibleStyle:
         for name in ("TEntry", "TCombobox", "TSpinbox"):
             configure(
                 name, font=font(10), foreground=palette["text"], fieldbackground=palette["field_background"],
-                background=palette["field_background"], borderwidth=1,
+                background=palette["field_background"], borderwidth=1, padding=(size(6), size(4)),
+                bordercolor=palette["border"], lightcolor=palette["field_background"],
+                darkcolor=palette["border"], insertcolor=palette["text"],
+                arrowcolor=palette["muted_text"],
                 focusthickness=max(2, size(2)), focuscolor=palette["focus"],
             )
+            self.style.map(name, fieldbackground=[("readonly", palette["surface_alt"])])
         configure("TCheckbutton", background=palette["background"], foreground=palette["text"], font=font(10), focuscolor=palette["focus"])
         configure("TRadiobutton", background=palette["background"], foreground=palette["text"], font=font(10), focuscolor=palette["focus"])
+        # The table is the part of the app people actually read, so it gets a
+        # taller row, a slightly larger face and its own quiet heading band.
         configure(
-            "Treeview", font=font(9), rowheight=size(30), background=palette["field_background"],
-            fieldbackground=palette["field_background"], foreground=palette["text"], borderwidth=1,
+            "Treeview", font=font(10), rowheight=size(32), background=palette["surface"],
+            fieldbackground=palette["surface"], foreground=palette["text"], borderwidth=1,
+            bordercolor=palette["border"],
             focusthickness=max(2, size(2)), focuscolor=palette["focus"],
         )
         configure(
-            "Treeview.Heading", font=font(9, "bold"), background=palette["heading_background"],
-            foreground=palette["heading_text"], focusthickness=max(2, size(2)), focuscolor=palette["focus"],
+            "Treeview.Heading", font=font(10, "bold"), background=palette["heading_background"],
+            foreground=palette["heading_text"], relief="flat", padding=(size(8), size(6)),
+            bordercolor=palette["border"],
+            focusthickness=max(2, size(2)), focuscolor=palette["focus"],
         )
         configure("TNotebook", background=palette["background"], borderwidth=0, focuscolor=palette["focus"])
-        configure("TNotebook.Tab", font=font(9), padding=(size(10), size(6)), focuscolor=palette["focus"])
+        configure(
+            "TNotebook.Tab", font=font(10), padding=(size(14), size(7)),
+            background=palette["background"], foreground=palette["muted_text"],
+            bordercolor=palette["border"], focuscolor=palette["focus"],
+        )
         configure("TProgressbar", background=palette["accent"], troughcolor=palette["trough_background"])
-        configure("TScrollbar", background=palette["field_background"], troughcolor=palette["background"], arrowcolor=palette["text"])
+        configure("TScrollbar", background=palette["surface_alt"], troughcolor=palette["background"], arrowcolor=palette["muted_text"], borderwidth=0)
+        configure("TSeparator", background=palette["border"])
 
         focus_map = {
             "focuscolor": [("focus", palette["focus"])],
@@ -377,12 +523,47 @@ class AccessibleStyle:
             "lightcolor": [("focus", palette["focus"])],
             "darkcolor": [("focus", palette["focus"])],
         }
-        for name in ("TButton", "Accent.TButton", "TEntry", "TCombobox", "TSpinbox", "TCheckbutton", "TRadiobutton", "Treeview"):
+        for name in (
+            "TButton", "Accent.TButton", "Quiet.TButton", "Danger.TButton",
+            "TEntry", "TCombobox", "TSpinbox", "TCheckbutton", "TRadiobutton", "Treeview",
+        ):
             self.style.map(name, **focus_map)
-        self.style.map("Accent.TButton", background=[("active", palette["accent_active"]), ("pressed", palette["accent_active"]), ("focus", palette["accent_active"])])
+        self.style.map(
+            "Accent.TButton",
+            background=[("active", palette["accent_active"]), ("pressed", palette["accent_active"]), ("focus", palette["accent_active"])],
+            foreground=[("disabled", palette["muted_text"])],
+        )
+        self.style.map(
+            "TButton",
+            background=[("disabled", palette["surface_alt"]), ("pressed", palette["surface_alt"]), ("active", palette["surface_alt"])],
+            foreground=[("disabled", palette["muted_text"])],
+        )
+        self.style.map(
+            "Quiet.TButton",
+            background=[("active", palette["surface_alt"]), ("pressed", palette["surface_alt"]), ("focus", palette["surface_alt"])],
+            foreground=[("disabled", palette["muted_text"]), ("active", palette["text"])],
+            bordercolor=[("active", palette["border"])],
+        )
+        self.style.map(
+            "Danger.TButton",
+            background=[("active", palette["surface_alt"]), ("pressed", palette["surface_alt"]), ("focus", palette["surface_alt"])],
+        )
         self.style.map("Treeview", background=[("selected", palette["selected_background"])], foreground=[("selected", palette["selected_text"])])
-        self.style.map("TNotebook.Tab", background=[("focus", palette["focus_background"]), ("selected", palette["field_background"])], foreground=[("focus", palette["text"]), ("selected", palette["text"])])
+        self.style.map(
+            "TNotebook.Tab",
+            background=[("focus", palette["focus_background"]), ("selected", palette["surface"])],
+            foreground=[("focus", palette["text"]), ("selected", palette["text"])],
+        )
         return scale
+
+    def _configure_button(self, name, palette, font, size, background, foreground, border):
+        """Configure one button family with the same geometry everywhere."""
+        self.style.configure(
+            name, font=font, padding=(size(12), size(8)), relief="flat", borderwidth=1,
+            foreground=foreground, background=background, bordercolor=border,
+            lightcolor=background, darkcolor=border,
+            focusthickness=max(2, size(2)), focuscolor=palette["focus"],
+        )
 
 
 def _widget_class(widget) -> str:
@@ -408,14 +589,14 @@ def _configure_if_supported(widget, **options):
             continue
 
 
-def apply_widget_contrast(root, high_contrast=False):
+def apply_widget_contrast(root, high_contrast=False, theme="light"):
     """Apply the same palette to classic Tk widgets and open menus.
 
     ttk widgets are styled by AccessibleStyle.  This companion handles the
     classic Label/Text/Canvas/Menu widgets that otherwise keep hard-coded
-    colors when the desktop contrast mode changes.
+    colors when the theme or the desktop contrast mode changes.
     """
-    palette = contrast_palette(high_contrast)
+    palette = contrast_palette(high_contrast, theme)
 
     def visit(widget):
         widget_class = _widget_class(widget)
@@ -440,9 +621,10 @@ def apply_widget_contrast(root, high_contrast=False):
             )
         elif widget_class == "Menu":
             _configure_if_supported(
-                widget, background=palette["field_background"], foreground=palette["text"],
+                widget, background=palette["surface"], foreground=palette["text"],
                 activebackground=palette["selected_background"], activeforeground=palette["selected_text"],
                 selectcolor=palette["selected_text"], disabledforeground=palette["muted_text"],
+                borderwidth=0, relief="flat",
             )
         for child in _children(widget):
             visit(child)
@@ -450,6 +632,7 @@ def apply_widget_contrast(root, high_contrast=False):
     visit(root)
     try:
         root._accessibility_high_contrast = bool(high_contrast)
+        root._accessibility_theme = palette["dark"]
     except Exception:
         pass
     return palette

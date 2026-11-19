@@ -27,6 +27,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "accessibility.py",
     "app_backup.py",
     "app_info.py",
+    "appearance.py",
     "autostart.py",
     "build_info.py",
     "cache_cleaner.py",

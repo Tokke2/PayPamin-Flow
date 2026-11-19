@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from accessibility import TEXT
 from test_database import load_headless_app
 
 
@@ -87,7 +88,7 @@ class InvoiceRowColorTests(unittest.TestCase):
         tree = FakeTree()
         self.app.configure_invoice_row_colors(tree)
         self.assertEqual(tree.tags, {
-            tag: {"background": background, "foreground": "#1F2A3D"}
+            tag: {"background": background, "foreground": TEXT}
             for tag, background in self.app.INVOICE_ROW_COLORS.items()
         })
         self.assertEqual(set(tree.tags), {"status-not-due", "status-p1", "status-p2"})

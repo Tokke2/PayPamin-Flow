@@ -50,6 +50,7 @@ from customer_contacts import (
     normalize_email_addresses, parse_email_addresses, save_customer_contact,
 )
 from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
+import appearance
 import invoice_export
 import invoice_trash
 from invoice_parser import (
@@ -121,6 +122,7 @@ from accessibility import (
     ResponsiveGrid,
     ScrollableForm,
     apply_widget_contrast,
+    choose_font_family,
     contrast_palette,
     fit_window_to_screen,
     focus_first,
@@ -1622,12 +1624,112 @@ INVOICE_ROW_COLORS = {
     'status-p1':'#FBF0D2',
     'status-p2':'#FBE4E4',
 }
+# The same three signals in the dark theme: deep, desaturated tints that stay
+# behind the text instead of glowing, and every one of them keeps the light
+# table text well above 4.5:1.
+INVOICE_ROW_COLORS_DARK = {
+    'status-not-due':'#16302A',
+    'status-p1':'#33280F',
+    'status-p2':'#3A1D20',
+}
 
 
-def configure_invoice_row_colors(tree,high_contrast=False):
-    """Keep status text readable in both normal and system high-contrast mode."""
-    palette=contrast_palette(high_contrast)
-    for tag,background in INVOICE_ROW_COLORS.items():
+def row_colors_for_theme(theme='light'):
+    return INVOICE_ROW_COLORS_DARK if appearance.is_dark(theme) else INVOICE_ROW_COLORS
+
+
+# Columns that carry free text are the ones allowed to grow when the window is
+# wider than the table; the numeric columns keep their width so figures never
+# drift apart between rows.
+INVOICE_FLEX_COLUMNS = (('customer',0.45),('stage',0.30),('email_status',0.25))
+
+
+def fit_invoice_columns(tree,widths,available,px=None):
+    """Distribute extra table width over the columns that read as text.
+
+    A narrow window keeps the base widths and scrolls, because squeezing ten
+    columns thinner than they are would make the table unreadable rather than
+    useful. A wide window gives the spare room to the customer, status and
+    e-mail columns and leaves every figure column exactly where it was.
+    """
+    to_px=px if callable(px) else (lambda value:value)
+    try:available=int(available)
+    except (TypeError,ValueError):return {}
+    if available<=1:return {}
+    fitted={column:to_px(value) for column,value in dict(widths).items()}
+    extra=available-sum(fitted.values())
+    if extra>0:
+        for column,share in INVOICE_FLEX_COLUMNS:
+            if column not in fitted:continue
+            fitted[column]+=int(extra*share)
+        # The last flexible column absorbs the rounding, so the table ends
+        # exactly where the window does instead of a few pixels short.
+        last=INVOICE_FLEX_COLUMNS[-1][0]
+        if last in fitted:fitted[last]+=available-sum(fitted.values())
+    for column,value in fitted.items():
+        try:tree.column(column,width=value)
+        except Exception:pass
+    return fitted
+
+
+def restyle_update_button(app):
+    """Promote the update button to the accent only when an update exists."""
+    button=getattr(app,'update_button',None)
+    if button is None:return None
+    available=getattr(app,'_available_update',None) is not None
+    style='Accent.TButton' if available else 'TButton'
+    try:button.configure(style=style)
+    except tk.TclError:return None
+    return style
+
+
+def repaint_app_palette(app):
+    """Re-apply the current theme to every open window, widget and menu.
+
+    It reads the app through plain attributes, so the same function paints the
+    real window and a dialogue built on a test double.
+    """
+    style=getattr(app,'_accessibility_style',None)
+    high_contrast=getattr(app,'_high_contrast',False)
+    theme=getattr(app,'_theme','light')
+    palette=window_palette(app)
+    if style is not None:
+        style.apply(
+            getattr(app,'ui_font_scale',1.0),high_contrast=high_contrast,
+            pixel_scale=getattr(app,'dpi_scale',1.0),theme=theme,
+        )
+    try:app.configure(bg=palette['background'])
+    except tk.TclError:pass
+    for label in list(getattr(app,'_header_backgrounds',()) or ()):
+        try:label.configure(bg=palette['background'])
+        except tk.TclError:pass
+    tree=getattr(app,'tree',None)
+    if tree is not None:configure_invoice_row_colors(tree,high_contrast,theme)
+    windows=[app]+[child for child in app.winfo_children() if child.winfo_class()=='Toplevel']
+    for window in windows:
+        try:window.configure(bg=palette['background'])
+        except (tk.TclError,AttributeError):pass
+        apply_widget_contrast(window,high_contrast,theme)
+        prepare_focus_tree(window,high_contrast)
+    for menu in (getattr(app,'main_menu',None),getattr(app,'file_menu',None),getattr(app,'help_menu',None),getattr(app,'row_menu',None)):
+        if menu is not None:apply_widget_contrast(menu,high_contrast,theme)
+
+
+def window_palette(app):
+    """Return the colours any window object should paint itself with.
+
+    It reads the two attributes with defaults, so a dialogue built on a test
+    double gets the same light palette as the real window instead of failing
+    on an attribute that only exists at runtime.
+    """
+    return contrast_palette(getattr(app,'_high_contrast',False),getattr(app,'_theme','light'))
+
+
+def configure_invoice_row_colors(tree,high_contrast=False,theme='light'):
+    """Keep status text readable in every theme and in high contrast."""
+    palette=contrast_palette(high_contrast,theme)
+    colors=INVOICE_ROW_COLORS if high_contrast else row_colors_for_theme(theme)
+    for tag,background in colors.items():
         tree.tag_configure(
             tag,
             background=palette['field_background'] if high_contrast else background,
@@ -1989,7 +2091,7 @@ class ReminderApp(tk.Tk):
         super().__init__(); self.title(APP_NAME)
         self.dpi_scale=self._display_scale()
         self._apply_initial_main_geometry()
-        self.configure(bg='#f3f5f8'); self._style(); self._configure_icons(); self.current_filter_key='current'
+        self._style(); self.configure(bg=window_palette(self)['background']); self._configure_icons(); self.current_filter_key='current'
         self.invoice_sort_column='due_date';self.invoice_sort_reverse=False
         self._update_check_running=False;self._update_install_running=False;self._update_install_stage=None;self._available_update=None;self._update_helper_process=None;self.update_button=None
         self.tray=None;self._quitting=False;self._contrast_check_running=False
@@ -2350,19 +2452,25 @@ class ReminderApp(tk.Tk):
             if callable(scaled_photo):return scaled_photo(path,width)
             return tk.PhotoImage(master=self,file=str(path))
         try:
-            for size in (16,32,48,256):
+            # Every size the window manager may ask for, up to 512 px, so a
+            # HiDPI taskbar and the Alt-Tab switcher get a real bitmap instead
+            # of an upscaled 32 px one.
+            for size in (16,32,48,256,512):
                 path=ICON_DIR/f'paypamin_flow_{size}.png'
                 if path.is_file():self._window_icons.append(tk.PhotoImage(master=self,file=str(path)))
             if self._window_icons:self.iconphoto(True,*self._window_icons)
-            # Draw the header mark at 48 design pixels from the 256 px master,
-            # so a 150-200 % display still downsamples instead of upscaling.
-            header_master=ICON_DIR/'paypamin_flow_256.png'
-            header_path=header_master if header_master.is_file() else ICON_DIR/'paypamin_flow_48.png'
-            if header_path.is_file():self._header_icon=load_photo(header_path,48)
+            # Draw the header mark from the largest square master, at 52 design
+            # pixels, so a 150-200 % display downsamples instead of upscaling.
+            header_master=next(
+                (ICON_DIR/f'paypamin_flow_{size}.png' for size in (512,256,48)
+                 if (ICON_DIR/f'paypamin_flow_{size}.png').is_file()),
+                ICON_DIR/'paypamin_flow_48.png',
+            )
+            if header_master.is_file():self._header_icon=load_photo(header_master,52)
             # The 1024 px master is downscaled, never a small bitmap upscaled.
             logo_master=ICON_DIR/'paypamin_logo_1024.png'
             logo_path=logo_master if logo_master.is_file() else ICON_DIR/'paypamin_logo.png'
-            if logo_path.is_file():self._brand_logo=load_photo(logo_path,256)
+            if logo_path.is_file():self._brand_logo=load_photo(logo_path,272)
             # Keep the native Windows icon last so it is not replaced by the
             # generic pythonw.exe taskbar icon on older Tk/Windows versions.
             if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
@@ -2429,10 +2537,11 @@ class ReminderApp(tk.Tk):
         except (AttributeError,tk.TclError):focus_window=window
         self._install_accessibility_shortcuts(focus_window,main_window=main_window)
         high_contrast=getattr(self,'_high_contrast',False)
-        apply_widget_contrast(focus_window,high_contrast)
+        theme=getattr(self,'_theme','light')
+        apply_widget_contrast(focus_window,high_contrast,theme)
         prepare_focus_tree(focus_window,high_contrast)
         for menu in (getattr(self,'main_menu',None),getattr(self,'file_menu',None),getattr(self,'help_menu',None),getattr(self,'row_menu',None)):
-            if menu is not None:apply_widget_contrast(menu,high_contrast)
+            if menu is not None:apply_widget_contrast(menu,high_contrast,theme)
         try:focus_window.after_idle(lambda:focus_first(focus_window))
         except (AttributeError,tk.TclError):focus_first(focus_window)
 
@@ -2486,19 +2595,65 @@ class ReminderApp(tk.Tk):
         return ScrollableForm(window,tk,ttk,padding=padding).form
 
     def _apply_initial_main_geometry(self):
-        """Open the main window fully inside the current monitor."""
+        """Open the main window as wide as the screen can carry it.
+
+        The invoice table is the point of the window, so the default size grows
+        with the work area instead of stopping at a fixed 1180 px and leaving a
+        wide desktop unused. On a small screen the old floor is still respected,
+        the window is centred on the monitor it opens on, and nothing is ever
+        placed under the taskbar or off the screen.
+        """
         try:
             screen_width=max(1,int(self.winfo_screenwidth()))
             screen_height=max(1,int(self.winfo_screenheight()))
         except Exception:
-            screen_width,screen_height=1180,700
+            screen_width,screen_height=1280,800
+        area_left,area_top,area_width,area_height=monitor_work_area(self)
+        if area_width<240 or area_height<200:
+            area_left,area_top,area_width,area_height=0,0,screen_width,screen_height
         scale=getattr(self,'dpi_scale',1.0)
-        width=min(int(round(1180*scale)),max(720,screen_width-80))
-        height=min(int(round(700*scale)),max(480,screen_height-120))
-        try:self.geometry(f'{width}x{height}')
+        margin=48
+        width=max(int(round(900*scale)),int(round(area_width*0.86)))
+        width=min(width,max(720,area_width-margin))
+        height=max(int(round(600*scale)),int(round(area_height*0.88)))
+        height=min(height,max(480,area_height-margin))
+        x=area_left+max(0,(area_width-width)//2)
+        y=area_top+max(0,(area_height-height)//2)
+        try:self.geometry(f'{width}x{height}+{x}+{y}')
         except Exception:pass
         try:self.minsize(min(int(round(940*scale)),width),min(int(round(560*scale)),height))
         except Exception:pass
+
+    # Columns that carry free text are the ones allowed to grow when the window
+    # is wider than the table; the numeric columns keep their width so figures
+    # never drift apart between rows.
+    INVOICE_FLEX_COLUMNS = INVOICE_FLEX_COLUMNS
+
+    def _fit_invoice_columns(self,width=None):
+        """Let the table fill the window width instead of ending mid-screen."""
+        tree=getattr(self,'tree',None)
+        widths=getattr(self,'_invoice_column_widths',None)
+        if not widths or tree is None:return {}
+        try:available=int(width if width is not None else tree.winfo_width())
+        except (tk.TclError,TypeError,ValueError):return {}
+        return fit_invoice_columns(tree,widths,available,getattr(self,'_px',None))
+
+    def _on_invoice_tree_configure(self,event=None):
+        """Re-fit the columns once the window has stopped resizing."""
+        tree=getattr(self,'tree',None)
+        widths=getattr(self,'_invoice_column_widths',None)
+        if tree is None or not widths:return
+        try:width=int(getattr(event,'width',0) or tree.winfo_width())
+        except (tk.TclError,TypeError,ValueError):return
+        if width<=1 or width==getattr(self,'_last_invoice_tree_width',None):return
+        self._last_invoice_tree_width=width
+        pending=getattr(self,'_invoice_fit_job',None)
+        if pending is not None:
+            try:self.after_cancel(pending)
+            except (tk.TclError,ValueError):pass
+        px=getattr(self,'_px',None)
+        try:self._invoice_fit_job=self.after_idle(lambda:fit_invoice_columns(tree,widths,width,px))
+        except tk.TclError:pass
 
     def _configure_macos_desktop_events(self):
         """Match macOS conventions without changing the cross-platform flow.
@@ -2533,7 +2688,7 @@ class ReminderApp(tk.Tk):
             messagebox.showwarning(_('Autostart kunde inte uppdateras'),_('Inställningen för autostart kunde inte sparas.\n\nPlats: {location}\n\n{error}',location=autostart_location(),error=_(str(exc))),parent=self)
 
     def show_about(self):
-        w=self._new_toplevel(_('Om {app_name}',app_name=APP_NAME));w.resizable(True,True);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_('Om {app_name}',app_name=APP_NAME));w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
         form=self._dialog_form(w,padding=24)
         if self._brand_logo:ttk.Label(form,image=self._brand_logo).pack(pady=(0,10))
         else:
@@ -2689,7 +2844,7 @@ class ReminderApp(tk.Tk):
                 pass
         w=self._new_toplevel(_('Stöd PayPamin Flow'))
         self._donation_window=w
-        w.resizable(True,True);w.configure(bg='#f3f5f8')
+        w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
         def close():
             self._donation_window=None
             w.destroy()
@@ -2796,6 +2951,13 @@ class ReminderApp(tk.Tk):
     def _update_button_idle_text(self):
         return _('Uppdatering tillgänglig') if getattr(self,'_available_update',None) is not None else _('Uppdatera appen')
 
+    def _update_button_style(self):
+        """Only a real update draws the accent; a routine check stays quiet."""
+        return 'Accent.TButton' if getattr(self,'_available_update',None) is not None else 'TButton'
+
+    def _restyle_update_button(self):
+        return restyle_update_button(self)
+
     def _update_tray_label(self):
         if getattr(self,'_update_install_running',False):return _('Uppdaterar…')
         if getattr(self,'_update_check_running',False):return _('Söker…')
@@ -2815,6 +2977,7 @@ class ReminderApp(tk.Tk):
         if not button:return
         try:button.configure(text=self._update_button_idle_text(),state='normal')
         except tk.TclError:pass
+        restyle_update_button(self)
 
     def _set_update_check_busy(self,busy):
         self._refresh_tray_menu()
@@ -2822,6 +2985,7 @@ class ReminderApp(tk.Tk):
         if not button:return
         try:button.configure(text=_('Söker…') if busy else self._update_button_idle_text(),state='disabled' if busy else 'normal')
         except tk.TclError:pass
+        if not busy:restyle_update_button(self)
 
     def _set_update_install_busy(self,busy,stage=None):
         if busy and stage:self._update_install_stage=stage
@@ -2833,6 +2997,7 @@ class ReminderApp(tk.Tk):
         text=labels.get(getattr(self,'_update_install_stage',None),_('Uppdaterar…')) if busy else self._update_button_idle_text()
         try:button.configure(text=text,state='disabled' if busy else 'normal')
         except tk.TclError:pass
+        if not busy:restyle_update_button(self)
 
     def check_for_updates(self,manual=False,force=False):
         """Open a known update or check GitHub in a background worker."""
@@ -2973,7 +3138,7 @@ class ReminderApp(tk.Tk):
         messagebox.showerror(_('Uppdateringen kunde inte installeras'),_('{error}\n\nDu kan ladda ner uppdateringen manuellt:\n{url}',error=details,url=release.url),parent=self)
 
     def show_update_available(self,release):
-        w=self._new_toplevel(_('Uppdatering tillgänglig'));w.resizable(True,True);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_('Uppdatering tillgänglig'));w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
         form=ttk.Frame(w,padding=24);form.pack()
         heading=_('Uppdaterat bygge av version {version} är tillgänglig',version=release.version) if release.version==APP_VERSION else _('Version {version} är tillgänglig',version=release.version)
         ttk.Label(form,text=heading,style='Title.TLabel').pack(anchor='w')
@@ -3172,49 +3337,86 @@ class ReminderApp(tk.Tk):
         except (AttributeError,TypeError):text=1.0
         return max(1,int(round(abs(float(value))*factor*text)))
 
+    def _ui_font_family(self):
+        """Pick one UI font that this desktop really has, rather than a guess."""
+        try:families=tkfont.families(self)
+        except Exception:families=()
+        default=tkfont.nametofont('TkDefaultFont').cget('family')
+        return choose_font_family(families,fallback=default) or default
+
+    def _palette(self):
+        """Return the colours the window should be painted with right now."""
+        return window_palette(self)
+
     def _style(self):
         s=ttk.Style(self); s.theme_use('clam')
-        self.font_family=tkfont.nametofont('TkDefaultFont').cget('family')
+        self.font_family=self._ui_font_family()
         self.ui_font_scale=normalize_font_scale(setting(FONT_SCALE_SETTING))
         self._high_contrast=system_high_contrast()
+        self._theme_setting=appearance.normalize_theme(setting(appearance.THEME_SETTING))
+        self._theme=appearance.effective_theme(self._theme_setting)
         self._accessibility_style=AccessibleStyle(s,tkfont,self.font_family)
-        self._accessibility_style.apply(self.ui_font_scale,high_contrast=self._high_contrast,pixel_scale=self.dpi_scale)
+        self._accessibility_style.apply(
+            self.ui_font_scale,high_contrast=self._high_contrast,
+            pixel_scale=self.dpi_scale,theme=self._theme,
+        )
+
+    def set_theme(self,value,persist=True):
+        """Switch between the light and dark theme without rebuilding the UI.
+
+        Every colour in the app comes from one palette, so a theme change is a
+        repaint: the ttk styles, the invoice row tints, the classic Tk widgets
+        and the open windows all move together, and nothing is left half dark.
+        """
+        self._theme_setting=appearance.normalize_theme(value)
+        self._theme=appearance.effective_theme(self._theme_setting)
+        if persist:
+            set_setting(appearance.THEME_SETTING,self._theme_setting)
+            refresh_json_journal(parent=self)
+        repaint_app_palette(self)
+        logger.info('UI theme changed: choice=%s applied=%s',self._theme_setting,self._theme)
+        log_activity('ui','theme_changed','completed',choice=self._theme_setting,theme=self._theme)
+        return self._theme
 
     def _apply_accessibility_palette(self):
-        """Re-style open windows after a desktop high-contrast change."""
-        style=getattr(self,'_accessibility_style',None)
-        high_contrast=getattr(self,'_high_contrast',False)
-        if style is not None:
-            style.apply(getattr(self,'ui_font_scale',1.0),high_contrast=high_contrast,pixel_scale=getattr(self,'dpi_scale',1.0))
-        tree=getattr(self,'tree',None)
-        if tree is not None:configure_invoice_row_colors(tree,high_contrast)
-        windows=[self]+[child for child in self.winfo_children() if child.winfo_class()=='Toplevel']
-        for window in windows:
-            apply_widget_contrast(window,high_contrast)
-            prepare_focus_tree(window,high_contrast)
-        for menu in (getattr(self,'main_menu',None),getattr(self,'file_menu',None),getattr(self,'help_menu',None),getattr(self,'row_menu',None)):
-            if menu is not None:apply_widget_contrast(menu,high_contrast)
+        """Re-style open windows after a theme or high-contrast change."""
+        repaint_app_palette(self)
 
     def _poll_system_contrast(self):
+        """Follow the desktop's high-contrast flag and, if chosen, its theme."""
         if getattr(self,'_quitting',False) or getattr(self,'_contrast_check_running',False):return
         self._contrast_check_running=True
+        follow_system=getattr(self,'_theme_setting',appearance.DEFAULT_THEME)==appearance.THEME_SYSTEM
         result_queue=queue.Queue()
         def check():
-            try:result_queue.put(system_high_contrast())
-            except Exception:result_queue.put(getattr(self,'_high_contrast',False))
+            try:enabled=system_high_contrast()
+            except Exception:enabled=getattr(self,'_high_contrast',False)
+            system=None
+            if follow_system:
+                try:system=appearance.system_theme()
+                except Exception:system=None
+            result_queue.put((enabled,system))
         threading.Thread(target=check,daemon=True).start()
         def poll():
             if getattr(self,'_quitting',False):return
-            try:enabled=result_queue.get_nowait()
+            try:enabled,system=result_queue.get_nowait()
             except queue.Empty:
                 try:self.after(100,poll)
                 except tk.TclError:pass
                 return
             self._contrast_check_running=False
+            changed=False
             if enabled!=getattr(self,'_high_contrast',False):
                 self._high_contrast=enabled
-                self._apply_accessibility_palette()
+                changed=True
                 logger.info('System high-contrast mode changed: enabled=%s',enabled)
+            if system is not None:
+                resolved=appearance.effective_theme(self._theme_setting,system)
+                if resolved!=getattr(self,'_theme','light'):
+                    self._theme=resolved
+                    changed=True
+                    logger.info('Desktop theme changed: choice=%s applied=%s',self._theme_setting,resolved)
+            if changed:self._apply_accessibility_palette()
             try:self.after(SYSTEM_CONTRAST_POLL_INTERVAL_MS,self._poll_system_contrast)
             except tk.TclError:pass
         poll()
@@ -3226,12 +3428,17 @@ class ReminderApp(tk.Tk):
             set_setting(FONT_SCALE_SETTING,font_scale_storage(self.ui_font_scale))
             refresh_json_journal(parent=self)
         style=getattr(self,'_accessibility_style',None)
-        if style is not None:style.apply(self.ui_font_scale,high_contrast=getattr(self,'_high_contrast',False),pixel_scale=getattr(self,'dpi_scale',1.0))
+        if style is not None:
+            style.apply(
+                self.ui_font_scale,high_contrast=getattr(self,'_high_contrast',False),
+                pixel_scale=getattr(self,'dpi_scale',1.0),theme=getattr(self,'_theme','light'),
+            )
         tree=getattr(self,'tree',None)
         if tree is not None:
             for column,width in getattr(self,'_invoice_column_widths',{}).items():
                 try:tree.column(column,width=self._px(width))
                 except tk.TclError:pass
+            self._fit_invoice_columns()
         scale_var=getattr(self,'_font_scale_var',None)
         if scale_var is not None:
             try:scale_var.set(font_scale_label(self.ui_font_scale))
@@ -3241,8 +3448,9 @@ class ReminderApp(tk.Tk):
             try:help_label.configure(text=_('Textstorlek: {scale}. Alla kontroller nås med Tab och har synlig fokusmarkering.',scale=font_scale_label(self.ui_font_scale)))
             except tk.TclError:pass
         high_contrast=getattr(self,'_high_contrast',False)
+        theme=getattr(self,'_theme','light')
         for window in [self]+[child for child in self.winfo_children() if child.winfo_class()=='Toplevel']:
-            apply_widget_contrast(window,high_contrast)
+            apply_widget_contrast(window,high_contrast,theme)
             prepare_focus_tree(window,high_contrast)
             if window is not self:fit_window_to_screen(window)
         logger.info('UI text scale changed: scale=%s',font_scale_storage(self.ui_font_scale))
@@ -3333,7 +3541,7 @@ class ReminderApp(tk.Tk):
                 if existing.winfo_exists():existing.deiconify();existing.lift();existing.focus_force();return existing
             except tk.TclError:pass
         previous_grab=self.grab_current() or None
-        w=self._new_toplevel(_('Kortkommandon och tillgänglighet'));w.resizable(True,True);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_('Kortkommandon och tillgänglighet'));w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
         self._keyboard_help_window=w
         def close_help():
             w.destroy()
@@ -3416,24 +3624,34 @@ class ReminderApp(tk.Tk):
 
     def build(self):
         self._build_menu()
-        header=ttk.Frame(self,padding=(22,17,22,10)); header.pack(fill='x')
-        if self._brand_logo:tk.Label(header,image=self._brand_logo,bg='#f3f5f8',borderwidth=0).pack(side='left',padx=(0,8))
+        background=window_palette(self)['background']
+        header=ttk.Frame(self,padding=(24,18,24,12)); header.pack(fill='x')
+        # The brand band is painted by Tk itself, so the two image labels keep
+        # their own reference: a theme change repaints them with the window.
+        self._header_backgrounds=[]
+        if self._brand_logo:
+            label=tk.Label(header,image=self._brand_logo,bg=background,borderwidth=0)
+            label.pack(side='left',padx=(0,10))
+            self._header_backgrounds.append(label)
         else:
-            if self._header_icon:tk.Label(header,image=self._header_icon,bg='#f3f5f8',borderwidth=0).pack(side='left',padx=(0,11))
+            if self._header_icon:
+                label=tk.Label(header,image=self._header_icon,bg=background,borderwidth=0)
+                label.pack(side='left',padx=(0,12))
+                self._header_backgrounds.append(label)
             ttk.Label(header,text=APP_NAME,style='Title.TLabel').pack(side='left')
-        ttk.Label(header,text=_('Lokal app · dina filer stannar på datorn'),style='Sub.TLabel').pack(side='left',padx=16,pady=(8,0))
+        ttk.Label(header,text=_('Lokal app · dina filer stannar på datorn'),style='Sub.TLabel').pack(side='left',padx=18,pady=(9,0))
         ttk.Button(header,text=_('Inställningar'),command=self.settings).pack(side='right')
-        ttk.Button(header,text=_('Om {app_name}',app_name=APP_NAME),command=self.show_about).pack(side='right',padx=(0,7))
-        self.update_button=ttk.Button(header,text=self._update_button_idle_text(),command=lambda:self.check_for_updates(manual=True),style='Accent.TButton')
-        self.update_button.pack(side='right',padx=(0,7))
+        ttk.Button(header,text=_('Om {app_name}',app_name=APP_NAME),command=self.show_about).pack(side='right',padx=(0,8))
+        self.update_button=ttk.Button(header,text=self._update_button_idle_text(),command=lambda:self.check_for_updates(manual=True),style=self._update_button_style())
+        self.update_button.pack(side='right',padx=(0,8))
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)
         primary_actions=[('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton')]
         secondary_actions=[('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ångra betalmarkering',self.undo_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa samlad fellogg',self.open_log,'TButton')]
-        for actions,padding in ((primary_actions,(22,5,22,4)),(secondary_actions,(22,0,22,12))):
+        for actions,padding in ((primary_actions,(24,7,24,5)),(secondary_actions,(24,0,24,14))):
             bar=ttk.Frame(self,padding=padding);bar.pack(fill='x')
             for key,cmd,style in actions:
-                ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,7))
+                ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,8))
         controls=ttk.Frame(self,padding=(22,0,22,8));controls.pack(fill='x')
         self.filter_options={'current':_('Aktuella'),'history':_('Historik / arkiverade / betalda'),'all':_('Alla'),'ignored':_('Ignorerade'),'debt_review':_('Kronofogden – granska')}
         self.view_tabs=ttk.Notebook(controls)
@@ -3466,7 +3684,7 @@ class ReminderApp(tk.Tk):
         wrap=ttk.Frame(self,padding=(22,8,22,12));wrap.pack(fill='both',expand=True)
         cols=('invoice_no','customer','due_date','amount','remaining','p1_date','p2_send_date','email_status','stage','fee')
         self.tree=ttk.Treeview(wrap,columns=cols,show='headings',selectmode='browse')
-        configure_invoice_row_colors(self.tree,getattr(self,'_high_contrast',False))
+        configure_invoice_row_colors(self.tree,getattr(self,'_high_contrast',False),getattr(self,'_theme','light'))
         labels={'invoice_no':_('Fakturanr'),'customer':_('Kund'),'due_date':_('Förfallodatum'),'amount':_('Fakturabelopp'),'remaining':_('Kvar att betala'),'p1_date':_('P1 skapades'),'p2_send_date':_('P2-datum'),'email_status':_('E-post (senaste)'),'stage':_('Status / nästa steg'),'fee':_('Påminnelseavgift')}
         widths={'invoice_no':110,'customer':170,'due_date':105,'amount':115,'remaining':120,'p1_date':105,'p2_send_date':125,'email_status':190,'stage':180,'fee':120}
         self._invoice_column_widths=widths.copy()
@@ -3474,6 +3692,7 @@ class ReminderApp(tk.Tk):
             self.tree.heading(c,text=labels[c],command=lambda column=c:self.sort_invoice_column(column))
             self.tree.column(c,width=self._px(widths[c]),anchor='w')
         self.tree.pack(side='top',fill='both',expand=True); sb=ttk.Scrollbar(wrap,orient='vertical',command=self.tree.yview);sb.pack(side='right',fill='y');xsb=ttk.Scrollbar(wrap,orient='horizontal',command=self.tree.xview);xsb.pack(side='bottom',fill='x');self.tree.configure(yscrollcommand=sb.set,xscrollcommand=xsb.set)
+        self.tree.bind('<Configure>',self._on_invoice_tree_configure,add='+')
         self.tree.bind('<<TreeviewSelect>>',lambda e:self.show_detail())
         self.tree.bind('<Delete>',lambda e:self.delete_invoice())
         self.tree.bind('<Shift-F10>',self.show_selected_row_context_menu)
@@ -3522,7 +3741,7 @@ class ReminderApp(tk.Tk):
             except (tk.TclError,ValueError):pass
         summary.bind('<Configure>',wrap_summary)
         row=ttk.Frame(foot);row.pack(fill='x',pady=(6,0))
-        ttk.Button(row,text=_('Ta bort vald'),command=self.delete_invoice).pack(side='left')
+        ttk.Button(row,text=_('Ta bort vald'),command=self.delete_invoice,style='Danger.TButton').pack(side='left')
         # Both ways out are visible here, so closing to the tray is a choice
         # rather than something the user has to discover in a menu.
         ttk.Button(row,text=_('Avsluta helt'),command=self.confirm_quit).pack(side='right')
@@ -4468,7 +4687,14 @@ class ReminderApp(tk.Tk):
         summary=_('Lista per {date} · {source}\nNya fakturor: {new} · Befintliga: {existing} · Betalmarkerade: {paid} · Uppdaterade betalbelopp: {updated}\nBuild: {commit}',date=report.list_date,source=source_name,new=result.imported,existing=result.existing,paid=result.marked_paid,updated=result.payment_updates,commit=commit)
         ttk.Label(form,text=summary,style='Sub.TLabel',justify='left',wraplength=840).pack(anchor='w',pady=(0,12))
         body=ttk.Frame(form);body.pack(fill='both',expand=True)
-        text=tk.Text(body,wrap='word',font='TkTextFont',background='white',foreground='#1f2a3d',relief='solid',borderwidth=1,padx=12,pady=12,highlightthickness=2)
+        receipt_palette=window_palette(self)
+        text=tk.Text(
+            body,wrap='word',font='TkTextFont',background=receipt_palette['field_background'],
+            foreground=receipt_palette['text'],insertbackground=receipt_palette['text'],
+            selectbackground=receipt_palette['selected_background'],selectforeground=receipt_palette['selected_text'],
+            relief='solid',borderwidth=1,padx=12,pady=12,
+            highlightthickness=2,highlightcolor=receipt_palette['focus'],highlightbackground=receipt_palette['border'],
+        )
         scroll=ttk.Scrollbar(body,orient='vertical',command=text.yview)
         text.configure(yscrollcommand=scroll.set)
         text.pack(side='left',fill='both',expand=True);scroll.pack(side='right',fill='y')
@@ -4690,7 +4916,7 @@ class ReminderApp(tk.Tk):
         w.wait_window()
 
     def invoice_dialog(self,title,row=None,source='',guess=None,source_hash='',enrich_original=False):
-        w=self._new_toplevel(_(title));w.grab_set();w.resizable(True,True);w.configure(bg='#f3f5f8')
+        w=self._new_toplevel(_(title));w.grab_set();w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
         fields=[('Kundnamn','customer'),('Fakturanummer','invoice_no'),('Fakturadatum (ÅÅÅÅ-MM-DD)','invoice_date'),('Förfallodatum (ÅÅÅÅ-MM-DD)','due_date'),('Fakturabelopp','amount'),('Valuta (ISO-kod, t.ex. SEK/EUR)','currency'),('Redan betalt','paid'),('E-post','email'),('Fakturatext / Avser','note')]
         enriched=merge_original_invoice_values(row,guess) if enrich_original and row is not None else None
         vals={k:(enriched[k] if enriched is not None else (row[k] if row else (guess or {}).get(k,''))) for _label,k in fields}
@@ -5088,9 +5314,9 @@ class ReminderApp(tk.Tk):
 
         restore_button=ttk.Button(buttons,text=_('Återställ valda'),command=restore_selected,style='Accent.TButton')
         restore_button.pack(side='left')
-        permanent_button=ttk.Button(buttons,text=_('Ta bort permanent'),command=permanent_delete)
+        permanent_button=ttk.Button(buttons,text=_('Ta bort permanent'),command=permanent_delete,style='Danger.TButton')
         permanent_button.pack(side='left',padx=(7,0))
-        empty_button=ttk.Button(buttons,text=_('Töm papperskorgen'),command=empty_all)
+        empty_button=ttk.Button(buttons,text=_('Töm papperskorgen'),command=empty_all,style='Danger.TButton')
         empty_button.pack(side='left',padx=(7,0))
         ttk.Button(buttons,text=_('Stäng'),command=close).pack(side='right')
         reload()
@@ -5822,6 +6048,19 @@ class ReminderApp(tk.Tk):
             entry.insert(0,setting(key))
             grid.add_cell(frame,label=label_widget,entry=entry)
             return entry
+        # Appearance comes first: it is the setting most people change on the
+        # first day, and it repaints the whole window the moment it is saved.
+        self._theme_var=tk.StringVar(value=_(appearance.THEME_LABELS[appearance.normalize_theme(getattr(self,'_theme_setting',appearance.DEFAULT_THEME))]))
+        theme_frame=ttk.Frame(form)
+        theme_label=ttk.Label(theme_frame,text=_('Tema'),style='Sub.TLabel')
+        theme_label.grid(row=0,column=0,sticky='w')
+        ttk.Combobox(
+            theme_frame,textvariable=self._theme_var,state='readonly',width=26,
+            values=[_(label) for label in appearance.THEME_LABELS.values()],
+        ).grid(row=1,column=0,sticky='w',pady=(2,0))
+        grid.add_cell(theme_frame,label=theme_label)
+        hint('Ljust är appens grund. Mörkt dämpar ljuset i ett mörkt rum, och Följ systemet byter automatiskt när skrivbordet byter tema.')
+        hint('Högkontrast går före temat: när skrivbordet begär hög kontrast används alltid den svartvita paletten.')
         language_var=tk.StringVar(value=SUPPORTED_LANGUAGES[get_language()])
         heading('Språk')
         language_frame=ttk.Frame(form)
@@ -5969,6 +6208,9 @@ class ReminderApp(tk.Tk):
                 if _(label)==agreement_var.get():set_setting('fee_agreement',code)
             new_language=language_code(language_var.get())
             language_changed=new_language!=get_language()
+            new_theme=appearance.DEFAULT_THEME
+            for code,label in appearance.THEME_LABELS.items():
+                if _(label)==self._theme_var.get():new_theme=code
             set_setting('autostart','1' if autostart_var.get() else '0')
             set_setting('update_auto','1' if automatic_updates_var.get() else '0')
             set_setting('auto_import','1' if automatic_import_var.get() else '0')
@@ -5976,13 +6218,15 @@ class ReminderApp(tk.Tk):
             set_setting('cache_auto','1' if automatic_cache_var.get() else '0')
             set_setting('learning_enabled','1' if learning_var.get() else '0')
             set_setting('language',new_language)
+            set_setting(appearance.THEME_SETTING,new_theme)
             set_setting('fee_model',chosen_fee_model())
             new_font_scale=normalize_font_scale(self._font_scale_var.get())
             set_setting(FONT_SCALE_SETTING,font_scale_storage(new_font_scale))
             self.set_font_scale(new_font_scale,persist=False)
+            self.set_theme(new_theme,persist=False)
             set_language(new_language)
             refresh_json_journal(parent=w)
-            logger.info('Settings saved; autostart=%s learning=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s fee_model=%s',bool(autostart_var.get()),bool(learning_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language,chosen_fee_model())
+            logger.info('Settings saved; theme=%s autostart=%s learning=%s automatic_updates=%s automatic_import=%s ledger_friday=%s cache_auto=%s language=%s fee_model=%s',new_theme,bool(autostart_var.get()),bool(learning_var.get()),bool(automatic_updates_var.get()),bool(automatic_import_var.get()),bool(ledger_reminder_var.get()),bool(automatic_cache_var.get()),new_language,chosen_fee_model())
             w.destroy()
             if language_changed:self.rebuild_ui()
             else:self.refresh()

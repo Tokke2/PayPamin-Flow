@@ -14,7 +14,8 @@ Använd en testkopia av appen och testdata. Anteckna operativsystem, Python-/Tk-
 6. Gör fönstren mindre. Alla fält och åtgärdsknappar ska kunna nås genom storleksändring eller rullning. Tabbning till ett fält utanför den synliga delen ska rulla fram det.
 7. Ändra operativsystemets högkontrastläge medan appen är öppen. Paletten ska växla automatiskt utan omstart och utan att fakturadata eller PDF:er ändras. Stäng av läget och kontrollera att den vanliga paletten kommer tillbaka.
 8. Kontrollera att text, fokusramar, markerade rader, inmatningsfält och knappar är läsbara i båda lägena. Status får inte förmedlas enbart med färg.
-9. Återställ texten med **Ctrl/Cmd+0**. Stäng alla dialoger och kontrollera att fokus och eventuell modal grab återgår till rätt fönster.
+9. Byt tema i **Inställningar → Tema** mellan **Ljust**, **Mörkt** och **Följ systemet** medan fönster och dialoger är öppna. Alla ytor, menyer, tabeller och redan öppna dialoger ska byta samtidigt, utan omstart och utan att någon text försvinner. Med **Följ systemet** valt ska appen byta när skrivbordet byter, inom några sekunder. Slå sedan på skrivbordets högkontrastläge: den svartvita paletten ska vinna över båda temana.
+10. Återställ texten med **Ctrl/Cmd+0**. Stäng alla dialoger och kontrollera att fokus och eventuell modal grab återgår till rätt fönster.
 
 ## Windows 11 + NVDA
 

@@ -222,11 +222,14 @@ class SettingsDialogTests(unittest.TestCase):
         fake_self = SimpleNamespace(
             _new_toplevel=new_toplevel,
             ui_font_scale=1.0,
+            _theme_setting="light",
             review_learning=lambda _parent=None: None,
             set_font_scale=lambda *_a, **_k: None,
+            set_theme=lambda *_a, **_k: None,
             rebuild_ui=lambda: None,
             refresh=lambda: None,
         )
+        self.fake_self = fake_self
         with mock.patch.object(app, "setting", side_effect=lambda key: self.values.get(key, "")), \
                 mock.patch.object(app, "set_setting"), \
                 mock.patch.object(app, "set_autostart"), \
@@ -275,6 +278,38 @@ class SettingsDialogTests(unittest.TestCase):
         # Interest is not part of this app at all, so there is no rate to show.
         self.assertFalse([text for text in labels if "ränta" in text.casefold()])
         self.assertFalse([text for text in labels if "interest" in text.casefold()])
+
+    def test_the_theme_is_chosen_from_three_named_options(self):
+        self.build()
+
+        values = [
+            value
+            for combo in self.widgets("Combobox")
+            for value in (combo.options.get("values") or [])
+        ]
+        self.assertIn("Ljust", values)
+        self.assertIn("Mörkt", values)
+        self.assertIn("Följ systemet", values)
+        labels = [widget.options.get("text") or "" for widget in self.widgets("Label")]
+        self.assertIn("Tema", labels)
+        # High contrast is explained where the theme is chosen, not hidden.
+        self.assertTrue([text for text in labels if "Högkontrast" in text])
+
+    def test_saving_the_theme_stores_the_choice_it_can_repaint(self):
+        self.build()
+        self.fake_self._theme_var.set("Mörkt")
+        save = next(
+            widget for widget in self.widgets("Button")
+            if widget.options.get("text") == "Spara inställningar"
+        )
+        with mock.patch.object(self.app, "set_setting") as stored, \
+                mock.patch.object(self.app, "set_autostart"), \
+                mock.patch.object(self.app, "refresh_json_journal"), \
+                mock.patch.object(self.app, "set_language"), \
+                mock.patch.object(self.app, "log_activity"):
+            save.options["command"]()
+
+        self.assertIn(mock.call("ui_theme", "dark"), stored.call_args_list)
 
     def test_all_checkboxes_and_the_learning_button_are_present(self):
         self.build()

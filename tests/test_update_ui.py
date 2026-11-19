@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import MethodType, SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from app_info import PYTHON_RELEASE_ASSET
 from test_database import load_headless_app
@@ -109,9 +109,20 @@ class UpdateUiTests(unittest.TestCase):
         fake._update_button_idle_text = MethodType(self.app.ReminderApp._update_button_idle_text, fake)
         fake._refresh_tray_menu = MethodType(self.app.ReminderApp._refresh_tray_menu, fake)
         self.app.ReminderApp._set_update_available(fake, RELEASE)
-        button.configure.assert_called_once_with(text="Uppdatering tillgänglig", state="normal")
+        self.assertEqual(
+            button.configure.call_args_list,
+            [
+                call(text="Uppdatering tillgänglig", state="normal"),
+                # A real update is the only thing that earns the accent colour.
+                call(style="Accent.TButton"),
+            ],
+        )
+        button.configure.reset_mock()
         self.app.ReminderApp._set_update_available(fake, None)
-        self.assertEqual(button.configure.call_args.kwargs["text"], "Uppdatera appen")
+        self.assertEqual(button.configure.call_args_list, [
+            call(text="Uppdatera appen", state="normal"),
+            call(style="TButton"),
+        ])
         self.assertEqual(fake.tray.refresh.call_count, 2)
 
     def test_tray_update_label_reflects_available_check_and_install_states(self):

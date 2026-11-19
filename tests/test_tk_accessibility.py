@@ -275,6 +275,47 @@ class RealTkAccessibilityTests(unittest.TestCase):
         self.assertEqual(text.cget("highlightcolor"), FOCUS)
 
 
+    def test_real_dark_theme_paints_ttk_and_classic_widgets(self):
+        """A dark theme must be a real paint, not only a palette dict.
+
+        The clam theme refuses an unknown colour or an option a style does not
+        support, so building the widgets on the real toolkit proves that every
+        dark value can actually be drawn.
+        """
+        style = AccessibleStyle(ttk.Style(self.root), tkfont)
+        style.apply(1.0, theme="dark")
+        dialog = self.track(tk.Toplevel(self.root))
+        dialog.configure(bg=style.palette["background"])
+        frame = ttk.Frame(dialog)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Mörkt", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(frame, text="Underrubrik", style="Sub.TLabel").pack(anchor="w")
+        ttk.Button(frame, text="Knapp").pack(anchor="w")
+        ttk.Button(frame, text="Spara", style="Accent.TButton").pack(anchor="w")
+        ttk.Button(frame, text="Ta bort vald", style="Danger.TButton").pack(anchor="w")
+        ttk.Button(frame, text="Tyst", style="Quiet.TButton").pack(anchor="w")
+        entry = ttk.Entry(frame)
+        entry.pack(fill="x")
+        tree = ttk.Treeview(frame, columns=("a",), show="headings")
+        tree.heading("a", text="Kolumn")
+        tree.pack(fill="both", expand=True)
+        text = tk.Text(frame, height=2)
+        text.pack(fill="x")
+        apply_widget_contrast(dialog, False, "dark")
+        dialog.update()
+
+        self.assertEqual(style.style.lookup("TLabel", "foreground").lower(), accessibility.DARK_TEXT.lower())
+        self.assertEqual(style.style.lookup("TFrame", "background").lower(), accessibility.DARK_BACKGROUND.lower())
+        self.assertEqual(style.style.lookup("Treeview", "fieldbackground").lower(), accessibility.DARK_SURFACE.lower())
+        self.assertEqual(style.style.lookup("Accent.TButton", "background").lower(), accessibility.DARK_ACCENT.lower())
+        self.assertEqual(text.cget("background").lower(), accessibility.DARK_FIELD_BACKGROUND.lower())
+        self.assertEqual(text.cget("foreground").lower(), accessibility.DARK_TEXT.lower())
+        self.assertEqual(dialog.cget("background").lower(), accessibility.DARK_BACKGROUND.lower())
+
+        # Leave the shared root in the light theme for the tests after this one.
+        style.apply(1.0)
+        apply_widget_contrast(self.root, False, "light")
+
     def test_the_support_dialogue_styles_exist_on_a_real_toolkit(self):
         """The card and channel styles must be usable, not just configured.
 
