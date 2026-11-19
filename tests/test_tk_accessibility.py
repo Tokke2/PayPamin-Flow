@@ -16,6 +16,7 @@ except Exception:  # pragma: no cover - exercised on minimal Python installs
     tkfont = None
     ttk = None
 
+import accessibility
 from accessibility import (
     AccessibleStyle,
     FOCUS,
