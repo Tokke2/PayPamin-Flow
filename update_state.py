@@ -223,6 +223,31 @@ def compare_package_files(release_hashes, directory) -> PackageDiff:
     return PackageDiff(changed=tuple(changed), missing=tuple(missing))
 
 
+def newest_local_mtime(directory, names=None) -> float:
+    """Return the newest modification time among the shipped files on disk."""
+    root = Path(directory)
+    newest = 0.0
+    wanted = None if names is None else {str(name) for name in names}
+    for current, folders, files in os.walk(root):
+        folders[:] = sorted(folder for folder in folders if not folder.startswith("."))
+        base = Path(current)
+        for filename in files:
+            path = base / filename
+            try:
+                relative = path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if relative in IGNORED_FILES or not is_python_package_file(relative):
+                continue
+            if wanted is not None and relative not in wanted:
+                continue
+            try:
+                newest = max(newest, path.stat().st_mtime)
+            except OSError:
+                continue
+    return newest
+
+
 def describe_files(files, limit: int = 4) -> str:
     """Name a few files for a dialog, without ever growing a long list."""
     names = list(files)

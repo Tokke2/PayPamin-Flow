@@ -337,6 +337,7 @@ _ENGLISH = {
     "Ingen ny version eller ändrade releasefiler finns.\n\nInstallerad version: {current}\nSenaste release: {latest}\nRelease-commit: {commit}": "No newer version or changed release files are available.\n\nInstalled version: {current}\nLatest release: {latest}\nRelease commit: {commit}",
     "Ingen ny version eller ändrade releasefiler finns.": "No newer version or changed release files are available.",
     "Filerna i releasen är identiska med de installerade.": "The files in the release are identical to the installed ones.",
+    "Dina filer är nyare än releasen, så det finns inget att hämta därifrån.": "Your files are newer than the release, so there is nothing to fetch from it.",
     "Filerna i releasen kunde inte jämföras just nu; versionen och commiten jämfördes i stället.": "The files in the release could not be compared right now; the version and commit were compared instead.",
     "{reason}\n\nInstallerad version: {current}\nSenaste release: {latest}\nRelease-commit: {commit}": "{reason}\n\nInstalled version: {current}\nLatest release: {latest}\nRelease commit: {commit}",
     "Ändrade filer: {files}": "Changed files: {files}",

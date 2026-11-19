@@ -41,7 +41,9 @@ import update_state
 from update_checker import (
     CONTENT_CURRENT,
     CONTENT_DIFFERS,
+    CONTENT_STALE,
     CONTENT_UNAVAILABLE,
+    STALE_FILE_MARGIN_SECONDS,
     ReleaseInfo,
     is_newer_version,
     release_package_sha256,
@@ -280,6 +282,27 @@ def read_package_content(
     return PackageContent(package_sha256=digest, files=files)
 
 
+def _release_is_older_than_files(release: ReleaseInfo, release_files, directory) -> bool:
+    """Return whether the release ZIP predates the installed package files.
+
+    GitHub reports when the ZIP was last replaced. Comparing that with the
+    newest shipped file on disk answers which set is newer, which the content
+    comparison alone cannot do. A missing or unparsable timestamp means "do
+    not guess": the difference is then treated as a normal update.
+    """
+    stamp = str(getattr(release, "package_updated_at", "") or "").strip()
+    if not stamp:
+        return False
+    try:
+        released = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return False
+    newest = update_state.newest_local_mtime(directory, names=release_files)
+    if not newest:
+        return False
+    return newest > released + STALE_FILE_MARGIN_SECONDS
+
+
 def evaluate_release(
     release: ReleaseInfo,
     *,
@@ -326,10 +349,15 @@ def evaluate_release(
         return replace(release, content_state=CONTENT_UNAVAILABLE)
     difference = update_state.compare_package_files(content.files, target)
     if difference.files:
+        state = CONTENT_DIFFERS
+        if _release_is_older_than_files(release, content.files, target):
+            # Different, but in the wrong direction: the release predates the
+            # installed files, so installing it would be a downgrade.
+            state = CONTENT_STALE
         return replace(
             release,
             package_sha256=content.package_sha256,
-            content_state=CONTENT_DIFFERS,
+            content_state=state,
             changed_files=difference.files,
         )
     update_state.record_installed_package(

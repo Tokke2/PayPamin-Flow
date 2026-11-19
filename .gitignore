@@ -8,6 +8,7 @@ venv/
 build/
 dist/
 release-assets/
+release/
 
 # Local application data and logs
 *.log

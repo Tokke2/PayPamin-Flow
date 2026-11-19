@@ -13,6 +13,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import update_state
@@ -63,12 +64,15 @@ def package_bytes(version="0.6.0", overrides=None, extra=None):
     return buffer.getvalue()
 
 
-def release_for(package, *, version="0.6.0", release_id="444043893", digest=True, assets=True):
+def release_for(package, *, version="0.6.0", release_id="444043893", digest=True, assets=True, updated_at=""):
     sha = hashlib.sha256(package).hexdigest()
     checksum = f"{sha}  {PYTHON_RELEASE_ASSET}\n".encode("ascii")
     package_assets = (
         (
-            ReleaseAsset(PYTHON_RELEASE_ASSET, PACKAGE_URL, digest=f"sha256:{sha}" if digest else ""),
+            ReleaseAsset(
+                PYTHON_RELEASE_ASSET, PACKAGE_URL,
+                digest=f"sha256:{sha}" if digest else "", updated_at=updated_at,
+            ),
             ReleaseAsset(PYTHON_RELEASE_ASSET + ".sha256", CHECKSUM_URL),
         )
         if assets
@@ -81,6 +85,7 @@ def release_for(package, *, version="0.6.0", release_id="444043893", digest=True
         assets=package_assets,
         release_id=release_id,
         package_sha256=sha if digest else "",
+        package_updated_at=updated_at,
     )
     return release, {PACKAGE_URL: package, CHECKSUM_URL: checksum}
 
@@ -331,6 +336,79 @@ class EvaluateReleaseTests(unittest.TestCase):
         self.assertEqual(content.package_sha256, hashlib.sha256(responses[PACKAGE_URL]).hexdigest())
         self.assertEqual(len(content.files), len(PYTHON_PACKAGE_REQUIRED_FILES))
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["app"])
+
+
+class OlderReleaseTests(unittest.TestCase):
+    """A release older than the installed files must never be installed.
+
+    Content comparison can tell that the files differ, but not which set is
+    newer. The ZIP's upload time settles it, so a manual replacement - or a
+    checkout - is never quietly rolled back to an older release.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.app_dir = self.root / "app"
+        self.app_dir.mkdir()
+        self.state_file = self.root / "installed-release.json"
+        # Old install, new files: exactly the state after a manual replacement.
+        write_directory(self.app_dir, package_bytes(overrides={"i18n.py": b"# newer local text\n"}))
+        for path in self.app_dir.rglob("*"):
+            if path.is_file():
+                import os
+                os.utime(path, (2_000_000_000, 2_000_000_000))
+
+    def test_a_release_uploaded_before_the_files_is_not_an_update(self):
+        release, responses = release_for(
+            package_bytes(overrides={"i18n.py": b"# older release text\n"}),
+            updated_at="2020-01-01T00:00:00Z",
+        )
+        result = evaluate_release(
+            release, current_version="0.6.0", directory=self.app_dir,
+            state_file=self.state_file, opener=opener_for(responses),
+        )
+        self.assertEqual(result.content_state, "stale")
+        self.assertIn("i18n.py", result.changed_files)
+        self.assertFalse(is_update_available(result, "0.6.0"))
+
+    def test_a_release_uploaded_after_the_files_is_still_an_update(self):
+        release, responses = release_for(
+            package_bytes(overrides={"i18n.py": b"# really newer text\n"}),
+            updated_at="2035-01-01T00:00:00Z",
+        )
+        result = evaluate_release(
+            release, current_version="0.6.0", directory=self.app_dir,
+            state_file=self.state_file, opener=opener_for(responses),
+        )
+        self.assertEqual(result.content_state, "differs")
+        self.assertTrue(is_update_available(result, "0.6.0"))
+
+    def test_an_unknown_upload_time_is_treated_as_a_normal_update(self):
+        release, responses = release_for(package_bytes(overrides={"i18n.py": b"# other text\n"}))
+        result = evaluate_release(
+            release, current_version="0.6.0", directory=self.app_dir,
+            state_file=self.state_file, opener=opener_for(responses),
+        )
+        self.assertEqual(result.content_state, "differs")
+        self.assertTrue(is_update_available(result, "0.6.0"))
+
+    def test_the_release_timestamp_is_read_from_the_asset(self):
+        asset = ReleaseAsset("PayPamin-Flow-Python.zip", PACKAGE_URL, updated_at="2026-11-13T09:34:17Z")
+        release = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0", assets=(asset,))
+        self.assertEqual(release.assets[0].updated_at, "2026-11-13T09:34:17Z")
+
+    def test_a_stale_release_is_explained_in_the_dialog(self):
+        from test_database import load_headless_app
+        app = load_headless_app(self.root)
+        self.addCleanup(lambda: [app.logger.removeHandler(handler) or handler.close() for handler in app.logger.handlers[:]])
+        release = ReleaseInfo(
+            "0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0",
+            content_state="stale",
+        )
+        text = app.ReminderApp._no_update_message(SimpleNamespace(), release, "abcdef123456")
+        self.assertIn("nyare än releasen", text)
 
 
 class InstalledRecordTests(unittest.TestCase):

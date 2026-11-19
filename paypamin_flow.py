@@ -90,6 +90,7 @@ from reminder_journal import (
 )
 from update_checker import (
     CONTENT_CURRENT,
+    CONTENT_STALE,
     CONTENT_UNAVAILABLE,
     UPDATE_CHECK_INTERVAL_MS,
     UpdateCheckError,
@@ -3102,6 +3103,8 @@ class ReminderApp(tk.Tk):
         """Explain what was compared, so "no update" is a fact and not a guess."""
         if release.content_state==CONTENT_CURRENT:
             reason=_('Filerna i releasen är identiska med de installerade.')
+        elif release.content_state==CONTENT_STALE:
+            reason=_('Dina filer är nyare än releasen, så det finns inget att hämta därifrån.')
         elif release.content_state==CONTENT_UNAVAILABLE:
             reason=_('Filerna i releasen kunde inte jämföras just nu; versionen och commiten jämfördes i stället.')
         else:

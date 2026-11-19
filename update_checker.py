@@ -29,9 +29,14 @@ from i18n import _
 UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
 MAX_MANIFEST_BYTES = 1_000_000
 MAX_CHECKSUM_BYTES = 65_536
+# Comparing content tells whether the files differ, never which set is newer.
+# A release whose ZIP was last uploaded before the installed files were
+# written cannot be an update, whatever the version says.
+STALE_FILE_MARGIN_SECONDS = 3600
 # The outcome of comparing the release's files with the installed ones.
 CONTENT_CURRENT = "current"
 CONTENT_DIFFERS = "differs"
+CONTENT_STALE = "stale"
 CONTENT_UNAVAILABLE = "unavailable"
 
 
@@ -46,6 +51,7 @@ class ReleaseAsset:
     # GitHub reports "sha256:<hex>" for every asset it stores. When it is
     # present the release can be judged by content without downloading it.
     digest: str = ""
+    updated_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,9 @@ class ReleaseInfo:
     # SHA-256 of the release ZIP itself, the one value that changes when the
     # files in an already published release are replaced.
     package_sha256: str = ""
+    # When GitHub last received the ZIP, used to tell an update from an older
+    # release that simply does not contain the files on disk.
+    package_updated_at: str = ""
     # Filled in by ``update_installer.evaluate_release`` after the files in the
     # release have actually been compared with the installed ones.
     content_state: str = ""
@@ -109,6 +118,10 @@ def is_update_available(
     if release.content_state == CONTENT_DIFFERS:
         return True
     if release.content_state == CONTENT_CURRENT:
+        return False
+    if release.content_state == CONTENT_STALE:
+        # The files differ, but the release is older than they are: installing
+        # it would replace newer work with older files.
         return False
 
     if (
@@ -176,6 +189,14 @@ def _asset_digest(value) -> str:
         return ""
     candidate = text.split(":", 1)[1]
     return candidate if re.fullmatch(r"[0-9a-f]{64}", candidate) else ""
+
+
+def package_asset_updated_at(assets) -> str:
+    """Return GitHub's ``updated_at`` for the update ZIP."""
+    for asset in assets:
+        if asset.name == PYTHON_RELEASE_ASSET and asset.updated_at:
+            return asset.updated_at
+    return ""
 
 
 def package_asset_sha256(assets) -> str:
@@ -333,6 +354,7 @@ def fetch_latest_release(timeout: int = 8, opener=None) -> ReleaseInfo:
                     name=name,
                     url=_validated_release_url(url),
                     digest=_asset_digest(item.get("digest")),
+                    updated_at=str(item.get("updated_at") or "").strip(),
                 )
             )
         release = ReleaseInfo(
@@ -343,6 +365,7 @@ def fetch_latest_release(timeout: int = 8, opener=None) -> ReleaseInfo:
             release_id=release_id,
             release_commit=release_commit,
             package_sha256=package_asset_sha256(assets),
+            package_updated_at=package_asset_updated_at(assets),
         )
         return _load_release_build_manifest(release, timeout, open_request)
     except HTTPError as exc:
