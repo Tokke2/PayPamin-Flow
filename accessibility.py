@@ -439,6 +439,24 @@ class AccessibleStyle:
         )
         configure = self.style.configure
         accent_text = palette["accent_text"]
+        # clam paints every widget it does not recognise with its own warm
+        # greys (#dcdad5, #cfcdc8, #9e9a91) *and* with a bevel built from the
+        # inherited lightcolor/darkcolor. Redefining the "." defaults is what
+        # makes a widget the app never names follow the palette instead of
+        # showing a grey gradient, so the whole window reads as one surface.
+        configure(
+            ".", background=palette["background"], foreground=palette["text"],
+            bordercolor=palette["border"], lightcolor=palette["surface"],
+            darkcolor=palette["border"], troughcolor=palette["trough_background"],
+            selectbackground=palette["selected_background"],
+            selectforeground=palette["selected_text"], font=font(10),
+            focuscolor=palette["focus"], insertcolor=palette["text"],
+        )
+        self.style.map(
+            ".",
+            background=[("disabled", palette["background"])],
+            foreground=[("disabled", palette["muted_text"])],
+        )
         configure("TFrame", background=palette["background"])
         configure("TLabel", background=palette["background"], foreground=palette["text"], font=font(10))
         configure("Title.TLabel", background=palette["background"], foreground=palette["title_text"], font=font(21, "bold"))
@@ -505,17 +523,51 @@ class AccessibleStyle:
             "Treeview.Heading", font=font(10, "bold"), background=palette["heading_background"],
             foreground=palette["heading_text"], relief="flat", padding=(size(8), size(6)),
             bordercolor=palette["border"],
+            lightcolor=palette["heading_background"], darkcolor=palette["heading_background"],
             focusthickness=max(2, size(2)), focuscolor=palette["focus"],
         )
-        configure("TNotebook", background=palette["background"], borderwidth=0, focuscolor=palette["focus"])
-        configure(
-            "TNotebook.Tab", font=font(10), padding=(size(14), size(7)),
-            background=palette["background"], foreground=palette["muted_text"],
-            bordercolor=palette["border"], focuscolor=palette["focus"],
+        # clam draws the heading as a raised two-tone bevel unless every one of
+        # those colours is set, which is what made the table look dusty.
+        self.style.map(
+            "Treeview.Heading",
+            background=[("active", palette["heading_background"]), ("pressed", palette["heading_background"])],
+            lightcolor=[("active", palette["heading_background"]), ("pressed", palette["heading_background"])],
+            darkcolor=[("active", palette["heading_background"]), ("pressed", palette["heading_background"])],
+            relief=[("pressed", "flat")],
         )
-        configure("TProgressbar", background=palette["accent"], troughcolor=palette["trough_background"])
-        configure("TScrollbar", background=palette["surface_alt"], troughcolor=palette["background"], arrowcolor=palette["muted_text"], borderwidth=0)
-        configure("TSeparator", background=palette["border"])
+        configure(
+            "TNotebook", background=palette["background"], borderwidth=0,
+            bordercolor=palette["border"], lightcolor=palette["background"],
+            darkcolor=palette["border"], focuscolor=palette["focus"],
+            tabmargins=(0, size(6), 0, 0),
+        )
+        configure(
+            "TNotebook.Tab", font=font(10), padding=(size(16), size(8)),
+            background=palette["background"], foreground=palette["muted_text"],
+            bordercolor=palette["border"], lightcolor=palette["background"],
+            darkcolor=palette["border"], focuscolor=palette["focus"],
+        )
+        configure(
+            "TProgressbar", background=palette["accent"], troughcolor=palette["trough_background"],
+            bordercolor=palette["border"], lightcolor=palette["accent"], darkcolor=palette["accent"],
+        )
+        configure(
+            "TScrollbar", background=palette["surface_alt"], troughcolor=palette["background"],
+            arrowcolor=palette["muted_text"], borderwidth=0, relief="flat",
+            bordercolor=palette["background"], lightcolor=palette["surface_alt"],
+            darkcolor=palette["surface_alt"],
+        )
+        self.style.map(
+            "TScrollbar",
+            background=[("active", palette["border"]), ("pressed", palette["border"])],
+            lightcolor=[("active", palette["border"]), ("pressed", palette["border"])],
+            darkcolor=[("active", palette["border"]), ("pressed", palette["border"])],
+            arrowcolor=[("active", palette["text"])],
+        )
+        configure(
+            "TSeparator", background=palette["border"],
+            bordercolor=palette["border"], lightcolor=palette["border"], darkcolor=palette["border"],
+        )
 
         focus_map = {
             "focuscolor": [("focus", palette["focus"])],
@@ -528,15 +580,24 @@ class AccessibleStyle:
             "TEntry", "TCombobox", "TSpinbox", "TCheckbutton", "TRadiobutton", "Treeview",
         ):
             self.style.map(name, **focus_map)
+        # A flat button: the bevel colours are pinned to the fill and the
+        # border colour, so a pressed or hovered button never grows the grey
+        # two-tone edge clam would otherwise paint from its own defaults.
         self.style.map(
             "Accent.TButton",
-            background=[("active", palette["accent_active"]), ("pressed", palette["accent_active"]), ("focus", palette["accent_active"])],
+            background=[("disabled", palette["surface_alt"]), ("active", palette["accent_active"]), ("pressed", palette["accent_active"]), ("focus", palette["accent_active"])],
             foreground=[("disabled", palette["muted_text"])],
+            lightcolor=[("active", palette["accent_active"]), ("pressed", palette["accent_active"])],
+            darkcolor=[("active", palette["accent"]), ("pressed", palette["accent"])],
+            bordercolor=[("focus", palette["focus"]), ("!focus", palette["accent"])],
         )
         self.style.map(
             "TButton",
             background=[("disabled", palette["surface_alt"]), ("pressed", palette["surface_alt"]), ("active", palette["surface_alt"])],
             foreground=[("disabled", palette["muted_text"])],
+            lightcolor=[("active", palette["surface_alt"]), ("pressed", palette["surface_alt"])],
+            darkcolor=[("active", palette["border"]), ("pressed", palette["border"])],
+            bordercolor=[("focus", palette["focus"]), ("!focus", palette["border"])],
         )
         self.style.map(
             "Quiet.TButton",
@@ -547,13 +608,63 @@ class AccessibleStyle:
         self.style.map(
             "Danger.TButton",
             background=[("active", palette["surface_alt"]), ("pressed", palette["surface_alt"]), ("focus", palette["surface_alt"])],
+            lightcolor=[("active", palette["surface_alt"]), ("pressed", palette["surface_alt"])],
+            darkcolor=[("active", palette["border"]), ("pressed", palette["border"])],
+            bordercolor=[("focus", palette["focus"]), ("!focus", palette["border"])],
         )
-        self.style.map("Treeview", background=[("selected", palette["selected_background"])], foreground=[("selected", palette["selected_text"])])
+        self.style.map(
+            "Treeview",
+            background=[("selected", palette["selected_background"])],
+            foreground=[("selected", palette["selected_text"])],
+            lightcolor=[("focus", palette["focus"]), ("!focus", palette["surface"])],
+            darkcolor=[("focus", palette["focus"]), ("!focus", palette["border"])],
+        )
+        # clam maps the tab colours itself and a map beats a configure call, so
+        # the notebook kept its grey gradient until these maps were replaced.
         self.style.map(
             "TNotebook.Tab",
-            background=[("focus", palette["focus_background"]), ("selected", palette["surface"])],
-            foreground=[("focus", palette["text"]), ("selected", palette["text"])],
+            background=[
+                ("selected", palette["surface"]), ("active", palette["surface_alt"]),
+                ("", palette["background"]),
+            ],
+            foreground=[
+                ("selected", palette["text"]), ("active", palette["text"]),
+                ("", palette["muted_text"]),
+            ],
+            lightcolor=[("selected", palette["surface"]), ("", palette["background"])],
+            darkcolor=[
+                ("selected", palette["border"]), ("active", palette["border"]),
+                ("", palette["border"]),
+            ],
+            bordercolor=[
+                ("selected", palette["border"]), ("active", palette["border"]),
+                ("", palette["background"]),
+            ],
         )
+        # A read-only combobox is the normal state in this app, and clam
+        # answers it with its own grey field. The field is mapped here instead.
+        for name in ("TEntry", "TCombobox", "TSpinbox"):
+            self.style.map(
+                name,
+                fieldbackground=[
+                    ("readonly", palette["field_background"]),
+                    ("!disabled", palette["field_background"]),
+                ],
+                foreground=[("readonly", palette["text"]), ("!disabled", palette["text"])],
+                background=[("active", palette["surface_alt"]), ("pressed", palette["surface_alt"])],
+                lightcolor=[("focus", palette["focus"]), ("!focus", palette["field_background"])],
+                darkcolor=[("focus", palette["focus"]), ("!focus", palette["border"])],
+                arrowcolor=[("!disabled", palette["muted_text"])],
+                insertcolor=[("!disabled", palette["text"])],
+            )
+        for name in ("TCheckbutton", "TRadiobutton"):
+            self.style.map(
+                name,
+                indicatorbackground=[("selected", palette["accent"]), ("!selected", palette["field_background"])],
+                indicatorforeground=[("selected", accent_text), ("!selected", palette["text"])],
+                background=[("active", palette["background"])],
+                foreground=[("disabled", palette["muted_text"])],
+            )
         return scale
 
     def _configure_button(self, name, palette, font, size, background, foreground, border):
@@ -620,8 +731,17 @@ def apply_widget_contrast(root, high_contrast=False, theme="light"):
                 highlightbackground=palette["classic_focus_background"],
             )
         elif widget_class == "Menu":
+            # A menu bar is part of the window frame, so it takes the window
+            # colour; a popup is a raised surface. Without the distinction the
+            # menu row left a white stripe above the branded header.
+            background = palette["surface"]
+            try:
+                if str(widget.winfo_toplevel().cget("menu")) == str(widget):
+                    background = palette["background"]
+            except Exception:
+                pass
             _configure_if_supported(
-                widget, background=palette["surface"], foreground=palette["text"],
+                widget, background=background, foreground=palette["text"],
                 activebackground=palette["selected_background"], activeforeground=palette["selected_text"],
                 selectcolor=palette["selected_text"], disabledforeground=palette["muted_text"],
                 borderwidth=0, relief="flat",

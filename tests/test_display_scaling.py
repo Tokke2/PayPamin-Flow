@@ -92,6 +92,102 @@ class DisplayScaleTests(unittest.TestCase):
         self.assertEqual(style.options("TLabel")["font"], ("Test Sans", 15))
 
 
+class _FakeFunction:
+    """A Win32 entry point that can return a value or raise like ctypes does."""
+
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *arguments):
+        self.calls.append(arguments)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class _FakeCtypes:
+    c_void_p = staticmethod(lambda value: ("void_p", value))
+    c_bool = bool
+
+    def __init__(self, version_two, per_monitor, system):
+        self.windll = SimpleNamespace(
+            user32=SimpleNamespace(
+                SetProcessDpiAwarenessContext=version_two,
+                SetProcessDPIAware=system,
+            ),
+            shcore=SimpleNamespace(SetProcessDpiAwareness=per_monitor),
+        )
+
+
+class WindowsDpiAwarenessTests(unittest.TestCase):
+    """A DPI-unaware process is bitmap-stretched by Windows, which is soft.
+
+    The three Windows APIs are tried in order, and a failure in one of them
+    must never stop the next from running: that exact failure left the window
+    blurred on a 125 % display.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.app = load_headless_app(Path(self.temporary.name))
+        self.addCleanup(self.temporary.cleanup)
+
+    def windows_platform(self):
+        return patch.object(self.app.sys, "platform", "win32")
+
+    def test_a_raising_first_api_still_tries_the_next_one(self):
+        version_two = _FakeFunction(error=RuntimeError("bad signature"))
+        per_monitor = _FakeFunction(result=0)
+        system = _FakeFunction(result=1)
+        with self.windows_platform():
+            result = self.app.configure_windows_dpi_awareness(
+                _FakeCtypes(version_two, per_monitor, system)
+            )
+        self.assertTrue(result)
+        self.assertEqual(len(version_two.calls), 1)
+        self.assertEqual(len(per_monitor.calls), 1)
+        self.assertEqual(system.calls, [])
+
+    def test_every_api_is_tried_until_one_succeeds(self):
+        version_two = _FakeFunction(result=False)
+        per_monitor = _FakeFunction(result=1)  # non-zero means "access denied"
+        system = _FakeFunction(result=1)
+        with self.windows_platform():
+            result = self.app.configure_windows_dpi_awareness(
+                _FakeCtypes(version_two, per_monitor, system)
+            )
+        self.assertTrue(result)
+        self.assertEqual([len(f.calls) for f in (version_two, per_monitor, system)], [1, 1, 1])
+
+    def test_a_platform_without_the_dpi_apis_reports_failure_instead_of_raising(self):
+        failing = _FakeFunction(error=AttributeError("no such function"))
+        with self.windows_platform():
+            result = self.app.configure_windows_dpi_awareness(
+                _FakeCtypes(failing, failing, failing)
+            )
+        self.assertFalse(result)
+
+    def test_other_platforms_are_left_alone(self):
+        unused = _FakeFunction(result=1)
+        with patch.object(self.app.sys, "platform", "linux"):
+            self.assertFalse(
+                self.app.configure_windows_dpi_awareness(_FakeCtypes(unused, unused, unused))
+            )
+        self.assertEqual(unused.calls, [])
+
+    def test_awareness_is_set_before_the_window_exists(self):
+        source = (Path(__file__).resolve().parents[1] / "paypamin_flow.py").read_text(encoding="utf-8")
+        body = source.split("def main():", 1)[1]
+        self.assertLess(
+            body.index("configure_windows_dpi_awareness()"),
+            body.index("ReminderApp()"),
+        )
+
+
 class UiLivenessTests(unittest.TestCase):
     """Background work must stop cleanly when the window is closing."""
 

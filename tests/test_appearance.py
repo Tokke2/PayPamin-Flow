@@ -229,6 +229,51 @@ class ThemedStyleTests(unittest.TestCase):
                 for name in ("Quiet.TButton", "Danger.TButton"):
                     self.assertIn(("focus", palette["focus"]), style.maps[name]["focuscolor"])
 
+    def test_no_style_inherits_clams_warm_greys(self):
+        """Every colour a widget can inherit comes from the palette.
+
+        clam paints anything it does not recognise with #dcdad5, #cfcdc8,
+        #9e9a91 and #eeebe7, and it maps the notebook tab, the read-only
+        combination field and the table heading itself. Those maps beat a
+        plain configure call, which is why the window used to look dusty even
+        though the palette was correct.
+        """
+        clam = {"#dcdad5", "#cfcdc8", "#9e9a91", "#eeebe7", "#bab5ab", "#e3dfd9"}
+        for theme in ("light", "dark"):
+            style = self.apply(theme)
+            palette = accessibility.contrast_palette(False, theme)
+            with self.subTest(theme=theme):
+                defaults = style.options(".")
+                self.assertEqual(defaults["background"], palette["background"])
+                self.assertEqual(defaults["foreground"], palette["text"])
+                self.assertEqual(defaults["bordercolor"], palette["border"])
+                self.assertEqual(defaults["darkcolor"], palette["border"])
+                self.assertEqual(defaults["troughcolor"], palette["trough_background"])
+                for name, options in style.configurations.items():
+                    for option, value in options.items():
+                        if isinstance(value, str) and value.startswith("#"):
+                            self.assertNotIn(value.lower(), clam, f"{name}.{option}")
+                # The notebook tab and the read-only field are mapped, not just
+                # configured, so the selected tab and the field really take the
+                # surface colour in both themes.
+                self.assertIn(("selected", palette["surface"]), style.maps["TNotebook.Tab"]["background"])
+                self.assertIn(("", palette["background"]), style.maps["TNotebook.Tab"]["background"])
+                self.assertEqual(
+                    style.maps["TNotebook.Tab"]["background"][0], ("selected", palette["surface"])
+                )
+                for name in ("TEntry", "TCombobox", "TSpinbox"):
+                    self.assertIn(
+                        ("readonly", palette["field_background"]),
+                        style.maps[name]["fieldbackground"],
+                    )
+                self.assertEqual(
+                    style.options("Treeview.Heading")["lightcolor"], palette["heading_background"]
+                )
+                self.assertEqual(
+                    style.options("Treeview.Heading")["darkcolor"], palette["heading_background"]
+                )
+                self.assertIn("TScrollbar", style.maps)
+
     def test_classic_widgets_follow_the_dark_theme(self):
         class Widget:
             def __init__(self, widget_class, **options):

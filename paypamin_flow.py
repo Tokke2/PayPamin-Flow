@@ -405,7 +405,7 @@ def ui_is_alive(window):
     except Exception:return False
 
 
-def configure_windows_dpi_awareness():
+def configure_windows_dpi_awareness(ctypes_module=None):
     """Render text and artwork at native resolution on a scaled Windows display.
 
     A DPI-unaware process is told the screen is 96 DPI; Windows then paints the
@@ -415,30 +415,48 @@ def configure_windows_dpi_awareness():
     also makes Tk read the true DPI for ``tk scaling``. No-op elsewhere.
     """
     if not sys.platform.startswith('win'):return False
-    try:
-        import ctypes
-        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, Windows 10 1703 and later.
+    if ctypes_module is not None:
+        ctypes=ctypes_module
+    else:
         try:
-            set_context=ctypes.windll.user32.SetProcessDpiAwarenessContext
-            set_context.argtypes=[ctypes.c_void_p];set_context.restype=ctypes.c_bool
-            if set_context(ctypes.c_void_p(-4)):
-                logger.info('Windows DPI awareness enabled: per-monitor v2')
-                return True
-        except (AttributeError,OSError):pass
+            import ctypes as _ctypes
+            ctypes=_ctypes
+        except Exception:
+            logger.exception('ctypes is unavailable; Windows DPI awareness was not requested')
+            return False
+    # Every attempt is guarded on its own and a failure never stops the next
+    # one. A single wrong argument or a missing function on an older Windows
+    # used to leave the whole process DPI-unaware, and Windows then stretched
+    # the finished window bitmap: text and artwork looked soft, never sharp.
+    attempts=(('per-monitor v2',_dpi_awareness_per_monitor_v2),
+              ('per-monitor',_dpi_awareness_per_monitor),
+              ('system',_dpi_awareness_system))
+    for name,attempt in attempts:
         try:
-            # PROCESS_PER_MONITOR_DPI_AWARE, Windows 8.1 and later.
-            if ctypes.windll.shcore.SetProcessDpiAwareness(2)==0:
-                logger.info('Windows DPI awareness enabled: per-monitor')
+            if attempt(ctypes):
+                logger.info('Windows DPI awareness enabled: %s',name)
                 return True
-        except (AttributeError,OSError):pass
-        try:
-            if ctypes.windll.user32.SetProcessDPIAware():
-                logger.info('Windows DPI awareness enabled: system')
-                return True
-        except (AttributeError,OSError):pass
-    except Exception:
-        logger.exception('Windows DPI awareness could not be enabled')
+        except Exception:
+            logger.warning('Windows DPI awareness attempt failed: %s',name,exc_info=True)
+    logger.warning('Windows DPI awareness could not be enabled; the window may be bitmap-stretched')
     return False
+
+
+def _dpi_awareness_per_monitor_v2(ctypes):
+    """DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (Windows 10 1703 and later)."""
+    function=ctypes.windll.user32.SetProcessDpiAwarenessContext
+    function.argtypes=[ctypes.c_void_p];function.restype=ctypes.c_bool
+    return bool(function(ctypes.c_void_p(-4)))
+
+
+def _dpi_awareness_per_monitor(ctypes):
+    """PROCESS_PER_MONITOR_DPI_AWARE (Windows 8.1 and later)."""
+    return ctypes.windll.shcore.SetProcessDpiAwareness(2)==0
+
+
+def _dpi_awareness_system(ctypes):
+    """System-wide DPI awareness, the last resort on very old Windows."""
+    return bool(ctypes.windll.user32.SetProcessDPIAware())
 
 
 def configure_windows_app_identity():
@@ -3639,8 +3657,13 @@ class ReminderApp(tk.Tk):
                 label.pack(side='left',padx=(0,12))
                 self._header_backgrounds.append(label)
             ttk.Label(header,text=APP_NAME,style='Title.TLabel').pack(side='left')
-        ttk.Label(header,text=_('Lokal app · dina filer stannar på datorn'),style='Sub.TLabel').pack(side='left',padx=18,pady=(9,0))
+        # The tagline is centred against the wordmark instead of being pushed
+        # down by its own padding, so the brand band has one baseline.
+        ttk.Label(header,text=_('Lokal app · dina filer stannar på datorn'),style='Sub.TLabel').pack(side='left',padx=(18,0))
         ttk.Button(header,text=_('Inställningar'),command=self.settings).pack(side='right')
+        # A hairline under the brand band separates it from the work without
+        # boxing the window in.
+        ttk.Separator(self).pack(fill='x')
         ttk.Button(header,text=_('Om {app_name}',app_name=APP_NAME),command=self.show_about).pack(side='right',padx=(0,8))
         self.update_button=ttk.Button(header,text=self._update_button_idle_text(),command=lambda:self.check_for_updates(manual=True),style=self._update_button_style())
         self.update_button.pack(side='right',padx=(0,8))
@@ -3687,10 +3710,15 @@ class ReminderApp(tk.Tk):
         configure_invoice_row_colors(self.tree,getattr(self,'_high_contrast',False),getattr(self,'_theme','light'))
         labels={'invoice_no':_('Fakturanr'),'customer':_('Kund'),'due_date':_('Förfallodatum'),'amount':_('Fakturabelopp'),'remaining':_('Kvar att betala'),'p1_date':_('P1 skapades'),'p2_send_date':_('P2-datum'),'email_status':_('E-post (senaste)'),'stage':_('Status / nästa steg'),'fee':_('Påminnelseavgift')}
         widths={'invoice_no':110,'customer':170,'due_date':105,'amount':115,'remaining':120,'p1_date':105,'p2_send_date':125,'email_status':190,'stage':180,'fee':120}
+        # Money reads down a column: the amount columns end at the same edge,
+        # and every heading sits over the text it describes instead of floating
+        # in the middle of the cell.
+        numeric_columns={'amount','remaining','fee'}
         self._invoice_column_widths=widths.copy()
         for c in cols:
-            self.tree.heading(c,text=labels[c],command=lambda column=c:self.sort_invoice_column(column))
-            self.tree.column(c,width=self._px(widths[c]),anchor='w')
+            anchor='e' if c in numeric_columns else 'w'
+            self.tree.heading(c,text=labels[c],anchor=anchor,command=lambda column=c:self.sort_invoice_column(column))
+            self.tree.column(c,width=self._px(widths[c]),anchor=anchor)
         self.tree.pack(side='top',fill='both',expand=True); sb=ttk.Scrollbar(wrap,orient='vertical',command=self.tree.yview);sb.pack(side='right',fill='y');xsb=ttk.Scrollbar(wrap,orient='horizontal',command=self.tree.xview);xsb.pack(side='bottom',fill='x');self.tree.configure(yscrollcommand=sb.set,xscrollcommand=xsb.set)
         self.tree.bind('<Configure>',self._on_invoice_tree_configure,add='+')
         self.tree.bind('<<TreeviewSelect>>',lambda e:self.show_detail())

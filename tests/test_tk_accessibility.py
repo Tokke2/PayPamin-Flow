@@ -317,6 +317,50 @@ class RealTkAccessibilityTests(unittest.TestCase):
         style.apply(1.0)
         apply_widget_contrast(self.root, False, "light")
 
+    def test_the_real_clam_theme_never_keeps_its_own_greys(self):
+        """Nothing may fall back to clam's warm grey, which looks dusty.
+
+        clam answers a style it does not know with #dcdad5/#cfcdc8/#9e9a91 and
+        maps the read-only combination field and the notebook tab itself. The
+        checks below read the values the real toolkit will paint with, state
+        included, so a map that overrides a configure call is caught here and
+        not by the user.
+        """
+        style = AccessibleStyle(ttk.Style(self.root), tkfont)
+        clam = {"#dcdad5", "#cfcdc8", "#9e9a91", "#eeebe7", "#bab5ab", "#e3dfd9"}
+        for theme, surface, field, heading in (
+            ("light", accessibility.SURFACE, accessibility.FIELD_BACKGROUND, accessibility.HEADING_BACKGROUND),
+            ("dark", accessibility.DARK_SURFACE, accessibility.DARK_FIELD_BACKGROUND, accessibility.DARK_HEADING_BACKGROUND),
+        ):
+            with self.subTest(theme=theme):
+                style.apply(1.0, theme=theme)
+                self.root.update()
+                for name, option in (
+                    ("TButton", "background"), ("TButton", "bordercolor"),
+                    ("TNotebook.Tab", "background"), ("TCombobox", "fieldbackground"),
+                    ("TEntry", "fieldbackground"), ("Treeview", "fieldbackground"),
+                    ("Treeview.Heading", "background"), ("TScrollbar", "background"),
+                ):
+                    value = str(style.style.lookup(name, option) or "").lower()
+                    self.assertNotIn(value, clam, f"{name}.{option} = {value}")
+                self.assertEqual(
+                    str(style.style.lookup("TCombobox", "fieldbackground", ("readonly",))).lower(),
+                    field.lower(),
+                )
+                self.assertEqual(
+                    str(style.style.lookup("TNotebook.Tab", "background", ("selected",))).lower(),
+                    surface.lower(),
+                )
+                self.assertEqual(
+                    str(style.style.lookup("Treeview.Heading", "lightcolor")).lower(),
+                    heading.lower(),
+                )
+                self.assertEqual(
+                    str(style.style.lookup("Treeview.Heading", "darkcolor")).lower(),
+                    heading.lower(),
+                )
+        style.apply(1.0)
+
     def test_the_support_dialogue_styles_exist_on_a_real_toolkit(self):
         """The card and channel styles must be usable, not just configured.
 
