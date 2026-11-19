@@ -59,6 +59,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "ui_icons.py",
     "update_checker.py",
     "update_installer.py",
+    "update_state.py",
     "requirements.txt",
     # The terms of use travel inside the package, not as a web page.
     "LICENSE",

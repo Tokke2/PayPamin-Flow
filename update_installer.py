@@ -23,7 +23,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
@@ -37,7 +37,16 @@ from app_info import (
     is_python_package_file,
 )
 from i18n import _
-from update_checker import ReleaseInfo
+import update_state
+from update_checker import (
+    CONTENT_CURRENT,
+    CONTENT_DIFFERS,
+    CONTENT_UNAVAILABLE,
+    ReleaseInfo,
+    is_newer_version,
+    release_package_sha256,
+    version_key,
+)
 
 DOWNLOAD_TIMEOUT = 90
 # GitHub answers 502/503/504 while a release asset is still being generated,
@@ -52,6 +61,9 @@ _LOG_ERROR_MARKERS = re.compile(
 )
 MAX_CHECKSUM_BYTES = 65_536
 MAX_PACKAGE_FILES = 500
+# A content check downloads the release ZIP, so it is bounded well above the
+# real package size (about one megabyte) and never used for installation.
+CONTENT_PROBE_MAX_BYTES = 60 * 1024 * 1024
 UPDATE_READY_FILE_ENV = "PAYPAMIN_UPDATE_READY_FILE"
 UPDATE_READY_TOKEN_ENV = "PAYPAMIN_UPDATE_READY_TOKEN"
 UPDATE_RESTART_TIMEOUT_SECONDS = 20.0
@@ -73,6 +85,9 @@ class UpdatePlan:
     target_path: Path
     work_dir: Path
     log_path: Path
+    # SHA-256 of the downloaded ZIP, recorded once the files are in place so
+    # the next check can compare content instead of guessing from a version.
+    package_sha256: str = ""
 
 
 @dataclass
@@ -88,6 +103,8 @@ class InstalledUpdate:
     replacements: list[Replacement]
     ready_file: Path | None = None
     ready_token: str = ""
+    # The bookkeeping before this install, so a rollback can put it back.
+    previous_state: dict | None = None
 
 
 def _log(plan: UpdatePlan, message: str) -> None:
@@ -207,6 +224,121 @@ def _download_asset(
     raise UpdateInstallError(
         _("Uppdateringspaketet kunde inte laddas ner: {error}", error=last_error)
     ) from last_error
+
+
+@dataclass(frozen=True)
+class PackageContent:
+    """What a release ZIP contains, without installing any of it."""
+
+    package_sha256: str
+    files: dict
+
+
+def read_package_content(
+    release: ReleaseInfo,
+    *,
+    opener=None,
+    max_bytes: int = CONTENT_PROBE_MAX_BYTES,
+) -> PackageContent:
+    """Download the release ZIP once and hash the file inside it.
+
+    The ZIP is small and this is the only way to answer "do the files in the
+    release differ from mine?" for an install that predates the bookkeeping in
+    ``update_state``. Nothing is extracted and nothing is executed.
+    """
+    asset = next((item for item in release.assets if item.name == PYTHON_RELEASE_ASSET), None)
+    if asset is None:
+        raise UpdateInstallError(
+            _("Releasen saknar Python-paket eller SHA-256-kontrollsumma för den här plattformen. Saknas: {files}", files=PYTHON_RELEASE_ASSET)
+        )
+    with tempfile.TemporaryDirectory(prefix="paypamin-flow-content-") as folder:
+        archive_path = Path(folder) / "package.zip"
+        try:
+            digest = _download_asset(asset, archive_path, max_bytes=max_bytes, opener=opener)
+        except UpdateInstallError:
+            raise
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                infos = [info for info in archive.infolist() if not info.is_dir()]
+                if not infos or len(infos) > MAX_PACKAGE_FILES:
+                    raise UpdateInstallError(_("Uppdateringspaketet har ogiltigt innehåll."))
+                files = {}
+                for info in infos:
+                    if not is_python_package_file(info.filename):
+                        raise UpdateInstallError(
+                            _("Filen är inte tillåten i uppdateringspaketet: {name}", name=info.filename)
+                        )
+                    hasher = hashlib.sha256()
+                    with archive.open(info) as source:
+                        for block in iter(lambda: source.read(1024 * 1024), b""):
+                            hasher.update(block)
+                    files[info.filename] = hasher.hexdigest()
+        except UpdateInstallError:
+            raise
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            raise UpdateInstallError(_("Uppdateringspaketet är skadat: {error}", error=exc)) from exc
+    return PackageContent(package_sha256=digest, files=files)
+
+
+def evaluate_release(
+    release: ReleaseInfo,
+    *,
+    current_version: str = APP_VERSION,
+    directory=None,
+    state_file=None,
+    opener=None,
+    compare_content: bool = True,
+) -> ReleaseInfo:
+    """Return the release with the outcome of a real file comparison.
+
+    A version number alone says nothing about a release whose files were
+    replaced in place, which is exactly how this project ships while it is
+    still 0.6.0. So the same-version case is decided by content: the recorded
+    package hash first (free), and otherwise by hashing the files inside the
+    release once and comparing them with the files on disk. Network and I/O
+    problems never raise here - they leave the release undecided, and the
+    caller falls back to the version and commit metadata.
+    """
+    if not compare_content:
+        return release
+    try:
+        if is_newer_version(release.version, current_version):
+            return release
+        if version_key(release.version) != version_key(current_version):
+            return release
+    except ValueError:
+        return release
+    if release.content_state:
+        return release
+
+    local_hash = update_state.installed_package_sha256(state_file)
+    release_hash = release_package_sha256(release, opener=opener)
+    if release_hash and local_hash:
+        state = CONTENT_CURRENT if release_hash == local_hash else CONTENT_DIFFERS
+        return replace(release, package_sha256=release_hash, content_state=state)
+
+    target = Path(directory) if directory else Path(__file__).resolve().parent
+    try:
+        content = read_package_content(release, opener=opener)
+    except (UpdateInstallError, OSError):
+        # Offline, or the asset is still uploading: say so instead of
+        # pretending the installed files are up to date.
+        return replace(release, content_state=CONTENT_UNAVAILABLE)
+    difference = update_state.compare_package_files(content.files, target)
+    if difference.files:
+        return replace(
+            release,
+            package_sha256=content.package_sha256,
+            content_state=CONTENT_DIFFERS,
+            changed_files=difference.files,
+        )
+    update_state.record_installed_package(
+        content.package_sha256,
+        release_id=release.release_id,
+        version=release.version,
+        path=state_file,
+    )
+    return replace(release, package_sha256=content.package_sha256, content_state=CONTENT_CURRENT)
 
 
 def _package_version(source_path: Path) -> str:
@@ -370,6 +502,7 @@ def stage_update(
             target_path=(target_path or Path(__file__).resolve().parent).resolve(),
             work_dir=work_dir,
             log_path=log_path or Path.home() / ".paminnelseapp" / "logs" / "app.log",
+            package_sha256=actual_hash.lower(),
         )
         _log(plan, f"Validated Python update {release.version}")
         return plan
@@ -412,6 +545,9 @@ def rollback_update(installed: InstalledUpdate) -> None:
                 replacement.target.unlink(missing_ok=True)
         except OSError as exc:
             errors.append(str(exc))
+    # The files are the old ones again, so the record of what is installed has
+    # to follow; otherwise the next check would believe the update took effect.
+    update_state.restore_state(installed.previous_state)
     if errors:
         raise UpdateInstallError(_("Uppdateringen kunde inte rullas tillbaka: {error}", error="; ".join(errors)))
     _log(installed.plan, "Rolled back Python update")
@@ -420,7 +556,7 @@ def rollback_update(installed: InstalledUpdate) -> None:
 def install_update(plan: UpdatePlan) -> InstalledUpdate:
     """Atomically replace application-owned Python files, retaining a rollback copy."""
 
-    installed = InstalledUpdate(plan=plan, replacements=[])
+    installed = InstalledUpdate(plan=plan, replacements=[], previous_state=update_state.read_state())
     backup_root = plan.work_dir / "backup"
     try:
         sources = sorted(path for path in plan.source_path.rglob("*") if path.is_file())
@@ -443,6 +579,12 @@ def install_update(plan: UpdatePlan) -> InstalledUpdate:
                 shutil.copy2(target, backup)
             _replace_file(source, target)
             installed.replacements.append(Replacement(target=target, backup=backup, existed=existed))
+        if plan.package_sha256:
+            update_state.record_installed_package(
+                plan.package_sha256,
+                release_id=plan.release.release_id,
+                version=plan.release.version,
+            )
         _log(plan, f"Installed Python update {plan.release.version}; restart pending")
         return installed
     except Exception as exc:

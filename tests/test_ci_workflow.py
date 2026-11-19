@@ -82,6 +82,27 @@ class WorkflowGuardTests(unittest.TestCase):
         # The packaging step drops the locally built manifest before upload.
         self.assertIn("rm -f release-assets/*.manifest.json", self.workflow)
 
+    def test_a_push_to_main_refreshes_the_files_in_the_release(self):
+        """The release is not a frozen snapshot while the app is 0.6.0."""
+        block = self.workflow.split("refresh-release-files:", 1)
+        self.assertEqual(len(block), 2, "build.yml has no release refresh job")
+        refresh = block[1]
+        self.assertIn("github.event_name == 'push'", refresh)
+        self.assertIn("refs/heads/main", refresh)
+        self.assertIn("gh release upload", refresh)
+        self.assertIn("release-assets/PayPamin-Flow-Python.zip ", refresh)
+        self.assertIn("release-assets/PayPamin-Flow-Python.zip.sha256", refresh)
+        # Only the two release files, never a wildcard.
+        self.assertNotIn("release-assets/*", refresh)
+        self.assertIn("--clobber", refresh)
+        # The tag follows the files, so tag, release and code stay together.
+        self.assertIn("git/refs/tags/$tag", refresh)
+
+    def test_the_package_is_stamped_with_the_release_it_belongs_to(self):
+        """A build from main carries the release identity of its version."""
+        self.assertIn("steps.release-identity.outputs.release_id", self.workflow)
+        self.assertIn("releases/tags/$tag", self.workflow)
+
     def test_workflow_only_publishes_for_releases(self):
         publish_block = self.workflow.split("publish-python-package:", 1)[1]
         requirement = re.search(r"^    if: .*$", publish_block, re.MULTILINE)

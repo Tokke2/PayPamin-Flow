@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import update_installer
+import update_state
 from app_info import PYTHON_PACKAGE_REQUIRED_FILES, PYTHON_RELEASE_ASSET, fingerprint_package_files
 from update_checker import ReleaseAsset, ReleaseInfo
 from update_installer import (
@@ -96,6 +97,12 @@ class UpdateInstallerTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.target = self.root / "app"
         self.target.mkdir()
+        # The install record belongs to the test, never to the machine running
+        # the suite.
+        self.state_file = self.root / "installed-release.json"
+        patcher = patch.object(update_state, "state_path", lambda directory=None: self.state_file)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def stage(self, package=None, target=None):
         release, responses = release_with_package(package or python_package())

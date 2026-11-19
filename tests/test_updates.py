@@ -245,6 +245,46 @@ class UpdateCheckerTests(unittest.TestCase):
         release = fetch_latest_release(opener=lambda request, timeout: FakeResponse(payload(assets=assets)))
         self.assertEqual([asset.name for asset in release.assets], [asset["name"] for asset in assets])
 
+    def test_the_package_digest_is_read_from_the_release_itself(self):
+        """GitHub reports the ZIP digest, so content costs no download."""
+        digest = "b" * 64
+        assets = [
+            {
+                "name": PYTHON_RELEASE_ASSET,
+                "browser_download_url": f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/{PYTHON_RELEASE_ASSET}",
+                "digest": f"sha256:{digest}",
+            },
+            {
+                "name": PYTHON_RELEASE_ASSET + ".sha256",
+                "browser_download_url": f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/{PYTHON_RELEASE_ASSET}.sha256",
+                "digest": "",
+            },
+        ]
+        release = fetch_latest_release(opener=lambda request, timeout: FakeResponse(payload(assets=assets)))
+        self.assertEqual(release.package_sha256, digest)
+        self.assertEqual(release.assets[0].digest, digest)
+        self.assertEqual(release.assets[1].digest, "")
+
+    def test_a_malformed_digest_is_ignored_rather_than_trusted(self):
+        for value in ("sha256:xyz", "b" * 64, f"md5:{'b' * 64}", f"sha256:{'b' * 63}"):
+            with self.subTest(value=value):
+                assets = [{
+                    "name": PYTHON_RELEASE_ASSET,
+                    "browser_download_url": f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.6.0/{PYTHON_RELEASE_ASSET}",
+                    "digest": value,
+                }]
+                release = fetch_latest_release(opener=lambda request, timeout: FakeResponse(payload(assets=assets)))
+                self.assertEqual(release.package_sha256, "")
+
+    def test_a_compared_release_decides_over_the_release_id(self):
+        """A file comparison is stronger evidence than any number."""
+        base = dict(version="0.6.0", tag_name="v0.6.0", url="https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0")
+        same = ReleaseInfo(**base, release_id="100", content_state="current")
+        changed = ReleaseInfo(**base, release_id="100", content_state="differs", changed_files=("i18n.py",))
+        self.assertFalse(is_update_available(same, "0.6.0", "999"))
+        self.assertTrue(is_update_available(changed, "0.6.0", "100"))
+        self.assertEqual(update_change_kind(changed, "0.6.0"), "files")
+
     def test_automatic_checks_run_twice_per_day(self):
         self.assertEqual(UPDATE_CHECK_INTERVAL_MS, 12 * 60 * 60 * 1000)
 

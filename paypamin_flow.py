@@ -89,6 +89,8 @@ from reminder_journal import (
     record_reminder as record_reminder_journal,
 )
 from update_checker import (
+    CONTENT_CURRENT,
+    CONTENT_UNAVAILABLE,
     UPDATE_CHECK_INTERVAL_MS,
     UpdateCheckError,
     fetch_latest_release,
@@ -101,6 +103,7 @@ from update_installer import (
     UPDATE_READY_TOKEN_ENV,
     UpdateInstallError,
     cleanup_update,
+    evaluate_release,
     install_update,
     mark_update_ready,
     restart_updated_app,
@@ -108,6 +111,7 @@ from update_installer import (
     stage_update,
     wait_for_update_restart,
 )
+import update_state
 from single_instance import SingleInstance
 from python_maintenance import (
     addon_package_specs,
@@ -1690,6 +1694,17 @@ def fit_invoice_columns(tree,widths,available,px=None):
     return fitted
 
 
+def update_is_manual_only(app=None):
+    """Return whether replacing the files must always be confirmed first.
+
+    A git checkout is the developer's own copy: it normally holds newer files
+    than the release, so the files really do differ and an automatic install
+    would silently undo that work. The update is still offered in the dialog.
+    """
+    directory=getattr(app,'app_dir',None) if app is not None else None
+    return update_state.is_source_checkout(directory or APP_DIR)
+
+
 def restyle_update_button(app):
     """Promote the update button to the accent only when an update exists."""
     button=getattr(app,'update_button',None)
@@ -3032,7 +3047,14 @@ class ReminderApp(tk.Tk):
         self._update_check_running=True;self._set_update_check_busy(True)
         result_queue=queue.Queue()
         def check():
-            try:result_queue.put(('ok',manual,fetch_latest_release()))
+            try:
+                release=fetch_latest_release()
+                # The version is compared first; for the same version the files
+                # in the release are compared with the installed ones, so a
+                # rebuilt 0.6.0 is still offered.
+                try:release=evaluate_release(release)
+                except Exception:logger.exception('Release content could not be compared')
+                result_queue.put(('ok',manual,release))
             except Exception as exc:result_queue.put(('error',manual,exc))
         threading.Thread(target=check,daemon=True).start()
         log_activity('update','check_requested','completed',manual=manual,force=force,cached=False)
@@ -3057,21 +3079,34 @@ class ReminderApp(tk.Tk):
         if is_update_available(release,APP_VERSION):
             self._set_update_available(release)
             missing=missing_release_assets(release)
-            log_activity('update','check_finished','update_available',manual=manual,version=release.version,release_id=release.release_id,commit=release.release_commit,missing_assets=missing)
-            logger.info('New PayPamin Flow release available: current=%s latest=%s release_id=%s commit=%s files=%s missing_assets=%s',APP_VERSION,release.version,release.release_id,release.release_commit,release.package_fingerprint[:12],missing)
+            log_activity('update','check_finished','update_available',manual=manual,version=release.version,release_id=release.release_id,commit=release.release_commit,content=release.content_state,changed_files=list(release.changed_files),missing_assets=missing)
+            logger.info('New PayPamin Flow release available: current=%s latest=%s release_id=%s commit=%s content=%s changed_files=%s missing_assets=%s',APP_VERSION,release.version,release.release_id,release.release_commit,release.content_state,','.join(release.changed_files[:12]) or '-',missing)
             if missing:
                 logger.warning('Release package is not ready; automatic installation waits')
                 if manual:self.show_update_available(release)
                 return
             if manual:self.show_update_available(release)
-            elif setting('update_auto')=='1':self.start_update_installation(release,manual=False)
+            elif setting('update_auto')=='1' and not update_is_manual_only(self):
+                self.start_update_installation(release,manual=False)
+            elif setting('update_auto')=='1':
+                logger.info('Automatic installation skipped: the running files are a source checkout')
             return
         self._set_update_available(None)
-        log_activity('update','check_finished','current',manual=manual,version=release.version,release_id=release.release_id,commit=release.release_commit)
-        logger.info('No newer PayPamin Flow release: current=%s latest=%s',APP_VERSION,release.version)
+        log_activity('update','check_finished','current',manual=manual,version=release.version,release_id=release.release_id,commit=release.release_commit,content=release.content_state)
+        logger.info('No newer PayPamin Flow release: current=%s latest=%s content=%s',APP_VERSION,release.version,release.content_state or 'not compared')
         if manual:
             commit=release.release_commit[:12] or APP_RELEASE_COMMIT[:12] or _('okänd')
-            messagebox.showinfo(_('Ingen uppdatering tillgänglig'),_('Ingen ny version eller ändrade releasefiler finns.\n\nInstallerad version: {current}\nSenaste release: {latest}\nRelease-commit: {commit}',current=APP_VERSION,latest=release.version,commit=commit),parent=self)
+            messagebox.showinfo(_('Ingen uppdatering tillgänglig'),self._no_update_message(release,commit),parent=self)
+
+    def _no_update_message(self,release,commit):
+        """Explain what was compared, so "no update" is a fact and not a guess."""
+        if release.content_state==CONTENT_CURRENT:
+            reason=_('Filerna i releasen är identiska med de installerade.')
+        elif release.content_state==CONTENT_UNAVAILABLE:
+            reason=_('Filerna i releasen kunde inte jämföras just nu; versionen och commiten jämfördes i stället.')
+        else:
+            reason=_('Ingen ny version eller ändrade releasefiler finns.')
+        return _('{reason}\n\nInstallerad version: {current}\nSenaste release: {latest}\nRelease-commit: {commit}',reason=reason,current=APP_VERSION,latest=release.version,commit=commit)
 
     def start_update_installation(self,release,manual=False):
         log_activity('update','install_requested','started',manual=manual,version=release.version,release_id=release.release_id)
@@ -3165,7 +3200,14 @@ class ReminderApp(tk.Tk):
         current_commit=APP_RELEASE_COMMIT[:12] or _('okänd');release_commit=release.release_commit[:12] or _('okänd')
         ttk.Label(form,text=_('Installerad version: {current}\nSenaste release: {latest}',current=APP_VERSION,latest=release.version),justify='left').pack(anchor='w',pady=(8,4))
         ttk.Label(form,text=_('Typ av uppdatering: {change}',change=change),justify='left').pack(anchor='w',pady=(0,4))
+        # The files that actually differ, so the reason is visible and not
+        # something the user has to take on faith.
+        if release.changed_files:
+            files=update_state.describe_files(release.changed_files)
+            ttk.Label(form,text=_('Ändrade filer: {files}',files=files),style='Sub.TLabel',wraplength=520,justify='left').pack(anchor='w',pady=(0,4))
         ttk.Label(form,text=_('Installerad commit: {current}\nRelease-commit: {latest}',current=current_commit,latest=release_commit),style='Sub.TLabel',justify='left').pack(anchor='w',pady=(0,8))
+        if update_is_manual_only(self):
+            ttk.Label(form,text=_('Du kör en källkopia. Releasen är normalt äldre än dina filer, så en installation ersätter appfilerna med releasens version.'),style='Sub.TLabel',wraplength=520,justify='left').pack(anchor='w',pady=(0,8))
         ttk.Label(form,text=_('Lokala fakturor, inställningar och mallar påverkas inte.'),justify='left').pack(anchor='w',pady=(0,8))
         missing=missing_release_assets(release)
         if missing:ttk.Label(form,text=_('Releasefilerna är inte klara ännu. Försök igen senare.\nSaknas: {files}',files=', '.join(missing)),style='Sub.TLabel',wraplength=520,justify='left').pack(anchor='w',pady=(0,8))
