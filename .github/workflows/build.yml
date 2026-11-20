@@ -108,3 +108,22 @@ jobs:
           gh api -X PATCH "repos/$REPOSITORY/releases/$release_id" \
             -F body=@release-body.md > /dev/null
           echo "Release $tag now points at $COMMIT and its source archive is that code"
+      - name: Verify the release really carries this commit
+        # The step above reports what it asked GitHub to do. This one reads the
+        # result back - tag, page, file list and the archive itself - so a
+        # rejected tag move or a stale body fails the run instead of leaving a
+        # release that describes code nobody pushed.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          version=$(python -c "import app_info; print(app_info.APP_VERSION)")
+          tag="v$version"
+          if ! gh api "repos/$REPOSITORY/releases/tags/$tag" --jq .id > /dev/null 2>&1; then
+            echo "No release $tag exists yet; nothing to verify"
+            exit 0
+          fi
+          python packaging/verify_release.py \
+            --tag "$tag" --repository "$REPOSITORY" --commit "$COMMIT" --version "$version" \
+            --checkout .

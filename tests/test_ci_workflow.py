@@ -109,6 +109,33 @@ class WorkflowGuardTests(unittest.TestCase):
             with self.subTest(command=forbidden):
                 self.assertNotIn(forbidden, lowered)
 
+    def test_the_release_job_verifies_its_own_result(self):
+        """Moving a tag is a request; only reading it back proves it happened."""
+        refresh = self.workflow.split("refresh-release-files:", 1)[1]
+        self.assertIn("packaging/verify_release.py", refresh)
+        self.assertIn("--commit \"$COMMIT\"", refresh)
+        # The check must come after the tag move, not before it.
+        self.assertLess(
+            refresh.index("git/refs/tags/$tag"),
+            refresh.index("packaging/verify_release.py"),
+            "the release must be verified after the tag has been moved",
+        )
+
+    def test_the_verification_step_skips_a_repository_without_a_release(self):
+        refresh = self.workflow.split("refresh-release-files:", 1)[1]
+        verify = refresh.split("Verify the release really carries this commit", 1)[1]
+        self.assertIn("releases/tags/$tag", verify)
+        self.assertIn("nothing to verify", verify)
+
+    def test_the_verification_is_the_last_word_of_the_job(self):
+        refresh = self.workflow.split("refresh-release-files:", 1)[1]
+        steps = [line.strip() for line in refresh.splitlines() if line.strip().startswith("- name:")]
+        self.assertTrue(steps[-1].startswith("- name: Verify the release"), steps)
+
+    def test_the_verification_script_is_shipped_with_its_own_tests(self):
+        self.assertTrue((ROOT / "packaging" / "verify_release.py").is_file())
+        self.assertTrue((ROOT / "tests" / "test_verify_release.py").is_file())
+
     def test_the_desktop_job_runs_the_suite_on_every_push(self):
         self.assertIn("unittest discover -s tests", self.workflow)
         self.assertIn("python assets/verify_branding.py", self.workflow)
