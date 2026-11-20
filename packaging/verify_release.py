@@ -115,16 +115,26 @@ def read_archive(payload: bytes) -> tuple[str, dict[str, bytes]]:
 
 
 def compare_with_checkout(files: dict[str, bytes], checkout: Path) -> list[str]:
-    """Return the files whose content differs from the checkout on disk."""
+    """Return the files whose content differs from the checkout on disk.
+
+    The archive holds the bytes exactly as committed. A Windows checkout that
+    runs with ``core.autocrlf`` has CRLF in every text file while the archive
+    has LF, which is a property of the working tree and not of the commit - so
+    the checkout side is compared with its CRLF normalized. The archive side is
+    never normalized: a file that is *committed* with CRLF (the ``.bat`` and
+    ``.vbs`` starters on Windows) must still match exactly.
+    """
     differences = []
     for name, content in sorted(files.items()):
         existing = checkout / name
         if not existing.is_file():
             continue
         try:
-            if existing.read_bytes() != content:
-                differences.append(name)
+            on_disk = existing.read_bytes()
         except OSError:
+            differences.append(name)
+            continue
+        if on_disk != content and on_disk.replace(b"\r\n", b"\n") != content:
             differences.append(name)
     return differences
 

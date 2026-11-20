@@ -49,7 +49,9 @@ class ReleaseVerificationTests(unittest.TestCase):
         for name, content in FILES.items():
             target = self.checkout / name
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            # Bytes, not text: on Windows text mode would write CRLF and the
+            # fixture would differ from the archive for the wrong reason.
+            target.write_bytes(content.encode("utf-8"))
         self.payload = make_archive(FILES)
 
     def api(self, *, tag_commit=COMMIT, body=None, assets=None, tag_type="commit"):
@@ -117,6 +119,18 @@ class ReleaseVerificationTests(unittest.TestCase):
         problems = self.verify(fetch=lambda url: payload)
         self.assertTrue(any("skiljer sig" in problem for problem in problems))
         self.assertIn("paypamin_flow.py", " ".join(problems))
+
+    def test_a_crlf_checkout_is_not_a_difference(self):
+        """A Windows working tree with core.autocrlf has CRLF; the commit has LF."""
+        (self.checkout / "paypamin_flow.py").write_bytes(b"print('hej')\r\n")
+        self.assertEqual(self.verify(), [])
+
+    def test_a_file_committed_with_crlf_still_has_to_match(self):
+        """The .bat and .vbs starters are committed with CRLF on purpose."""
+        payload = make_archive({**FILES, "start.bat": "@echo off\r\n"})
+        (self.checkout / "start.bat").write_bytes(b"@echo off \r\n")
+        problems = self.verify(fetch=lambda url: payload)
+        self.assertTrue(any("start.bat" in problem for problem in problems))
 
     def test_an_archive_with_another_root_folder_is_a_problem(self):
         problems = self.verify(fetch=lambda url: make_archive(FILES, root="annat-namn"))
