@@ -346,8 +346,8 @@ class WindowCloseTests(unittest.TestCase):
         # The English strings exist and interpolate the counts.
         i18n.set_language("en")
         try:
-            self.assertEqual(i18n._("{count} väntar P1", count=2), "2 awaiting P1")
-            self.assertEqual(i18n._("{count} väntar P2", count=1), "1 awaiting P2")
+            self.assertEqual(i18n._("{count} väntar P1", count=2), "2 waiting for P1")
+            self.assertEqual(i18n._("{count} väntar P2", count=1), "1 waiting for P2")
             self.assertEqual(i18n._("{count} att granska", count=3), "3 to review")
         finally:
             i18n.set_language("sv")

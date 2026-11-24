@@ -1991,13 +1991,73 @@ def due_reminder_invoices():
     return [row for row in rows if next_stage(row) in ('P1 att skapa','P2 att skapa')]
 
 
-def show_due_reminder_dialog(parent=None):
-    """Tell the user which invoices are ready after an import-folder scan."""
-    rows=due_reminder_invoices()
-    if not rows:return False
+def reminder_was_opened(row,level):
+    """Return whether this level's e-mail draft has already been opened.
+
+    A reminder that has been sent is finished, and one whose draft was opened
+    once does not need to interrupt the user again - it is still in the e-mail
+    client, unsent or already sent. Only a level nobody has touched is news.
+    """
+    prefix=level.lower();keys=row.keys()
+    for column in (prefix+'_sent_date',prefix+'_draft_date'):
+        if column in keys and str(row[column] or '').strip():return True
+    return False
+
+
+def due_reminder_level(row):
+    """Return the reminder step an invoice is ready for, or an empty string."""
+    stage=next_stage(row)
+    if stage=='P1 att skapa':return 'P1'
+    if stage=='P2 att skapa':return 'P2'
+    return ''
+
+
+def due_reminder_rows(include_opened=False):
+    """Group the invoices that are due now, with the oldest deadline first.
+
+    An invoice that has waited longest on its reminder is the one that costs
+    the most to forget, so the list is ordered by how many days overdue the
+    reminder is rather than by invoice number. A level whose draft has already
+    been opened is not news and is left out, so the dialog cannot nag about
+    work the user has already started; ``include_opened`` brings it back.
+    """
+    today=date.today()
+    items=[]
+    for row in due_reminder_invoices():
+        level=due_reminder_level(row)
+        if not level:continue
+        if not include_opened and reminder_was_opened(row,level):continue
+        if level=='P1':
+            due=dparse(row['due_date'])
+            days=max(0,(today-due).days) if due else 0
+        else:
+            p2_due=p2_due_date(row)
+            days=max(0,(today-p2_due).days) if p2_due else 0
+        items.append((days,row,level))
+    items.sort(key=lambda item:(-item[0],str(item[1]['invoice_no'])))
+    return items
+
+
+def due_reminder_summary(rows):
+    """Return the counts and the total claim shown in the dialog header."""
+    p1=[item for item in rows if item[2]=='P1']
+    p2=[item for item in rows if item[2]=='P2']
+    total=0.0
+    mixed=False
+    currencies=set()
+    for _days,row,_level in rows:
+        currencies.add(str(row['currency'] or 'SEK'))
+        try:total+=float(row['amount'] or 0)-float(row['paid'] or 0)
+        except (TypeError,ValueError):report_fault()
+    mixed=len(currencies)>1
+    return {'p1':len(p1),'p2':len(p2),'total':max(0.0,total),'mixed':mixed,
+            'currency':sorted(currencies)[0] if currencies else 'SEK'}
+
+
+def _show_due_reminder_text(parent,rows):
+    """Fallback summary when no window is available to open the list from."""
     lines=[]
-    for row in rows[:12]:
-        level='P1' if next_stage(row)=='P1 att skapa' else 'P2'
+    for _days,row,level in rows[:12]:
         lines.append(f"{level}: {row['invoice_no']} – {row['customer']}")
     if len(rows)>12:lines.append(_('… och {count} till',count=len(rows)-12))
     messagebox.showinfo(
@@ -2006,6 +2066,25 @@ def show_due_reminder_dialog(parent=None):
         parent=parent,
     )
     return True
+
+
+def show_due_reminder_dialog(parent=None):
+    """Open the reminder dialog for the invoices that are due right now.
+
+    The list is built before any window is opened, so the same function can be
+    tested without Tk and the dialog never appears empty. Every row can be
+    opened directly: the dialog calls back into the window's normal
+    ``make_reminder`` flow rather than creating a second way to send a reminder,
+    so the logo dialogue, the fee rules and the journal write stay in one place.
+    """
+    rows=due_reminder_rows()
+    if not rows:return False
+    app=parent if hasattr(parent,'make_reminder') else None
+    if app is None or not hasattr(app,'_new_toplevel'):
+        # Without a window there is nothing to click, so the plain summary is
+        # still shown rather than silently returning.
+        return _show_due_reminder_text(parent,rows)
+    return app.show_due_reminder_window(rows)
 
 
 def reminder_file_candidates(row,level):
@@ -4076,6 +4155,145 @@ class ReminderApp(tk.Tk):
         missing=suggested if suggested and suggested!=no_logo and suggested not in files else ''
         choices=[no_logo]+([missing] if missing else [])+files
         return choices,(suggested if suggested in choices else no_logo),missing
+
+    def show_due_reminder_window(self,rows=None):
+        """Show the invoices that are ready for P1/P2 as a working list.
+
+        A message box says "something is due" and then leaves the user to find
+        the invoice in a table of two hundred rows. This window is the list: the
+        level, the customer, how many days the reminder is overdue and the
+        amount, with one button per row that opens the normal reminder flow. The
+        window is opened once - a second check raises the one already open
+        instead of stacking another - and it refreshes itself after a reminder
+        has been created, so the row disappears when it is done.
+        """
+        rows=list(rows if rows is not None else due_reminder_rows())
+        existing=getattr(self,'_due_reminder_window',None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.deiconify();existing.lift();existing.focus_force()
+                    return True
+            except tk.TclError:report_fault()
+        window=self._new_toplevel(_('Dags att skapa P1/P2'))
+        self._due_reminder_window=window
+        window.minsize(self._px(560),self._px(360))
+        form=ttk.Frame(window,padding=22);form.pack(fill='both',expand=True)
+        ttk.Label(form,text=_('Dags att skapa P1/P2'),style='Title.TLabel').pack(anchor='w')
+        summary=due_reminder_summary(rows)
+        heading=[]
+        if summary['p1']:heading.append(_('{count} väntar P1',count=summary['p1']))
+        if summary['p2']:heading.append(_('{count} väntar P2',count=summary['p2']))
+        if summary['mixed']:
+            total_text=_('Blandade valutor – summeras inte')
+        else:
+            total_text=_('{amount} att få in',amount=money(summary['total'],summary['currency']))
+        header=tk.StringVar(value=' · '.join(heading)+' · '+total_text if heading else total_text)
+        ttk.Label(form,textvariable=header,style='Sub.TLabel').pack(anchor='w',pady=(4,10))
+
+        columns=('level','invoice_no','customer','days','amount')
+        labels={'level':_('Steg'),'invoice_no':_('Fakturanr'),'customer':_('Kund'),
+                'days':_('Försenad (dagar)'),'amount':_('Kvar att betala')}
+        tree=ttk.Treeview(form,columns=columns,show='headings',selectmode='browse',height=min(14,max(4,len(rows))))
+        for column in columns:
+            tree.heading(column,text=labels[column],anchor='e' if column in ('days','amount') else 'w')
+            tree.column(column,width=self._px({'level':60,'invoice_no':105,'customer':220,'days':110,'amount':130}[column]),
+                        anchor='e' if column in ('days','amount') else 'w',stretch=column=='customer')
+        for _days,row,level in rows:
+            tree.insert('','end',iid=str(row['id']),values=(
+                level,row['invoice_no'],row['customer'],_days,
+                money(max(0.0,float(row['amount'] or 0)-float(row['paid'] or 0)),row['currency']),
+            ))
+        tree.pack(fill='both',expand=True)
+        tree.bind('<Double-1>',lambda event:self.open_due_reminder(tree))
+        show_all=tk.BooleanVar(value=False)
+        def reload_rows():
+            # Rebuilding from the database is what makes a created reminder
+            # disappear from the list instead of lingering as a stale row.
+            fresh=due_reminder_rows(include_opened=show_all.get())
+            for item in tree.get_children():tree.delete(item)
+            for days,row,level in fresh:
+                tree.insert('','end',iid=str(row['id']),values=(
+                    level,row['invoice_no'],row['customer'],days,
+                    money(max(0.0,float(row['amount'] or 0)-float(row['paid'] or 0)),row['currency']),
+                ))
+            if fresh:
+                tree.selection_set(str(fresh[0][1]['id']));tree.focus(str(fresh[0][1]['id']))
+            summary=due_reminder_summary(fresh)
+            parts=[]
+            if summary['p1']:parts.append(_('{count} väntar P1',count=summary['p1']))
+            if summary['p2']:parts.append(_('{count} väntar P2',count=summary['p2']))
+            if not summary['mixed']:
+                parts.append(_('{amount} att få in',amount=money(summary['total'],summary['currency'])))
+            else:
+                parts.append(_('Blandade valutor – summeras inte'))
+            header.set(' · '.join(parts))
+        ttk.Checkbutton(form,text=_('Visa även påminnelser som redan öppnats'),variable=show_all,
+                        command=reload_rows).pack(anchor='w',pady=(8,0))
+
+        buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(12,0))
+        ttk.Button(buttons,text=_('Skapa påminnelse'),command=lambda:self.open_due_reminder(tree),style='Accent.TButton').pack(side='left')
+        ttk.Button(buttons,text=_('Visa i listan'),command=lambda:self.locate_due_reminder(tree)).pack(side='left',padx=(8,0))
+        ttk.Button(buttons,text=_('Stäng'),command=window.destroy).pack(side='right')
+        window.bind('<Escape>',lambda event:window.destroy())
+
+        def close():
+            self._due_reminder_window=None
+            window.destroy()
+        window.protocol('WM_DELETE_WINDOW',close)
+        if rows:tree.selection_set(str(rows[0][1]['id']));tree.focus(str(rows[0][1]['id']))
+        self._due_reminder_refresh=reload_rows
+        log_activity('reminder','due_dialog','opened',count=len(rows),p1=summary['p1'],p2=summary['p2'])
+        return True
+
+    def _selected_due_row(self,tree):
+        """Return the invoice behind the selected row of the due list."""
+        selection=tree.selection()
+        if not selection:return None
+        try:invoice_id=int(selection[0])
+        except (TypeError,ValueError):return None
+        with connect() as db:
+            return db.execute('SELECT * FROM invoices WHERE id=?',(invoice_id,)).fetchone()
+
+    def open_due_reminder(self,tree):
+        """Create the reminder for the selected row through the normal flow."""
+        row=self._selected_due_row(tree)
+        if row is None:return False
+        window=getattr(self,'_due_reminder_window',None)
+        try:
+            if window is not None and window.winfo_exists():window.destroy()
+        except tk.TclError:report_fault()
+        self._due_reminder_window=None
+        self.refresh()
+        # The invoice may sit in another tab than the open one, so select it
+        # only when it is really in the table that is showing.
+        if str(row['id']) in self.tree.get_children():self.tree.selection_set(str(row['id']))
+        try:
+            self.make_reminder()
+        finally:
+            # Whether the reminder was created or cancelled, the list is rebuilt
+            # so a finished invoice cannot stay in a window that says it is due.
+            refresh=getattr(self,'_due_reminder_refresh',None)
+            if callable(refresh):refresh()
+            self.refresh_tray()
+        return True
+
+    def locate_due_reminder(self,tree):
+        """Close the list and select the invoice in the main table instead."""
+        row=self._selected_due_row(tree)
+        if row is None:return False
+        window=getattr(self,'_due_reminder_window',None)
+        self._due_reminder_window=None
+        try:
+            if window is not None and window.winfo_exists():window.destroy()
+        except tk.TclError:report_fault()
+        self.select_invoice_filter('all')
+        self.refresh()
+        try:
+            self.tree.selection_set(str(row['id']));self.tree.see(str(row['id']))
+        except tk.TclError:report_fault()
+        self.deiconify();self.lift()
+        return True
 
     def choose_reminder_details(self,row,level):
         """Ask which logo and which optional line the reminder PDF should carry.

@@ -113,6 +113,64 @@ class DueReminderDialogTests(unittest.TestCase):
             self.assertEqual(info.call_args.args[0], "Time to create P1/P2")
             self.assertIn("Select an invoice in the list and click Create reminder.", info.call_args.args[1])
 
+    def test_rows_are_ordered_by_how_long_the_reminder_has_waited(self):
+        """The invoice that has been forgotten longest is the one that costs most."""
+        self.save_invoice("P1-SHORT", due_date=date.today() - timedelta(days=5))
+        self.save_invoice("P1-LONG", due_date=date.today() - timedelta(days=40))
+        self.save_invoice("P1-MID", due_date=date.today() - timedelta(days=12))
+
+        order = [row["invoice_no"] for _days, row, _level in self.app.due_reminder_rows()]
+
+        self.assertEqual(order, ["P1-LONG", "P1-MID", "P1-SHORT"])
+
+    def test_summary_counts_each_level_and_the_outstanding_total(self):
+        self.save_due_p1()
+        self.save_due_p2()
+        self.save_invoice("PARTLY", due_date=date.today() - timedelta(days=9), paid=250)
+
+        summary = self.app.due_reminder_summary(self.app.due_reminder_rows())
+
+        self.assertEqual((summary["p1"], summary["p2"]), (2, 1))
+        self.assertAlmostEqual(summary["total"], 2750.0)
+        self.assertFalse(summary["mixed"])
+
+    def test_a_summary_with_mixed_currencies_never_adds_them_up(self):
+        """Adding kronor and euro would produce a number that means nothing."""
+        self.save_due_p1("P1-SEK")
+        self.save_invoice("P1-EUR", due_date=date.today() - timedelta(days=9))
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET currency='EUR' WHERE invoice_no='P1-EUR'")
+
+        summary = self.app.due_reminder_summary(self.app.due_reminder_rows())
+
+        self.assertTrue(summary["mixed"])
+
+    def test_a_reminder_whose_draft_was_opened_is_not_offered_again(self):
+        """A level already sent or opened in the mail client is not news."""
+        self.save_due_p1("OPENED")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p1_draft_date=? WHERE invoice_no='OPENED'", (date.today().isoformat(),))
+
+        self.assertEqual(self.app.due_reminder_rows(), [])
+        self.assertEqual([row["invoice_no"] for _d, row, _l in self.app.due_reminder_rows(include_opened=True)], ["OPENED"])
+
+    def test_a_sent_reminder_is_not_offered_again(self):
+        self.save_due_p2("SENT")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p2_sent_date=? WHERE invoice_no='SENT'", (date.today().isoformat(),))
+
+        self.assertEqual(self.app.due_reminder_rows(), [])
+
+    def test_the_dialog_opens_a_working_list_when_a_window_exist(self):
+        """With a window available, the list is shown instead of a message box."""
+        self.save_due_p1()
+        parent = SimpleNamespace(make_reminder=lambda: None, _new_toplevel=lambda title: None,
+                                 show_due_reminder_window=lambda rows: ("window", len(rows)))
+        with patch.object(self.app.messagebox, "showinfo", create=True) as info:
+            result = self.app.show_due_reminder_dialog(parent=parent)
+        self.assertEqual(result, ("window", 1))
+        info.assert_not_called()
+
     def test_no_dialog_is_shown_when_no_reminder_is_due(self):
         self.save_invoice("WAITING")
         with patch.object(self.app.messagebox, "showinfo", create=True) as info:
