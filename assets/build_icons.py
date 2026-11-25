@@ -36,7 +36,6 @@ from app_info import APP_AUTHOR, APP_COPYRIGHT
 
 ASSETS = Path(__file__).resolve().parent
 UI_ASSETS = ASSETS / "icons"
-UI_HIDPI_ASSETS = UI_ASSETS / "hidpi"
 SCALE = 3
 SIZE = 512
 CANVAS = SIZE * SCALE
@@ -436,7 +435,6 @@ def main(output_dir: Path | None = None):
     target = Path(output_dir) if output_dir else ASSETS
     target.mkdir(parents=True, exist_ok=True)
     ui_target = target / "icons" if output_dir else UI_ASSETS
-    ui_hidpi_target = ui_target / "hidpi"
     data = metadata()
     icons = {}
     for size in (16, 24, 32, 40, 48, 64, 128, 256, 512, 1024):
@@ -479,7 +477,6 @@ def main(output_dir: Path | None = None):
     )
 
     ui_target.mkdir(parents=True, exist_ok=True)
-    ui_hidpi_target.mkdir(parents=True, exist_ok=True)
     for name in ACTION_ICONS:
         draw_action_icon(name, "#0B2447", size=UI_ICON_SIZE, accent="#0E8C82").save(
             ui_target / f"{name}.png", pnginfo=data, optimize=True,
@@ -488,10 +485,10 @@ def main(output_dir: Path | None = None):
             ui_target / f"{name}_light.png", pnginfo=data, optimize=True,
         )
         draw_action_icon(name, "#0B2447", size=UI_ICON_HIDPI_SIZE, accent="#0E8C82").save(
-            ui_hidpi_target / f"{name}.png", pnginfo=data, optimize=True,
+            ui_target / f"{name}_4x.png", pnginfo=data, optimize=True,
         )
         draw_action_icon(name, "#FFFFFF", size=UI_ICON_HIDPI_SIZE, accent="#FFFFFF").save(
-            ui_hidpi_target / f"{name}_light.png", pnginfo=data, optimize=True,
+            ui_target / f"{name}_light_4x.png", pnginfo=data, optimize=True,
         )
     print(
         f"Generated product branding from vector masters and "

@@ -81,7 +81,14 @@ class ReleaseVerificationTests(unittest.TestCase):
             "draft": draft,
             "prerelease": prerelease,
             "body": body,
-            "assets": assets or [],
+            "assets": (
+                [
+                    {"name": "PayPamin-Flow-Python.zip"},
+                    {"name": "PayPamin-Flow-Python.zip.sha256"},
+                ]
+                if assets is None
+                else assets
+            ),
         }
         if latest_tag is not None:
             answers["releases/latest"] = {"id": latest_id, "tag_name": latest_tag}
@@ -121,10 +128,23 @@ class ReleaseVerificationTests(unittest.TestCase):
         problems = self.verify(api=self.api(body="- Commit: `1111111`\n"))
         self.assertTrue(any("nämner inte commit" in problem for problem in problems))
 
-    def test_an_uploaded_file_means_the_release_is_not_the_source_code(self):
-        problems = self.verify(api=self.api(assets=[{"name": "PayPamin-Flow-Python.zip"}]))
-        self.assertTrue(any("uppladdade fil" in problem for problem in problems))
+    def test_missing_update_package_assets_is_a_problem(self):
+        problems = self.verify(api=self.api(assets=[]))
+        self.assertTrue(any("saknar uppdateringsfil" in problem for problem in problems))
         self.assertIn("PayPamin-Flow-Python.zip", " ".join(problems))
+
+    def test_an_unexpected_uploaded_file_is_a_problem(self):
+        problems = self.verify(
+            api=self.api(
+                assets=[
+                    {"name": "PayPamin-Flow-Python.zip"},
+                    {"name": "PayPamin-Flow-Python.zip.sha256"},
+                    {"name": "PayPamin-Flow-Windows.zip"},
+                ]
+            )
+        )
+        self.assertTrue(any("oväntade uppladdade fil" in problem for problem in problems))
+        self.assertIn("PayPamin-Flow-Windows.zip", " ".join(problems))
 
     def test_a_release_that_is_not_marked_latest_is_a_problem(self):
         problems = self.verify(api=self.api(latest_tag="v0.5.0", latest_id=111))

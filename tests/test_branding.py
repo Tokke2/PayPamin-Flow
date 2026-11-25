@@ -221,7 +221,7 @@ class BrandingTests(unittest.TestCase):
                     minimum, maximum = alpha.getextrema()
                     self.assertEqual(minimum, 0)
                     self.assertGreater(maximum, 240)
-                with self.subTest(icon=name, variant=f"hidpi{suffix}"), Image.open(ASSETS / "icons" / "hidpi" / f"{name}{suffix}.png") as hidpi_icon:
+                with self.subTest(icon=name, variant=f"{suffix}_4x"), Image.open(ASSETS / "icons" / f"{name}{suffix}_4x.png") as hidpi_icon:
                     self.assertEqual(hidpi_icon.size, (64, 64))
                     self.assertEqual(hidpi_icon.mode, "RGBA")
                     alpha = hidpi_icon.getchannel("A")

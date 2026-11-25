@@ -70,11 +70,15 @@ class WorkflowGuardTests(unittest.TestCase):
     def test_pull_requests_still_run_the_same_matrix(self):
         self.assertIn("pull_request:", self.workflow)
 
-    def test_the_release_carries_the_source_code_instead_of_an_upload(self):
-        """Nothing is uploaded: GitHub's archive for the tag is the release."""
+    def test_the_release_publishes_backward_compatible_python_package(self):
+        """Both the tag archive and PayPamin-Flow-Python.zip + .sha256 must ship."""
         self.assertIn("types: [published]", self.workflow)
         self.assertNotIn("publish-python-package:", self.workflow)
-        self.assertNotIn("gh release upload", self.workflow)
+        refresh = self.workflow.split("refresh-release-files:", 1)[1]
+        self.assertIn("packaging/package_release.py", refresh)
+        self.assertIn("PayPamin-Flow-Python.zip", refresh)
+        self.assertIn("PayPamin-Flow-Python.zip.sha256", refresh)
+        self.assertIn("gh release upload", refresh)
 
     def test_permissions_stay_read_only_at_the_top_level(self):
         self.assertIn("permissions:\n  contents: read\n", self.workflow)
@@ -91,9 +95,8 @@ class WorkflowGuardTests(unittest.TestCase):
         self.assertIn("python assets/verify_branding.py", self.workflow)
         self.assertTrue((ROOT / "assets" / "verify_branding.py").is_file())
 
-    def test_release_assets_are_never_uploaded(self):
-        """The release is the tag's source archive; an upload would break that."""
-        self.assertNotIn("gh release upload", self.workflow)
+    def test_ci_never_uses_cross_job_artifact_actions(self):
+        """Release assets are built directly in refresh-release-files without artifact hops."""
         self.assertNotIn("upload-artifact", self.workflow)
         self.assertNotIn("download-artifact", self.workflow)
 

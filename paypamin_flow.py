@@ -2978,7 +2978,7 @@ class ReminderApp(tk.Tk):
         if key in self._action_icons:return self._action_icons[key]
         suffix='_light' if inverse else ''
         scaled_photo=getattr(self,'_scaled_photo',None)
-        hidpi_path=ICON_DIR/'icons'/'hidpi'/f'{name}{suffix}.png'
+        hidpi_path=ICON_DIR/'icons'/f'{name}{suffix}_4x.png'
         if getattr(self,'dpi_scale',1.0)>1.0 and callable(scaled_photo) and hidpi_path.is_file():
             image=scaled_photo(hidpi_path,16)
             if image is not None:

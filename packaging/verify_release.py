@@ -38,10 +38,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app_info import APP_VERSION, is_python_package_file  # noqa: E402
+from app_info import APP_VERSION, PYTHON_RELEASE_ASSET, is_python_package_file  # noqa: E402
 from update_installer import source_archive_root  # noqa: E402
 
 ARCHIVE_URL = "https://github.com/{repository}/archive/refs/tags/{tag}.zip"
+EXPECTED_RELEASE_ASSETS = frozenset({PYTHON_RELEASE_ASSET, f"{PYTHON_RELEASE_ASSET}.sha256"})
 RETRY_ATTEMPTS = 8
 RETRY_DELAY_SECONDS = 10.0
 
@@ -219,10 +220,16 @@ def verify(
                 f"Releasens beskrivning nämner inte commit {commit[:7]}, så sidan beskriver en annan kod."
             )
         assets = release.get("assets") or []
-        if assets:
-            names = ", ".join(str(asset.get("name") or "?") for asset in assets[:5])
+        asset_names = {str(asset.get("name") or "") for asset in assets if asset.get("name")}
+        missing_assets = sorted(EXPECTED_RELEASE_ASSETS - asset_names)
+        if missing_assets:
             problems.append(
-                f"Releasen har {len(assets)} uppladdade fil(er) ({names}); den ska bara vara källkoden."
+                f"Releasen saknar uppdateringsfil(er) för befintliga installationer: {', '.join(missing_assets)}."
+            )
+        extra_assets = sorted(asset_names - EXPECTED_RELEASE_ASSETS)
+        if extra_assets:
+            problems.append(
+                f"Releasen har oväntade uppladdade fil(er) ({', '.join(extra_assets[:5])})."
             )
 
     payload, failure = _fetch_archive(

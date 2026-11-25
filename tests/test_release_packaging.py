@@ -185,6 +185,61 @@ class ReleasePackagingTests(unittest.TestCase):
             self.assertTrue((validated / "ui_icons.py").is_file())
             self.assertTrue((validated / "assets" / "paypamin_logo.png").is_file())
             self.assertTrue((validated / "assets" / "icons" / "save_light.png").is_file())
+            self.assertTrue((validated / "assets" / "icons" / "save_light_4x.png").is_file())
+
+    def test_built_package_is_accepted_by_installed_0_6_0_b2f6ac48f496_rules(self):
+        """Existing 0.6.0 installs (b2f6ac48f496) only allow <=3-part asset paths."""
+        from pathlib import PurePosixPath
+
+        def legacy_is_python_package_file(filename: str) -> bool:
+            if filename == "test-results.txt":
+                return False
+            path = PurePosixPath(filename)
+            if (
+                not filename
+                or filename.endswith("/")
+                or "\\" in filename
+                or path.is_absolute()
+                or ".." in path.parts
+                or any(not part or part == "." or part.startswith(".") for part in path.parts)
+            ):
+                return False
+            if len(path.parts) == 1:
+                if filename in {"LICENSE", "NOTICE"}:
+                    return True
+                return path.suffix.lower() in {".py", ".pyw", ".txt", ".md", ".vbs", ".sh", ".command"}
+            if len(path.parts) == 2 and path.parts[0] == "assets":
+                return path.suffix.lower() in {".png", ".svg", ".ico", ".icns"}
+            if len(path.parts) == 3 and path.parts[:2] in (("assets", "icons"), ("assets", "print")):
+                return path.suffix.lower() in {".png", ".pdf", ".svg", ".txt"}
+            if len(path.parts) == 2 and path.parts[0] == "packaging":
+                return filename in {
+                    "packaging/install_linux.sh",
+                    "packaging/paypamin-flow.desktop",
+                }
+            return False
+
+        with tempfile.TemporaryDirectory() as folder:
+            source_copy = Path(folder) / "src"
+            shutil.copytree(
+                ROOT,
+                source_copy,
+                ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", ".pytest_cache"),
+            )
+            output = Path(folder) / "dist"
+            asset, checksum, _manifest = packaging.build_python_package(
+                source_copy,
+                output,
+                release_id="444043893",
+                release_commit="8" * 40,
+            )
+            self.assertTrue(asset.is_file())
+            self.assertTrue(checksum.is_file())
+            with zipfile.ZipFile(asset) as archive:
+                infos = [info for info in archive.infolist() if not info.is_dir()]
+                self.assertLessEqual(len(infos), 500)
+                disallowed = [info.filename for info in infos if not legacy_is_python_package_file(info.filename)]
+                self.assertEqual(disallowed, [], f"b2f6ac48f496 would reject: {disallowed}")
 
 
 if __name__ == "__main__":
