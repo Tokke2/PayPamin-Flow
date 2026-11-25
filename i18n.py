@@ -892,6 +892,7 @@ _ENGLISH = {
     "Sista betalningsdag: {date} (framflyttad från {raw} – {reason} till nästa svenska bankdag)": "Payment deadline: {date} (moved from {raw} – {reason} to the next Swedish banking day)",
     "Förfallodatumet infaller på {reason} ({raw}). Nästa svenska bankdag är {bankday}.": "The due date falls on {reason} ({raw}). The next Swedish banking day is {bankday}.",
     "Flytta till nästa bankdag": "Move to next banking day",
+    "Lägg faktura-PDF:er i mappen (eller valfri undermapp):\n{folder}": "Place invoice PDFs in the folder (or any subfolder):\n{folder}",
 }
 
 

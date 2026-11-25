@@ -73,7 +73,7 @@ from invoice_parser import (
     clean_invoice_note, extract_invoice_sections, normalize_date,
     parse_amount_value, parse_invoice_text,
 )
-from import_watcher import ImportFolderMonitor
+from import_watcher import ImportFolderMonitor, iter_import_pdfs
 import learning
 from ledger_import import (
     LedgerImportError, apply_ledger_import, ensure_ledger_schema,
@@ -158,7 +158,7 @@ from accessibility import (
 )
 from quiet_faults import log_summary, report_fault
 
-IMPORT_WATCH_INTERVAL_MS = 5000
+IMPORT_WATCH_INTERVAL_MS = 3000
 LEDGER_REMINDER_INTERVAL_MS = 15 * 60 * 1000
 ERROR_LOG_REFRESH_INTERVAL_MS = 60 * 1000
 CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
@@ -1186,6 +1186,108 @@ def refresh_json_journal(parent=None):
             parent=parent,
         )
         return False
+
+
+_BUSINESS_NAME_PATTERN=re.compile(
+    r'(?i)(?:\b(?:ab|aktiebolag|hb|handelsbolag|kb|kommanditbolag|ek\.\s*för\.?|'
+    r'ekonomisk\s+förening|asa|as|oy|oyj|a/s|ltd\.?|limited|gmbh|inc\.?|corp\.?|'
+    r'llc|plc|b\.v\.|s\.a\.|kommun|region|myndighet|stiftelse|förening)\b)'
+)
+
+
+def infer_imported_customer_type(customer,db=None):
+    """Infer business vs private customer safely from saved history or company suffix."""
+    name=str(customer or '').strip()
+    if not name:return CUSTOMER_PRIVATE
+    own_db=db is None
+    conn=connect() if own_db else db
+    try:
+        prev=conn.execute(
+            'SELECT customer_type FROM invoices WHERE lower(customer)=lower(?) ORDER BY id DESC LIMIT 1',
+            (name,),
+        ).fetchone()
+        if prev is not None and prev['customer_type']:
+            return normalize_customer_type(prev['customer_type'])
+    except sqlite3.Error:
+        report_fault()
+    finally:
+        if own_db:
+            conn.close()
+    if _BUSINESS_NAME_PATTERN.search(name):
+        return CUSTOMER_BUSINESS
+    return CUSTOMER_PRIVATE
+
+
+def _sanitize_auto_emails(raw_value):
+    """Keep valid comma/semicolon-separated emails without failing on OCR noise."""
+    valid=[]
+    for chunk in str(raw_value or '').replace(';',',').split(','):
+        part=chunk.strip()
+        if not part:continue
+        try:
+            valid.extend(parse_email_addresses(part))
+        except EmailAddressError:
+            report_fault()
+    return ', '.join(valid)
+
+
+def try_auto_save_imported_invoice(guess,source,source_hash):
+    """Automatically save an imported PDF invoice when core fields are complete.
+
+    Returns ``True`` if saved directly to SQLite without user dialogs, or
+    ``False`` if any required field is missing/ambiguous and interactive review
+    is needed.
+    """
+    if not isinstance(guess,dict):return False
+    customer=str(guess.get('customer') or '').strip()
+    invoice_no=str(guess.get('invoice_no') or '').strip()
+    due_raw=normalize_date(str(guess.get('due_date') or '').strip()) or str(guess.get('due_date') or '').strip()
+    if not customer or not invoice_no or not dparse(due_raw):
+        return False
+    raw_amount=guess.get('amount')
+    if isinstance(raw_amount,(int,float)):
+        amount=float(raw_amount)
+    else:
+        parsed_amt=parse_amount_value(str(raw_amount or ''))
+        amount=float(parsed_amt) if parsed_amt is not None else 0.0
+    if amount<=0:
+        return False
+    inv_date_raw=str(guess.get('invoice_date') or '').strip()
+    inv_date=normalize_date(inv_date_raw) or (inv_date_raw if dparse(inv_date_raw) else '')
+    currency_candidate=str(guess.get('currency') or 'SEK').strip()
+    currency=normalize_currency(currency_candidate) if is_valid_currency(currency_candidate) else 'SEK'
+    enriched=apply_saved_customer_contact({
+        'customer':customer,
+        'invoice_no':invoice_no,
+        'invoice_date':inv_date,
+        'due_date':due_raw,
+        'template_vendor':str(guess.get('template_vendor') or '').strip(),
+        'amount':amount,
+        'currency':currency,
+        'paid':0.0,
+        'email':_sanitize_auto_emails(guess.get('email','')),
+        'source':source,
+        'source_hash':source_hash,
+        'note':clean_invoice_note(str(guess.get('note') or '')),
+        'reviewed':1,
+        'logo_file':guess.get('logo_file'),
+        'customer_type':infer_imported_customer_type(customer),
+        'fee_agreement':normalize_agreement(setting('fee_agreement')),
+    })
+    enriched['email']=_sanitize_auto_emails(enriched.get('email',''))
+    duplicate=save_invoice_record(enriched)
+    if duplicate is not None:
+        return False
+    try:
+        export_reminder_journal(DB_PATH,JOURNAL_PATH)
+    except Exception:
+        logger.exception('JSON journal refresh after automatic PDF import failed')
+    log_activity(
+        'import','invoice_auto_imported','completed',
+        invoice_no=invoice_no,customer=customer,source=Path(source).name,
+    )
+    logger.info('Automatically imported invoice from import folder: invoice=%s customer=%s source=%s',invoice_no,customer,source)
+    return True
 
 
 def show_duplicate_invoice(duplicate,parent=None):
@@ -5595,11 +5697,10 @@ class ReminderApp(tk.Tk):
             return
         self._import_scan_running=True
         try:
-            IMPORT_DIR.mkdir(exist_ok=True)
-            files=sorted(Path(p) for p in paths) if paths is not None else sorted(
-                p for p in IMPORT_DIR.iterdir() if p.is_file() and p.suffix.lower()=='.pdf')
+            IMPORT_DIR.mkdir(parents=True,exist_ok=True)
+            files=sorted(Path(p) for p in paths) if paths is not None else iter_import_pdfs(IMPORT_DIR)
             if not files:
-                if not automatic:messagebox.showinfo(_('Importmapp tom'),_('Lägg faktura-PDF:er i mappen:\n{folder}',folder=IMPORT_DIR),parent=self)
+                if not automatic:messagebox.showinfo(_('Importmapp tom'),_('Lägg faktura-PDF:er i mappen (eller valfri undermapp):\n{folder}',folder=IMPORT_DIR),parent=self)
                 return
             imported=skipped=failed=duplicates=paid_skipped=0
             for path in files:
@@ -5627,6 +5728,9 @@ class ReminderApp(tk.Tk):
                             vendor=self.guess_supplier(section.text,path=str(path) if len(candidates)==1 else None,page_indexes=section.page_indexes)
                             guess['template_vendor']=vendor
                             guess=self.apply_saved_zones(str(path),vendor,guess,page_indexes=section.page_indexes)
+                            if try_auto_save_imported_invoice(guess,source,candidate_hash):
+                                imported+=1
+                                continue
                             guess=self.preview_invoice(str(path),guess,vendor,page_indexes=section.page_indexes)
                             self.add_invoice(source=source,guess=guess,source_hash=candidate_hash)
                             with connect() as db:
@@ -5639,9 +5743,9 @@ class ReminderApp(tk.Tk):
                     logger.exception('Import folder scan failed for %s',path.name);failed+=1
             logger.info('Import folder scan complete: automatic=%s imported=%d duplicates=%d paid_skipped=%d skipped=%d failed=%d',automatic,imported,duplicates,paid_skipped,skipped,failed)
             self.refresh()
-            # Automatic duplicate-only and user-cancelled batches must not add
-            # another popup after the review dialog. Manual scans always report.
-            if not automatic or imported or failed:
+            # Automatic background imports stay non-blocking unless an error occurred;
+            # manual scans always display the summary dialog.
+            if not automatic or failed:
                 title=_('Automatisk import klar') if automatic else _('Skanning klar')
                 messagebox.showinfo(title,_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nBetalda som hoppades över: {paid}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,paid=paid_skipped,skipped=skipped,failed=failed),parent=self)
             if not automatic or imported:

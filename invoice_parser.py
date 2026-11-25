@@ -365,8 +365,16 @@ def parse_invoice_text(text):
                     if ln and not re.search(r'^(?:kundnr|kundnummer|org(?:anis)?ationsnr|fakturanummer|datum|adress|er referens)\b',ln,re.I) and not re.fullmatch(r'\d+',ln):
                         customer=ln;break
     if not customer:
-        m=re.search(r'(?im)^\s*(?:faktureras\s*till|bill\s*to)\s*[:]?\s*([^\n]+)',cleaned)
-        if m:customer=m.group(1).strip()
+        m=re.search(r'(?im)^\s*(?:faktureras\s*till|bill\s*to)\s*[:]?\s*([^\n]*)',cleaned)
+        if m:
+            candidate=m.group(1).strip()
+            if candidate:
+                customer=candidate
+            else:
+                for ln in cleaned[m.end():].splitlines()[:4]:
+                    ln=ln.strip()
+                    if ln and not re.search(r'^(?:kundnr|kundnummer|org(?:anis)?ationsnr|fakturanummer|invoice|date|datum|adress)\b',ln,re.I):
+                        customer=ln;break
     # Prefer explicit invoice text and support multiline/table-based descriptions.
     description = _description_from_lines(lines)
     return {'invoice_no':number,'invoice_date':invoice_date,'due_date':due,'amount':amount,'currency':detect_invoice_currency(cleaned,payable_labels),'customer':customer,'note':description}

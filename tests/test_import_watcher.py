@@ -4,7 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from import_watcher import ImportFolderMonitor
+from import_watcher import ImportFolderMonitor, iter_import_pdfs
+from invoice_parser import InvoiceSection
 from test_database import load_headless_app
 
 
@@ -61,6 +62,23 @@ class ImportFolderMonitorTests(unittest.TestCase):
     def test_missing_folder_is_safe(self):
         monitor = ImportFolderMonitor(self.folder / "missing")
         self.assertEqual(monitor.poll(), [])
+
+    def test_subfolders_inside_import_are_monitored_recursively(self):
+        sub_a = self.folder / "Tadega"
+        sub_b = self.folder / "2026-11" / "Bilrutan"
+        hidden = self.folder / ".hidden"
+        sub_a.mkdir(parents=True)
+        sub_b.mkdir(parents=True)
+        hidden.mkdir(parents=True)
+        pdf_a = sub_a / "faktura-101.pdf"
+        pdf_b = sub_b / "faktura-102.PDF"
+        (hidden / "ignored.pdf").write_bytes(b"hidden")
+        pdf_a.write_bytes(b"pdf-a")
+        pdf_b.write_bytes(b"pdf-b")
+        self.assertEqual(iter_import_pdfs(self.folder), sorted([pdf_a, pdf_b]))
+        self.assertEqual(self.monitor.poll(), [])
+        self.assertEqual(self.monitor.poll(), sorted([pdf_a, pdf_b]))
+        self.assertEqual(self.monitor.poll(), [])
 
 
 class AutomaticImportUiTests(unittest.TestCase):
@@ -133,6 +151,54 @@ class AutomaticImportUiTests(unittest.TestCase):
         )
         with patch.object(self.app, "setting", return_value="1"):
             self.app.ReminderApp._run_scheduled_import_scan(fake)
+
+    def test_automatic_scan_imports_complete_subfolder_invoices_without_dialogs(self):
+        self.app.DB_PATH = Path(self.temporary.name) / "auto-import.sqlite3"
+        self.app.JOURNAL_PATH = Path(self.temporary.name) / "journal.json"
+        import_dir = Path(self.temporary.name) / "import"
+        nested = import_dir / "Kunder" / "2026"
+        nested.mkdir(parents=True)
+        self.app.IMPORT_DIR = import_dir
+        self.app.init_db()
+
+        pdf = nested / "faktura-5001.pdf"
+        pdf.write_bytes(b"complete invoice pdf bytes")
+        text = (
+            "Fakturanummer: 5001\n"
+            "Fakturadatum: 2026-11-01\n"
+            "Förfallodatum: 2026-12-01\n"
+            "Kund: Laxå Glasmästeri AB\n"
+            "Avser: Glasbyte\n"
+            "ATT BETALA 4 250,00 SEK\n"
+        )
+        refreshed = []
+        fake = SimpleNamespace(
+            _import_scan_running=False,
+            guess_supplier=lambda *args, **kwargs: "Tadega AB",
+            apply_saved_zones=lambda path, vendor, guess, page_indexes=None: guess,
+            preview_invoice=lambda *args, **kwargs: self.fail("Complete auto-import must not open preview dialog"),
+            add_invoice=lambda **kwargs: self.fail("Complete auto-import must not open form dialog"),
+            refresh=lambda: refreshed.append(True),
+        )
+        with (
+            patch.object(self.app, "extract_invoice_sections", return_value=[InvoiceSection((0,), text)]),
+            patch.object(self.app.messagebox, "showinfo", create=True) as info,
+            patch.object(self.app, "show_due_reminder_dialog"),
+        ):
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True)
+
+        info.assert_not_called()
+        self.assertEqual(refreshed, [True])
+        with self.app.connect() as db:
+            row = db.execute("SELECT * FROM invoices WHERE invoice_no='5001'").fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["customer"], "Laxå Glasmästeri AB")
+        self.assertEqual(row["due_date"], "2026-12-01")
+        self.assertEqual(row["amount"], 4250.0)
+        self.assertEqual(row["currency"], "SEK")
+        self.assertEqual(row["template_vendor"], "Tadega AB")
+        self.assertEqual(row["customer_type"], "business")
+        self.assertEqual(row["reviewed"], 1)
 
 
 if __name__ == "__main__":
