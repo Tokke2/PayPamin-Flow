@@ -1,0 +1,38 @@
+# PayPamin Flow — Förslagsbank (Unika funktioner som konkurrenter saknar)
+
+> Alla förslag i den aktiva listan är helt nya och har aldrig presenterats i tidigare sessioner. Tidigare presenterade förslag bevaras längst ned som spärrlista så att 10-meddelanderegeln och 25-förslagsregeln aldrig återanvänder ett förslag.
+
+## Aktiva nya förslag (25 st — 2026-11-25)
+
+1. **Lokal SIE-4-bokföringsexport för påminnelseavgifter och kundbetalningar** — Generera färdiga `.se`-verifikationsfiler (SIE 4) direkt på datorn när en faktura slutbetalas inklusive lagstadgad påminnelseavgift (60 kr) eller förseningsersättning (450 kr), så bokföringen i Visma, Fortnox eller Bokio uppdateras utan manuell kontering.
+2. **Interaktiv betalningsplan / avbetalningsöverenskommelse (PDF + bevakning)** — Skapa en juridiskt tydlig avbetalningsplan på 2–6 delbetalningar med egna förfallodatum, där PayPamin Flow bevakar varje delbetalning lokalt och pausar P2/Kronofogden så länge kunden följer planen.
+3. **Automatisk kontroll av kreditfaktura mot debetfaktura i importmappen** — Upptäck kreditfakturor vid PDF-import, matcha dem mot ursprungsfakturan via fakturanummer eller referens och räkna ned kvarstående belopp automatiskt efter användarens bekräftelse.
+4. **Helgdags- och bankdagskalender för förfallodatum och frister (Svenska bankdagar)** — Justera automatiskt betalningsfrister på P1/P2 så att sista betalningsdag aldrig hamnar på lördag, söndag, midsommarafton eller röd dag enligt svensk bankkalender.
+5. **Kundspecifik kontaktlogg för telefonsamtal och muntliga löften ("Lovade betala fredag")** — Snabbnotering på fakturaraden med datumstyrd snooze-påminnelse som lyfter tillbaka ärendet exakt dagen efter kundens utlovade betaldatum om pengarna uteblivit.
+6. **Tvåspråkig påminnelse-PDF på kundnivå (Svenska / Engelska per kund)** — Låt utländska kunder få engelskspråkiga P1/P2-brev och e-postutkast automatiskt utifrån kundkortets valda språk, medan appens eget gränssnitt förblir på svenska.
+7. **Samlingspåminnelse (Kontoutdrag för kunder med flera förfallna fakturor)** — Slå ihop 2–15 förfallna fakturor för samma kund till ett överskådligt samlingsbrev med specifikation per faktura och korrekt engångsavgift per enskild fordran.
+8. **Lokal ISO 20022 `camt.054` / BgMax-betalfilsavläsning** — Dra in bankens återrapporteringsfil från Bankgirot eller internetbanken direkt i appen för att pricka av betalda fakturor och delbetalningar med exakt betaldatum helt utan API-koppling.
+9. **Förhandskontroll av motpartsstatus via lokal Bolagsverket/org.nr-validering (Luhn + bolagsform)** — Identifiera enskild firma kontra aktiebolag, handelsbolag, kommun och privatperson direkt från organisations-/personnummerstrukturen så rätt avgiftsregel (4 § vs 4 a §) föreslås direkt.
+10. **Tvist- och invändningsläge med fryst påminnelsetid ("Saklig invändning enligt god inkassosed")** — Ett dedikerat tviststatusläge som låser P2 och Kronofogden-eskaleringsflödet med obligatorisk orsaksnotering så man aldrig bryter mot god inkassosed vid bestridd faktura.
+11. **Visuell tidslinje per faktura från fakturadatum till slutbetalning** — En kompakt horisontell händelsetidslinje i detaljpanelen som visar Faktura → Förfallodag → P1 → E-post → Delbetalning → P2 → Betald med exakt antal dagar mellan stegen.
+12. **Malltestare ("Torrkör leverantörsmall mot 5 PDF:er")** — Testa en sparad PDF-zonmall mot flera fakturor i en mapp på en gång och se avlästa värden sida vid sida innan fakturorna importeras skarpt.
+13. **Säker skrivskyddad granskningsvy för revisor ("Revisorspaket ZIP")** — Exportera ett självständigt, lösenordsskyddat eller checksumme-signerat granskningspaket med CSV-sammanfattning, påminnelse-PDF:er och händelselogg för valt räkenskapsår.
+14. **Anpassningsbara e-postsignaturer och avsändarblock per leverantörsmall** — Koppla kontaktperson, telefonnummer och öppettider för fakturafrågor till respektive leverantörsmall så kundmejl alltid visar rätt avsändaruppgifter.
+15. **Intelligenta varningar för postnummer/adressavvikelser och ogiltiga mottagare före PDF-utskrift** — Flagga fakturor som saknar postadress eller har ofullständig e-post innan utskrifts- eller utskicksrundan påbörjas.
+16. **Fönsterutbrytning för dubbelbildskärm ("Dockningsbar PDF-förhandsgranskning bredvid listan")** — Visa markerad originalfaktura eller påminnelse-PDF live på skärm 2 medan du navigerar med piltangenterna i fakturalistan på skärm 1.
+17. **Lokal kassaflödesprognos för kommande 7 / 14 / 30 dagar** — Beräkna förväntat inbetalningsflöde viktat efter kundens historiska betalningsmönster efter P1 respektive P2, helt lokalt utan molnanalys.
+18. **Snabbimport från urklipp / skärmklipp för pappersfakturor** — Klistra in en bild eller text direkt från urklipp (`Ctrl+V`) för lokal OCR-tolkning när en faktura kommit via skanner eller mejltext i stället för PDF.
+19. **Spårbar makulerings- och kreditlogg för redan utskickad påminnelse ("Återkallelsebrev PDF")** — Generera ett artigt ensidigt återkallelsemeddelande som PDF/e-postutkast om betalning korsat påminnelsen på bankgirot samma dag.
+20. **Säkerhetskopieringsverifiering med "Provläs utan att skriva över"** — Granska exakt antal fakturor, kunder, mallar och senaste ändringsdatum inuti en `.zip`-säkerhetskopia innan du bestämmer dig för att återställa den.
+21. **Tangentbordsstyrd kommandopalett (`Ctrl+K`)** — Hoppa blixtsnabbt till valfri kund, fakturanummer, vyflik eller åtgärd ("Skapa P1 för 10452", "Öppna papperskorg", "Byt tema") utan att släppa tangentbordet.
+22. **Automatisk mapporganisering av färdigbetalda original-PDF:er efter år/månad** — Valbar regel som flyttar eller kopierar slutbetalda faktura-PDF:er till en prydlig lokal ` betalda/2026-11/ `-struktur utan att bryta länken i historikvyn.
+23. **Kundkort med historisk betaltidsprofil ("Betalar i snitt +6 dagar efter P1")** — Visa direkt på kundkortet och i detaljraden hur snabbt just den kunden brukar betala efter förfallodag respektive första påminnelse.
+24. **Utskriftskö för fönsterkuvert (Svensk C5 H2-standardplacering)** — Valbar kuvertanpassad adressplacering på påminnelse-PDF:en samt sammanslagen utskrifts-PDF för dagens alla brevutskick i ett enda svep.
+25. **Hälsokontrollpanel för lokal miljö ("Systemstatus & Självtest")** — En överskådlig dialog i Hjälp-menyn som visar status för SQLite-integritet, diskutrymme, PDF-motor, OCR-språkpaket, loggarkiv och senaste säkerhetskopia på 1 sekund.
+
+---
+
+## Tidigare presenterade / förbrukade förslag (spärrlista — återanvänd ej)
+
+Följande 25 förslag presenterades i en tidigare session (2026-11-25) och får ej återanvändas i nya listor:
+1. Swish-QR på påminnelse-PDF · 2. TonChange-trappa · 3. Betalningsrisk-poäng per kund · 4. Åldersfördelningsrapport (30/60/90) · 5. Räntekalkyl enligt räntelagen · 6. Kvittensläge · 7. Betalningskalender · 8. Batch-läge med tangentbordsflöde · 9. Offline-OCR-fallback · 10. Utökad dubbeldetektering · 11. OCR-nummer-validering · 12. Företagsprofiler · 13. Bevakade mappar per profil · 14. Kolumnprofiler · 15. Färgmarkerad urgenskolumn · 16. E-postutkast-generator · 17. Kronofogden-checklista-generator · 18. Dagboksutdrag för domstol · 19. Smart filnamnskonvention · 20. Statistikpanel · 21. Lokal krypterad databas · 22. Schemalagda säkerhetskopior · 23. Tysta timmar + energisnål schemaläggning · 24. Tillgänglighetsläge · 25. Förstagångs-guide.

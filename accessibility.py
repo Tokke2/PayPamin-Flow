@@ -1067,16 +1067,24 @@ class ScrollableForm:
         """
         self._content_changed()
         try:
+            self.form.update_idletasks()
+        except Exception:
+            report_fault()
+        try:
             content_width = max(1, int(self.form.winfo_reqwidth()))
             content_height = max(1, int(self.form.winfo_reqheight()))
-            self.canvas.configure(
-                width=min(int(max_width), content_width),
-                height=min(int(max_height), content_height),
-            )
-            return (
-                min(int(max_width), content_width),
-                min(int(max_height), content_height),
-            )
+            capped_width = min(int(max_width), content_width)
+            capped_height = min(int(max_height), content_height)
+            self.canvas.configure(width=capped_width, height=capped_height)
+            if content_height <= capped_height + 1:
+                self.vertical.grid_remove()
+            else:
+                self.vertical.grid()
+            if content_width <= capped_width + 1:
+                self.horizontal.grid_remove()
+            else:
+                self.horizontal.grid()
+            return (capped_width, capped_height)
         except Exception:
             return None
 
@@ -1130,6 +1138,7 @@ class ScrollableForm:
             bounds = self.canvas.bbox("all")
             if bounds:
                 self.canvas.configure(scrollregion=bounds)
+            self._sync_vertical_scrollbar()
             self._sync_horizontal_scrollbar()
         finally:
             self._syncing = False
@@ -1143,6 +1152,19 @@ class ScrollableForm:
         except Exception:
             report_fault()
         self._content_changed()
+
+    def _sync_vertical_scrollbar(self):
+        try:
+            viewport_height = int(self.canvas.winfo_height())
+            required_height = int(self.form.winfo_reqheight())
+            if viewport_height > 1:
+                if required_height > viewport_height + 1:
+                    self.vertical.grid()
+                else:
+                    self.vertical.grid_remove()
+                    self.canvas.yview_moveto(0.0)
+        except Exception:
+            report_fault()
 
     def _sync_horizontal_scrollbar(self):
         try:

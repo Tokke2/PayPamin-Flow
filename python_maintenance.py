@@ -125,6 +125,7 @@ def install_python_addons(
     def invoke(user_site: bool = False):
         return run(
             command(user_site),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,

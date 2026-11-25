@@ -865,6 +865,23 @@ _ENGLISH = {
     "Avgift per påminnelse": "Fee per reminder",
     "Avgift per påminnelse enligt avtal, 150 kr.": "Fee per reminder by agreement, SEK 150.",
     "Avgiften {fee} är högre än taket {cap} i 4 §. Mot en privatperson kan beloppet inte krävas in; välj den lagstadgade avgiften för privatpersoner.": "The fee {fee} is above the {cap} kr cap in 4 §. It cannot be enforced against a private individual; choose the statutory fee for private individuals.",
+    "Flytta kolumn vänster": "Move column left",
+    "Flytta kolumn höger": "Move column right",
+    "Återställ kolumnordning": "Reset column order",
+    "Hantera aktiva fel…": "Manage active errors…",
+    "Hantera aktiva fel": "Manage active errors",
+    "Aktiva olösta fel": "Active unresolved errors",
+    "Tidpunkt": "Timestamp",
+    "Nivå": "Level",
+    "Källa": "Source",
+    "Sammanfattning": "Summary",
+    "{count} olösta fel i den aktiva felloggen. Äldre än 30 dagar rensas automatiskt.": "{count} unresolved errors in the active error log. Entries older than 30 days are pruned automatically.",
+    "Felloggen kunde inte läsas. Se den tekniska loggen.": "The error log could not be read. Check the technical log.",
+    "Markera ett eller flera fel i listan först.": "Select one or more errors in the list first.",
+    "Alla aktiva fel är nu markerade som åtgärdade.": "All active errors are now marked as resolved.",
+    "Markera valda som åtgärdade": "Mark selected as resolved",
+    "Markera alla som åtgärdade": "Mark all as resolved",
+    "Passa sida": "Fit page",
 }
 
 

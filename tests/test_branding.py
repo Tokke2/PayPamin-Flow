@@ -65,7 +65,7 @@ class BrandingTests(unittest.TestCase):
         from PIL import Image
 
         icons = sorted(ASSETS.rglob("*.png"))
-        self.assertEqual(len(icons), 72)
+        self.assertEqual(len(icons), 12 + len(ICON_NAMES) * 4)
         for path in icons:
             with self.subTest(icon=path.relative_to(ASSETS)), Image.open(path) as icon:
                 self.assertEqual(icon.info.get("Title"), APP_NAME)
@@ -79,6 +79,7 @@ class BrandingTests(unittest.TestCase):
             "paypamin_flow_small.svg",
             "paypamin_flow_tiny.svg",
             "paypamin_logo.svg",
+            "paypamin_logo_dark.svg",
             "print/paypamin_logo_print.svg",
             "print/paypamin_logo_print_mono.svg",
         ):
@@ -88,6 +89,8 @@ class BrandingTests(unittest.TestCase):
                 self.assertNotIn("font-family", text)
                 self.assertNotIn("<filter", text)
                 self.assertNotIn("xlink:href", text)
+                self.assertNotIn("scale(1,-1)", text)
+                self.assertIn('id="brand-mark', text)
                 self.assertIn("Copyright ©", text)
                 self.assertIn(APP_AUTHOR, text)
                 root = ET.fromstring(text)
@@ -199,11 +202,15 @@ class BrandingTests(unittest.TestCase):
             self.assertEqual(logo.info.get("Title"), APP_NAME)
             self.assertEqual(logo.info.get("Author"), APP_AUTHOR)
             self.assertEqual(logo.info.get("Copyright"), APP_COPYRIGHT)
+        with Image.open(ASSETS / "paypamin_logo_dark_1024.png") as dark_logo:
+            self.assertEqual(dark_logo.size, (1024, 171))
+            self.assertEqual(dark_logo.mode, "RGBA")
+            self.assertEqual(dark_logo.getpixel((0, 0))[3], 0)
 
     def test_every_action_icon_has_normal_and_light_transparent_versions(self):
         from PIL import Image
 
-        self.assertGreaterEqual(len(ICON_NAMES), 30)
+        self.assertGreaterEqual(len(ICON_NAMES), 37)
         for name in ICON_NAMES:
             for suffix in ("", "_light"):
                 with self.subTest(icon=name, variant=suffix), Image.open(ASSETS / "icons" / f"{name}{suffix}.png") as icon:
@@ -211,6 +218,13 @@ class BrandingTests(unittest.TestCase):
                     self.assertEqual(icon.mode, "RGBA")
                     self.assertEqual(icon.info.get("Author"), APP_AUTHOR)
                     alpha = icon.getchannel("A")
+                    minimum, maximum = alpha.getextrema()
+                    self.assertEqual(minimum, 0)
+                    self.assertGreater(maximum, 240)
+                with self.subTest(icon=name, variant=f"hidpi{suffix}"), Image.open(ASSETS / "icons" / "hidpi" / f"{name}{suffix}.png") as hidpi_icon:
+                    self.assertEqual(hidpi_icon.size, (64, 64))
+                    self.assertEqual(hidpi_icon.mode, "RGBA")
+                    alpha = hidpi_icon.getchannel("A")
                     minimum, maximum = alpha.getextrema()
                     self.assertEqual(minimum, 0)
                     self.assertGreater(maximum, 240)

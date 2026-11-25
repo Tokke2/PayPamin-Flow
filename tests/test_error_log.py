@@ -317,6 +317,37 @@ class ConsolidatedErrorLogUiTests(unittest.TestCase):
         ])
         self.assertIn("Consolidated error log refresh or daily archive failed", self.app.LOG_PATH.read_text(encoding="utf-8"))
 
+    def test_selective_error_resolution_and_30_day_fingerprint_pruning(self):
+        import json
+        from datetime import timedelta
+        import error_log
+
+        self.app.logger.error("First unresolved failure")
+        self.app.logger.error("Second unresolved failure")
+        items = error_log.list_unresolved_errors(self.app.LOG_DIR)
+        self.assertEqual(len(items), 2)
+
+        chosen = next(item for item in items if "First unresolved failure" in item.text)
+        result = error_log.resolve_selected_errors(self.app.LOG_DIR, [chosen.fingerprint])
+        self.assertEqual(result.resolved_count, 1)
+        remaining = error_log.list_unresolved_errors(self.app.LOG_DIR)
+        self.assertEqual(len(remaining), 1)
+        self.assertIn("Second unresolved failure", remaining[0].text)
+        self.assertNotIn("First unresolved failure", self.app.ERROR_LOG_PATH.read_text(encoding="utf-8"))
+        self.assertIn("Second unresolved failure", self.app.ERROR_LOG_PATH.read_text(encoding="utf-8"))
+
+        # Expired (>30 days old) resolved fingerprints are pruned automatically.
+        resolved_file = self.app.LOG_DIR / "resolved-errors.json"
+        stale_fp = "b" * 64
+        payload = json.loads(resolved_file.read_text(encoding="utf-8"))
+        payload["resolved"][stale_fp] = "2020-01-01T00:00:00+00:00"
+        resolved_file.write_text(json.dumps(payload), encoding="utf-8")
+        error_log.refresh_error_log(self.app.LOG_DIR)
+        refreshed = json.loads(resolved_file.read_text(encoding="utf-8"))
+        self.assertNotIn(stale_fp, refreshed["resolved"])
+        self.assertIn(chosen.fingerprint, refreshed["resolved"])
+        self.assertGreaterEqual(error_log.RESOLVED_RETENTION_DAYS, timedelta(days=30).days)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,7 +18,7 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("WScript.Shell")
 appDir = fso.GetParentFolderName(WScript.ScriptFullName)
 scriptPath = fso.BuildPath(appDir, "paypamin_flow_launcher.py")
-runtimeLogPath = sh.ExpandEnvironmentStrings("%USERPROFILE%") & "\.paminnelseapp\logs\python-runtime.log"
+runtimeLogPath = sh.ExpandEnvironmentStrings("%USERPROFILE%") & "\.paminnelseapp\logs\app.log"
 If Not fso.FileExists(scriptPath) Then
   MsgBox "Hittar inte paypamin_flow_launcher.py i appmappen.", vbCritical, "PayPamin Flow"
   WScript.Quit 1

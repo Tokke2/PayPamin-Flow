@@ -492,6 +492,21 @@ class AccessibilityAppIntegrationTests(unittest.TestCase):
         fake._apply_accessibility_palette.assert_called_once_with()
         self.assertEqual(scheduled[-1][0], self.app.SYSTEM_CONTRAST_POLL_INTERVAL_MS)
 
+    def test_hidden_tray_window_skips_system_contrast_subprocess_poll(self):
+        scheduled = []
+        fake = SimpleNamespace(
+            _quitting=False,
+            _contrast_check_running=False,
+            _window_hidden=True,
+            _poll_system_contrast=Mock(),
+            after=lambda delay, callback: scheduled.append((delay, callback)),
+        )
+        with patch.object(self.app, "system_high_contrast") as query:
+            self.app.ReminderApp._poll_system_contrast(fake)
+        query.assert_not_called()
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0][0], self.app.SYSTEM_CONTRAST_POLL_INTERVAL_MS)
+
     def test_set_font_scale_persists_and_reuses_style(self):
         fake = SimpleNamespace(
             ui_font_scale=1.0,

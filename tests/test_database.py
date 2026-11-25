@@ -126,6 +126,24 @@ class DatabaseTests(unittest.TestCase):
                     app.logger.removeHandler(handler)
                     handler.close()
 
+    def test_settings_cache_avoids_repeated_sqlite_opens_and_invalidates_on_commit(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = load_headless_app(Path(temporary_directory))
+            try:
+                app.init_db()
+                app.set_setting("p1_days", "6")
+                self.assertEqual(app.setting("p1_days"), "6")
+                with unittest.mock.patch.object(app, "connect", wraps=app.connect) as spied_connect:
+                    for _ in range(25):
+                        self.assertEqual(app.setting("p1_days"), "6")
+                    self.assertEqual(spied_connect.call_count, 0)
+                app.set_setting("p1_days", "9")
+                self.assertEqual(app.setting("p1_days"), "9")
+            finally:
+                for handler in app.logger.handlers[:]:
+                    app.logger.removeHandler(handler)
+                    handler.close()
+
 
 if __name__ == "__main__":
     unittest.main()

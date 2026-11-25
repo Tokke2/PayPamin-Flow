@@ -32,8 +32,22 @@ CONSOLE_FREE_GUARD = "PAYPAMIN_CONSOLE_FREE_LAUNCH"
 SW_HIDE = 0
 
 
+def _hidden_startupinfo():
+    """Return a Win32 STARTUPINFO configured to hide any child window, or None."""
+    factory = getattr(subprocess, "STARTUPINFO", None)
+    if factory is None:
+        return None
+    try:
+        info = factory()
+        info.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+        info.wShowWindow = getattr(subprocess, "SW_HIDE", SW_HIDE)
+        return info
+    except Exception:
+        return None
+
+
 def configure_console_free_subprocesses() -> None:
-    """Add CREATE_NO_WINDOW to child processes on Windows, once per process."""
+    """Add CREATE_NO_WINDOW and hidden STARTUPINFO to child processes on Windows."""
 
     global _installed
     if _installed or not sys.platform.startswith("win"):
@@ -43,6 +57,10 @@ def configure_console_free_subprocesses() -> None:
 
     def popen_without_console(*args, **kwargs):
         kwargs["creationflags"] = (kwargs.get("creationflags") or 0) | no_window
+        if kwargs.get("startupinfo") is None:
+            hidden = _hidden_startupinfo()
+            if hidden is not None:
+                kwargs["startupinfo"] = hidden
         return original_popen(*args, **kwargs)
 
     subprocess.Popen = popen_without_console
@@ -120,7 +138,14 @@ def relaunch_console_free(script: str | Path, arguments: list[str] | None = None
     environment = dict(os.environ)
     environment[CONSOLE_FREE_GUARD] = "1"
     try:
-        subprocess.Popen(command, env=environment, close_fds=True)
+        subprocess.Popen(
+            command,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
     except OSError:
         return None
     return 0

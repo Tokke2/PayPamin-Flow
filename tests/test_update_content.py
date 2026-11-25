@@ -522,6 +522,25 @@ class InstalledRecordTests(unittest.TestCase):
         rollback_update(installed)
         self.assertEqual(update_state.installed_package_sha256(self.state_file), "a" * 64)
 
+    def test_corrupted_local_file_is_detected_even_when_package_digest_matches(self):
+        package = package_bytes()
+        plan = self.stage(package)
+        installed = install_update(plan)
+        self.addCleanup(cleanup_update, installed)
+        # Corrupt a local tracked file after installation: the updater must
+        # detect the mismatch against installed_files_fingerprint and offer repair.
+        (self.target / "tray.py").write_bytes(b"# locally damaged\n")
+        release, responses = release_for(package)
+        result = evaluate_release(
+            release,
+            current_version="0.6.0",
+            directory=self.target,
+            state_file=self.state_file,
+            opener=opener_for(responses),
+        )
+        self.assertEqual(result.content_state, CONTENT_DIFFERS)
+        self.assertTrue(is_update_available(result, "0.6.0"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -168,6 +168,12 @@ def installed_source_commit(path=None) -> str:
     return value.lower() if is_commit(value) else ""
 
 
+def installed_files_fingerprint(path=None) -> str:
+    """Return the recorded fingerprint of the installed application files."""
+    value = read_state(path).get("files_fingerprint", "")
+    return value.lower() if is_sha256(value) else ""
+
+
 def is_source_checkout(directory) -> bool:
     """Return whether the running files live in a git working tree.
 

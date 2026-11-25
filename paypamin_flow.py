@@ -43,7 +43,13 @@ from fee_rules import (
     normalize_fee_model,
 )
 from console_free import configure_console_free_subprocesses, hide_own_console_window
-from error_log import ERROR_LOG_NAME, refresh_error_log, resolve_errors
+from error_log import (
+    ERROR_LOG_NAME,
+    list_unresolved_errors,
+    refresh_error_log,
+    resolve_errors,
+    resolve_selected_errors,
+)
 from log_archive import RETENTION_DAYS, DailySizeRotatingFileHandler, archive_old_logs
 from customer_contacts import (
     EmailAddressError, ensure_customer_contact_schema, get_customer_contact,
@@ -103,6 +109,7 @@ from update_installer import (
     UPDATE_READY_FILE_ENV,
     UPDATE_READY_TOKEN_ENV,
     UpdateInstallError,
+    cleanup_completed_update_backups,
     cleanup_update,
     evaluate_release,
     install_update,
@@ -558,6 +565,25 @@ def open_path(path):
             raise
 
 
+_settings_cache_key = None
+_settings_cache_map: dict[str, str] = {}
+
+
+def invalidate_settings_cache() -> None:
+    """Drop the in-memory settings cache so the next read reflects SQLite."""
+    global _settings_cache_key
+    _settings_cache_key = None
+    _settings_cache_map.clear()
+
+
+def _db_settings_signature():
+    try:
+        st = Path(DB_PATH).stat()
+        return (str(DB_PATH), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 class ClosingConnection(sqlite3.Connection):
     """Commit or roll back, then close the SQLite handle on every with exit."""
 
@@ -565,6 +591,7 @@ class ClosingConnection(sqlite3.Connection):
         try:
             return super().__exit__(exc_type, exc_value, traceback)
         finally:
+            invalidate_settings_cache()
             self.close()
 
 
@@ -632,9 +659,18 @@ def init_db():
         for column in ('org_number','bankgiro_number'):
             if column not in vendor_logo_columns:
                 db.execute("ALTER TABLE vendor_logos ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
+        invoice_cols={row['name'] for row in db.execute('PRAGMA table_info(invoices)').fetchall()}
+        if 'due_date' in invoice_cols:
+            db.execute("CREATE INDEX IF NOT EXISTS idx_invoices_due_date ON invoices(due_date)")
+        if 'invoice_no' in invoice_cols:
+            db.execute("CREATE INDEX IF NOT EXISTS idx_invoices_invoice_no ON invoices(invoice_no)")
+        if 'source_hash' in invoice_cols:
+            db.execute("CREATE INDEX IF NOT EXISTS idx_invoices_source_hash ON invoices(source_hash)")
+        if {'vendor','page_index'}.issubset(zone_cols):
+            db.execute("CREATE INDEX IF NOT EXISTS idx_pdf_zones_vendor_page ON pdf_zones(lower(vendor), page_index)")
         # The fee amounts are fixed by law and deliberately absent from settings,
         # so a value stored by an older version can never change what is charged.
-        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','objection_days':'5','payment_deadline_days':'5','autostart':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0','fee_model':DEFAULT_FEE_MODEL}
+        defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','objection_days':'5','payment_deadline_days':'5','autostart':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0','fee_model':DEFAULT_FEE_MODEL,'invoice_column_order':''}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
         # Remove only these obsolete keys; nothing else in the database is
@@ -657,14 +693,24 @@ def init_db():
 
 
 def setting(key):
+    global _settings_cache_key, _settings_cache_map
+    signature = _db_settings_signature()
+    if signature is not None and signature == _settings_cache_key:
+        return _settings_cache_map.get(key, '')
     with connect() as db:
-        row=db.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
-        return row['value'] if row else ''
+        rows = db.execute('SELECT key, value FROM settings').fetchall()
+    loaded = {row['key']: row['value'] for row in rows}
+    new_sig = _db_settings_signature()
+    if new_sig is not None:
+        _settings_cache_map = loaded
+        _settings_cache_key = new_sig
+    return loaded.get(key, '')
 
 
 def set_setting(key,value):
     with connect() as db:
         db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(key,str(value)))
+    invalidate_settings_cache()
 
 
 def saved_supplier_profiles():
@@ -1722,6 +1768,275 @@ def restyle_update_button(app):
     return style
 
 
+SORT_ASC_INDICATOR = '▲'
+SORT_DESC_INDICATOR = '▼'
+
+
+def parse_column_order(raw_order, valid_columns):
+    """Validate a saved column order, preserving every valid column once."""
+    valid = list(valid_columns)
+    seen = set()
+    ordered = []
+    for item in str(raw_order or '').split(','):
+        col = item.strip()
+        if col in valid and col not in seen:
+            ordered.append(col)
+            seen.add(col)
+    for col in valid:
+        if col not in seen:
+            ordered.append(col)
+            seen.add(col)
+    return tuple(ordered)
+
+
+def format_sort_heading(label: str, active: bool, reverse: bool = False) -> str:
+    """Append a clear sort direction indicator to the active column heading."""
+    base = str(label or '').strip()
+    if not active:
+        return base
+    arrow = SORT_DESC_INDICATOR if reverse else SORT_ASC_INDICATOR
+    return f'{base} {arrow}'
+
+
+def _treeview_cell_sort_key(raw_value):
+    text = str(raw_value or '').strip()
+    if not text or text == '—':
+        return (2, 0.0, '')
+    cleaned = (
+        text.replace('\u00a0', '')
+        .replace(' ', '')
+        .replace('kr', '')
+        .replace('SEK', '')
+        .replace('EUR', '')
+        .replace('USD', '')
+        .replace(',', '.')
+    )
+    if re.fullmatch(r'-?\d+(?:\.\d+)?', cleaned):
+        return (0, float(cleaned), '')
+    return (1, 0.0, text.casefold())
+
+
+def sort_treeview_items(tree, column, reverse=False):
+    """Sort an in-memory ttk.Treeview by ``column`` without losing row tags."""
+    columns = list(tree['columns'])
+    if column not in columns:
+        return
+    col_index = columns.index(column)
+    items = []
+    for iid in tree.get_children(''):
+        values = tree.item(iid, 'values')
+        cell = values[col_index] if col_index < len(values) else ''
+        items.append((_treeview_cell_sort_key(cell), iid))
+    items.sort(key=lambda pair: pair[0], reverse=bool(reverse))
+    for position, (_key, iid) in enumerate(items):
+        tree.move(iid, '', position)
+
+
+def enable_treeview_features(
+    tree,
+    columns,
+    labels,
+    *,
+    initial_sort=None,
+    initial_reverse=False,
+    on_sort=None,
+    order_setting_key=None,
+):
+    """Attach sort indicators and drag/context-menu column reordering to a Treeview."""
+    valid_columns = tuple(columns)
+    state = {
+        'labels': dict(labels),
+        'sort_col': initial_sort,
+        'sort_rev': bool(initial_reverse),
+        'drag_col': None,
+        'drag_x': 0,
+        'dragged': False,
+    }
+    tree._column_ui_state = state
+
+    def current_display_columns():
+        try:
+            raw = tree['displaycolumns']
+        except Exception:
+            return list(valid_columns)
+        if raw in ('#all', ('#all',), '', ()):
+            return list(valid_columns)
+        return [col for col in raw if col in valid_columns] or list(valid_columns)
+
+    def apply_display_order(new_order, persist=True):
+        normalized = parse_column_order(','.join(new_order), valid_columns)
+        try:
+            tree.configure(displaycolumns=normalized)
+        except Exception:
+            report_fault()
+            return normalized
+        if persist and order_setting_key:
+            saved = '' if tuple(normalized) == valid_columns else ','.join(normalized)
+            try:
+                set_setting(order_setting_key, saved)
+            except Exception:
+                report_fault()
+        return normalized
+
+    def refresh_headings(sort_col=None, sort_rev=None):
+        if sort_col is not None:
+            state['sort_col'] = sort_col
+        if sort_rev is not None:
+            state['sort_rev'] = bool(sort_rev)
+        for col in valid_columns:
+            heading_text = format_sort_heading(
+                state['labels'].get(col, col),
+                col == state['sort_col'],
+                state['sort_rev'],
+            )
+            try:
+                tree.heading(col, text=heading_text)
+            except Exception:
+                report_fault()
+
+    tree._refresh_sort_headings = refresh_headings
+    tree._apply_column_order = apply_display_order
+
+    if order_setting_key:
+        try:
+            stored = setting(order_setting_key)
+        except Exception:
+            stored = ''
+        if stored:
+            apply_display_order(stored.split(','), persist=False)
+
+    def column_from_x(x_coord):
+        try:
+            ident = tree.identify_column(x_coord)
+        except Exception:
+            return None
+        if not ident or not str(ident).startswith('#'):
+            return None
+        try:
+            idx = int(str(ident)[1:]) - 1
+        except ValueError:
+            return None
+        displayed = current_display_columns()
+        return displayed[idx] if 0 <= idx < len(displayed) else None
+
+    def trigger_sort(col):
+        if on_sort is not None:
+            on_sort(col)
+            return
+        if state['sort_col'] == col:
+            state['sort_rev'] = not state['sort_rev']
+        else:
+            state['sort_col'] = col
+            state['sort_rev'] = False
+        sort_treeview_items(tree, col, state['sort_rev'])
+        refresh_headings()
+
+    for col in valid_columns:
+        try:
+            tree.heading(col, command=lambda column=col: None if state['dragged'] else trigger_sort(column))
+        except Exception:
+            report_fault()
+
+    def on_press(event):
+        try:
+            if tree.identify_region(event.x, event.y) != 'heading':
+                state['drag_col'] = None
+                state['dragged'] = False
+                return
+        except Exception:
+            return
+        state['drag_col'] = column_from_x(event.x)
+        state['drag_x'] = int(event.x)
+        state['dragged'] = False
+
+    def on_motion(event):
+        if not state['drag_col']:
+            return
+        if abs(int(event.x) - state['drag_x']) >= 8:
+            state['dragged'] = True
+
+    def on_release(event):
+        source_col = state['drag_col']
+        was_dragged = state['dragged']
+        state['drag_col'] = None
+        if not source_col or not was_dragged:
+            return
+        target_col = column_from_x(event.x)
+        if target_col and target_col != source_col:
+            order = current_display_columns()
+            if source_col in order and target_col in order:
+                target_index = order.index(target_col)
+                order.remove(source_col)
+                order.insert(target_index, source_col)
+                apply_display_order(order, persist=True)
+                log_activity('ui', 'column_reordered', 'completed', column=source_col, target=target_col)
+        try:
+            tree.after_idle(lambda: state.__setitem__('dragged', False))
+        except Exception:
+            state['dragged'] = False
+
+    def move_column(col, delta):
+        order = current_display_columns()
+        if col not in order:
+            return
+        idx = order.index(col)
+        new_idx = max(0, min(len(order) - 1, idx + delta))
+        if new_idx == idx:
+            return
+        order.pop(idx)
+        order.insert(new_idx, col)
+        apply_display_order(order, persist=True)
+        log_activity('ui', 'column_reordered', 'completed', column=col, direction=delta)
+
+    def on_heading_context_menu(event):
+        try:
+            if tree.identify_region(event.x, event.y) != 'heading':
+                return
+        except Exception:
+            return
+        col = column_from_x(event.x)
+        if not col:
+            return
+        menu = tk.Menu(tree, tearoff=0)
+        order = current_display_columns()
+        idx = order.index(col) if col in order else 0
+        menu.add_command(
+            label=_('Flytta kolumn vänster'),
+            command=lambda: move_column(col, -1),
+            state='normal' if idx > 0 else 'disabled',
+        )
+        menu.add_command(
+            label=_('Flytta kolumn höger'),
+            command=lambda: move_column(col, 1),
+            state='normal' if idx < len(order) - 1 else 'disabled',
+        )
+        menu.add_separator()
+        menu.add_command(
+            label=_('Återställ kolumnordning'),
+            command=lambda: apply_display_order(valid_columns, persist=True),
+        )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                report_fault()
+        return 'break'
+
+    try:
+        tree.bind('<ButtonPress-1>', on_press, add='+')
+        tree.bind('<B1-Motion>', on_motion, add='+')
+        tree.bind('<ButtonRelease-1>', on_release, add='+')
+        tree.bind('<Button-3>', on_heading_context_menu, add='+')
+        tree.bind('<Button-2>', on_heading_context_menu, add='+')
+    except Exception:
+        report_fault()
+
+    refresh_headings()
+    return state
+
+
 def repaint_app_palette(app):
     """Re-apply the current theme to every open window, widget and menu.
 
@@ -1739,6 +2054,14 @@ def repaint_app_palette(app):
         )
     try:app.configure(bg=palette['background'])
     except tk.TclError:report_fault()
+    select_logo=getattr(app,'_active_brand_logo',None)
+    active_logo=select_logo() if callable(select_logo) else getattr(app,'_brand_logo',None)
+    if active_logo is not None:
+        app._brand_logo=active_logo
+    for label in list(getattr(app,'_brand_logo_widgets',()) or ()):
+        try:
+            if active_logo is not None:label.configure(image=active_logo)
+        except tk.TclError:report_fault()
     for label in list(getattr(app,'_header_backgrounds',()) or ()):
         try:label.configure(bg=palette['background'])
         except tk.TclError:report_fault()
@@ -2206,7 +2529,14 @@ def reminder_archive_customer_map():
 class ReminderApp(tk.Tk):
     def __init__(self):
         set_language(setting('language') or 'sv')
-        super().__init__(); self.title(APP_NAME)
+        super().__init__()
+        self._startup_withdrawn=False;self._window_hidden=False
+        try:
+            self.withdraw()
+            self._startup_withdrawn=True
+        except tk.TclError:
+            report_fault()
+        self.title(APP_NAME)
         self.dpi_scale=self._display_scale()
         self._apply_initial_main_geometry()
         self._style(); self.configure(bg=window_palette(self)['background']); self._configure_icons(); self.current_filter_key='current'
@@ -2215,7 +2545,7 @@ class ReminderApp(tk.Tk):
         self.tray=None;self._quitting=False;self._contrast_check_running=False
         self._import_monitor=ImportFolderMonitor(IMPORT_DIR);self._import_scan_running=False;self._python_addons_ready=False
         self._python_addon_install_running=False;self._python_addon_updates_running=False
-        self.build(); self.refresh()
+        self.build(); self._apply_initial_main_geometry(); self.refresh()
         self.after(SYSTEM_CONTRAST_POLL_INTERVAL_MS,self._poll_system_contrast)
         self.protocol('WM_DELETE_WINDOW',self.hide_to_tray)
         self.bind('<Unmap>',self._on_main_window_unmap,add='+')
@@ -2305,13 +2635,13 @@ class ReminderApp(tk.Tk):
             counts[stage]=counts.get(stage,0)+1
         return counts
 
-    def refresh_tray(self):
+    def refresh_tray(self,rows=None):
         """Push the latest workload into the tray without rebuilding it."""
         tray_icon=getattr(self,'tray',None)
         if tray_icon is None or not tray_icon.running:return
         try:
             tray_icon.refresh()
-            tray_icon.set_title(self.tray_status_text())
+            tray_icon.set_title(self.tray_status_text(rows))
         except Exception:
             logger.exception('Could not refresh the system tray')
 
@@ -2319,14 +2649,19 @@ class ReminderApp(tk.Tk):
         if self._quitting:return
         logger.error('System tray stopped unexpectedly: %s',error)
         if self.tray is not None:self.tray.stop()
+        self._window_hidden=False
         self.deiconify()
         messagebox.showwarning(_('Systemfältet är inte tillgängligt'),_('Systemfältet slutade fungera. Fönstret visas igen.'),parent=self)
 
     def show_from_tray(self):
         log_activity('tray','open_window','started')
+        self._window_hidden=False
+        self._startup_withdrawn=False
         self.deiconify();self.lift()
         try:self.focus_force()
         except tk.TclError:report_fault()
+        poll_contrast=getattr(self,'_poll_system_contrast',None)
+        if callable(poll_contrast):poll_contrast()
         if sys.platform.startswith('win'):
             self.after_idle(lambda:configure_windows_window_icon(self))
         self.after_idle(self._maybe_show_ledger_reminder)
@@ -2337,9 +2672,16 @@ class ReminderApp(tk.Tk):
         if self._quitting:return False
         if self.tray is None or not self.tray.running:self.start_tray()
         if self.tray is None or not self.tray.running:
+            if getattr(self,'_startup_withdrawn',False):
+                deiconify=getattr(self,'deiconify',None)
+                if callable(deiconify):
+                    try:deiconify()
+                    except tk.TclError:report_fault()
+                self._startup_withdrawn=False
             logger.warning('Minimized start requested but the system tray is unavailable; the window stays visible')
             log_activity('tray','startup_minimized','failed')
             return False
+        self._window_hidden=True
         self.withdraw()
         logger.info('Application started minimized in the system tray')
         log_activity('tray','startup_minimized','completed')
@@ -2441,6 +2783,7 @@ class ReminderApp(tk.Tk):
                 hint=''
             if messagebox.askyesno(_('Systemfältet är inte tillgängligt'),_('Fönstret kan inte döljas i systemfältet på den här datorn. Vill du avsluta appen helt?')+(('\n\n'+hint) if hint else ''),parent=self):self.quit_app()
             return
+        self._window_hidden=True
         self.withdraw();logger.info('Main window hidden to system tray')
         log_activity('tray','window_hidden','completed')
         explain=getattr(self,'_explain_tray_hide',None)
@@ -2553,16 +2896,39 @@ class ReminderApp(tk.Tk):
             with Image.open(source) as original:
                 source_width=max(1,original.width)
                 height=max(1,int(round(original.height*width/source_width)))
-                resized=original.convert('RGBA').resize((width,height),Image.LANCZOS)
+                premultiplied=original.convert('RGBA').convert('RGBa')
+                resized=premultiplied.resize((width,height),Image.Resampling.LANCZOS).convert('RGBA')
             return ImageTk.PhotoImage(resized,master=self)
         except Exception:
             logger.exception('Icon could not be scaled for the display: %s',source)
             try:return tk.PhotoImage(master=self,file=str(source))
             except tk.TclError:return None
 
+    def _active_brand_logo(self):
+        """Choose the light-surface or dark-surface wordmark for the active palette."""
+        palette=window_palette(self)
+        dark_surface=appearance.is_dark(getattr(self,'_theme','light')) or str(palette.get('background','')).upper()=='#000000'
+        if dark_surface and getattr(self,'_brand_logo_dark',None) is not None:
+            return self._brand_logo_dark
+        return getattr(self,'_brand_logo_light',None) or getattr(self,'_brand_logo',None)
+
+    def _register_brand_logo_widget(self,widget):
+        widgets=list(getattr(self,'_brand_logo_widgets',()) or ())
+        alive=[]
+        for existing in widgets:
+            try:
+                if existing.winfo_exists():alive.append(existing)
+            except Exception:
+                continue
+        alive.append(widget)
+        self._brand_logo_widgets=alive
+        return widget
+
     def _configure_icons(self):
         """Use the product identity for windows, OS icons and the header logo."""
-        self._window_icons=[];self._header_icon=None;self._brand_logo=None;self._action_icons={}
+        self._window_icons=[];self._header_icon=None;self._brand_logo=None
+        self._brand_logo_light=None;self._brand_logo_dark=None;self._brand_logo_widgets=[]
+        self._action_icons={}
         self._configure_macos_dock_icon()
         scaled_photo=getattr(self,'_scaled_photo',None)
         def load_photo(path,width):
@@ -2585,10 +2951,15 @@ class ReminderApp(tk.Tk):
                 ICON_DIR/'paypamin_flow_48.png',
             )
             if header_master.is_file():self._header_icon=load_photo(header_master,52)
-            # The 1024 px master is downscaled, never a small bitmap upscaled.
+            # The 1024 px masters (light and dark wordmark) are downscaled cleanly.
             logo_master=ICON_DIR/'paypamin_logo_1024.png'
             logo_path=logo_master if logo_master.is_file() else ICON_DIR/'paypamin_logo.png'
-            if logo_path.is_file():self._brand_logo=load_photo(logo_path,272)
+            if logo_path.is_file():self._brand_logo_light=load_photo(logo_path,272)
+            dark_master=ICON_DIR/'paypamin_logo_dark_1024.png'
+            dark_path=dark_master if dark_master.is_file() else ICON_DIR/'paypamin_logo_dark.png'
+            if dark_path.is_file():self._brand_logo_dark=load_photo(dark_path,272)
+            select_logo=getattr(self,'_active_brand_logo',None)
+            self._brand_logo=select_logo() if callable(select_logo) else self._brand_logo_light
             # Keep the native Windows icon last so it is not replaced by the
             # generic pythonw.exe taskbar icon on older Tk/Windows versions.
             if sys.platform.startswith('win') and (ICON_DIR/'paypamin_flow.ico').is_file():
@@ -2601,11 +2972,18 @@ class ReminderApp(tk.Tk):
             logger.exception('Application icon could not be loaded')
 
     def _ui_icon(self,name,inverse=False):
-        """Load and retain one shared transparent action icon."""
+        """Load and retain one shared transparent action icon (HiDPI-aware)."""
         if not name:return None
         key=(name,bool(inverse))
         if key in self._action_icons:return self._action_icons[key]
         suffix='_light' if inverse else ''
+        scaled_photo=getattr(self,'_scaled_photo',None)
+        hidpi_path=ICON_DIR/'icons'/'hidpi'/f'{name}{suffix}.png'
+        if getattr(self,'dpi_scale',1.0)>1.0 and callable(scaled_photo) and hidpi_path.is_file():
+            image=scaled_photo(hidpi_path,16)
+            if image is not None:
+                self._action_icons[key]=image
+                return image
         path=ICON_DIR/'icons'/f'{name}{suffix}.png'
         if not path.is_file():return None
         try:
@@ -2699,6 +3077,17 @@ class ReminderApp(tk.Tk):
         # generic pythonw.exe icon in the taskbar or window switcher.
         self._set_window_icon(window)
         self._finalize_window_actions(window)
+        scrollable=getattr(window,'__dict__',{}).get('_accessibility_scrollable_form')
+        if scrollable is not None and callable(getattr(scrollable,'fit_to_content',None)):
+            try:
+                avail_w=dialog_available_width(window)
+                area_h=window_work_area_height(window)
+                scrollable.fit_to_content(
+                    max_width=max(480,avail_w),
+                    max_height=max(300,area_h-90) if area_h else 760,
+                )
+            except Exception:
+                report_fault()
         fit_window_to_screen(window)
 
     def _new_toplevel(self,title):
@@ -2713,13 +3102,12 @@ class ReminderApp(tk.Tk):
         return ScrollableForm(window,tk,ttk,padding=padding).form
 
     def _apply_initial_main_geometry(self):
-        """Open the main window as wide as the screen can carry it.
+        """Open the main window at full usable screen height and content-adapted width.
 
-        The invoice table is the point of the window, so the default size grows
-        with the work area instead of stopping at a fixed 1180 px and leaving a
-        wide desktop unused. On a small screen the old floor is still respected,
-        the window is centred on the monitor it opens on, and nothing is ever
-        placed under the taskbar or off the screen.
+        The height fills the monitor's usable work area (excluding taskbar/dock)
+        so long invoice lists need minimal vertical scrolling, while the width
+        adapts to the table and toolbar content without stretching across empty
+        ultrawide space. User resize is never blocked.
         """
         try:
             screen_width=max(1,int(self.winfo_screenwidth()))
@@ -2730,16 +3118,32 @@ class ReminderApp(tk.Tk):
         if area_width<240 or area_height<200:
             area_left,area_top,area_width,area_height=0,0,screen_width,screen_height
         scale=getattr(self,'dpi_scale',1.0)
-        margin=48
-        width=max(int(round(900*scale)),int(round(area_width*0.86)))
-        width=min(width,max(720,area_width-margin))
-        height=max(int(round(600*scale)),int(round(area_height*0.88)))
-        height=min(height,max(480,area_height-margin))
+        to_px=getattr(self,'_px',None)
+        if not callable(to_px):
+            to_px=lambda value:max(1,int(round(float(value)*scale)))
+        col_widths=getattr(self,'_invoice_column_widths',None)
+        if col_widths:
+            base_table_width=sum(to_px(w) for w in col_widths.values())+to_px(120)
+        else:
+            base_table_width=int(round(1460*scale))
+        req_width=0
+        if callable(getattr(self,'winfo_reqwidth',None)):
+            try:
+                if callable(getattr(self,'update_idletasks',None)):self.update_idletasks()
+                req_width=int(self.winfo_reqwidth())
+            except Exception:
+                req_width=0
+        natural_width=max(int(round(980*scale)),base_table_width,req_width)
+        comfortable_width=max(natural_width,min(int(round(1760*scale)),int(round(area_width*0.78))))
+        margin=48 if area_width>=800 else 0
+        max_width=max(min(720,area_width),area_width-margin)
+        width=min(comfortable_width,max_width)
+        height=area_height
         x=area_left+max(0,(area_width-width)//2)
-        y=area_top+max(0,(area_height-height)//2)
+        y=area_top
         try:self.geometry(f'{width}x{height}+{x}+{y}')
         except Exception:report_fault()
-        try:self.minsize(min(int(round(940*scale)),width),min(int(round(560*scale)),height))
+        try:self.minsize(min(int(round(900*scale)),width),min(int(round(520*scale)),height))
         except Exception:report_fault()
 
     # Columns that carry free text are the ones allowed to grow when the window
@@ -2808,7 +3212,11 @@ class ReminderApp(tk.Tk):
     def show_about(self):
         w=self._new_toplevel(_('Om {app_name}',app_name=APP_NAME));w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
         form=self._dialog_form(w,padding=24)
-        if self._brand_logo:ttk.Label(form,image=self._brand_logo).pack(pady=(0,10))
+        if self._brand_logo:
+            logo_label=ttk.Label(form,image=self._brand_logo)
+            logo_label.pack(pady=(0,10))
+            reg=getattr(self,'_register_brand_logo_widget',None)
+            if callable(reg):reg(logo_label)
         else:
             if self._header_icon:ttk.Label(form,image=self._header_icon).pack(pady=(0,10))
             ttk.Label(form,text=APP_NAME,style='Title.TLabel').pack()
@@ -2970,7 +3378,11 @@ class ReminderApp(tk.Tk):
         form=self._dialog_form(w,padding=0)
         head=ttk.Frame(form,padding=(24,20,24,12));head.pack(fill='x')
         brand=ttk.Frame(head);brand.pack(anchor='w')
-        if self._brand_logo:ttk.Label(brand,image=self._brand_logo).pack(side='left',padx=(0,10))
+        if self._brand_logo:
+            logo_label=ttk.Label(brand,image=self._brand_logo)
+            logo_label.pack(side='left',padx=(0,10))
+            reg=getattr(self,'_register_brand_logo_widget',None)
+            if callable(reg):reg(logo_label)
         elif self._header_icon:ttk.Label(brand,image=self._header_icon).pack(side='left',padx=(0,10))
         titles=ttk.Frame(brand);titles.pack(side='left')
         ttk.Label(titles,text=_('Stöd PayPamin Flow'),style='Title.TLabel').pack(anchor='w')
@@ -3211,7 +3623,7 @@ class ReminderApp(tk.Tk):
         def install():
             try:
                 result_queue.put(('progress',manual,release,'download'))
-                plan=stage_update(release,log_path=LOG_DIR/'update.log')
+                plan=stage_update(release,log_path=LOG_PATH)
                 result_queue.put(('progress',manual,release,'install'))
                 installed=install_update(plan)
                 result_queue.put(('progress',manual,release,'restart'))
@@ -3532,6 +3944,10 @@ class ReminderApp(tk.Tk):
     def _poll_system_contrast(self):
         """Follow the desktop's high-contrast flag and, if chosen, its theme."""
         if getattr(self,'_quitting',False) or getattr(self,'_contrast_check_running',False):return
+        if getattr(self,'_window_hidden',False):
+            try:self.after(SYSTEM_CONTRAST_POLL_INTERVAL_MS,self._poll_system_contrast)
+            except tk.TclError:report_fault()
+            return
         self._contrast_check_running=True
         follow_system=getattr(self,'_theme_setting',appearance.DEFAULT_THEME)==appearance.THEME_SYSTEM
         result_queue=queue.Queue()
@@ -3755,6 +4171,7 @@ class ReminderApp(tk.Tk):
         help_menu=tk.Menu(menu,tearoff=0)
         self.help_menu=help_menu
         help_menu.add_command(label=_('Visa samlad fellogg'),command=self.open_log)
+        help_menu.add_command(label=_('Hantera aktiva fel…'),command=self.manage_error_log)
         help_menu.add_command(label=_('Markera fellogg som åtgärdad'),command=self.resolve_error_log)
         help_menu.add_command(label=_('Visa teknisk logg'),command=self.open_technical_log)
         help_menu.add_command(label=_('Visa aktivitetslogg'),command=self.open_activity_log)
@@ -3780,6 +4197,8 @@ class ReminderApp(tk.Tk):
             label=tk.Label(header,image=self._brand_logo,bg=background,borderwidth=0)
             label.pack(side='left',padx=(0,10))
             self._header_backgrounds.append(label)
+            reg=getattr(self,'_register_brand_logo_widget',None)
+            if callable(reg):reg(label)
         else:
             if self._header_icon:
                 label=tk.Label(header,image=self._header_icon,bg=background,borderwidth=0)
@@ -3798,12 +4217,38 @@ class ReminderApp(tk.Tk):
         self.update_button.pack(side='right',padx=(0,8))
         if self._update_install_running:self._set_update_install_busy(True)
         elif self._update_check_running:self._set_update_check_busy(True)
+        def _bind_wrapping_action_bar(bar,buttons):
+            last_sig=[None]
+            def reflow(_event=None):
+                try:avail=int(bar.winfo_width())
+                except Exception:avail=0
+                if avail<=60:
+                    try:avail=max(640,int(self.winfo_width())-48)
+                    except Exception:avail=1200
+                gap=8
+                row_idx=0;col_idx=0;used=0;placements=[]
+                for btn in buttons:
+                    try:req=max(76,int(btn.winfo_reqwidth()))
+                    except Exception:req=128
+                    if col_idx>0 and used+req+gap>avail:
+                        row_idx+=1;col_idx=0;used=0
+                    placements.append((btn,row_idx,col_idx))
+                    used+=req+gap
+                    col_idx+=1
+                sig=tuple((r,c) for _b,r,c in placements)
+                if sig==last_sig[0]:return
+                last_sig[0]=sig
+                for btn,r,c in placements:
+                    btn.grid(row=r,column=c,sticky='w',padx=(0,gap),pady=(0,4))
+            reflow()
+            bar.bind('<Configure>',reflow,add='+')
+
         primary_actions=[('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton')]
         secondary_actions=[('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ångra betalmarkering',self.undo_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa samlad fellogg',self.open_log,'TButton')]
         for actions,padding in ((primary_actions,(24,7,24,5)),(secondary_actions,(24,0,24,14))):
             bar=ttk.Frame(self,padding=padding);bar.pack(fill='x')
-            for key,cmd,style in actions:
-                ttk.Button(bar,text=_(key),command=cmd,style=style).pack(side='left',padx=(0,8))
+            bar_buttons=[ttk.Button(bar,text=_(key),command=cmd,style=style) for key,cmd,style in actions]
+            _bind_wrapping_action_bar(bar,bar_buttons)
         controls=ttk.Frame(self,padding=(22,0,22,8));controls.pack(fill='x')
         self.filter_options={'current':_('Aktuella'),'history':_('Historik / arkiverade / betalda'),'all':_('Alla'),'ignored':_('Ignorerade'),'debt_review':_('Kronofogden – granska')}
         self.view_tabs=ttk.Notebook(controls)
@@ -3844,6 +4289,7 @@ class ReminderApp(tk.Tk):
         # in the middle of the cell.
         numeric_columns={'amount','remaining','fee'}
         self._invoice_column_widths=widths.copy()
+        self._invoice_column_labels=labels.copy()
         for c in cols:
             anchor='e' if c in numeric_columns else 'w'
             self.tree.heading(c,text=labels[c],anchor=anchor,command=lambda column=c:self.sort_invoice_column(column))
@@ -3856,6 +4302,15 @@ class ReminderApp(tk.Tk):
         self.tree.bind('<App>',self.show_selected_row_context_menu)
         self.tree.bind('<Button-3>',self.show_row_context_menu)
         self.tree.bind('<Button-2>',self.show_row_context_menu)
+        enable_treeview_features(
+            self.tree,
+            cols,
+            labels,
+            initial_sort=self.invoice_sort_column,
+            initial_reverse=self.invoice_sort_reverse,
+            on_sort=self.sort_invoice_column,
+            order_setting_key='invoice_column_order',
+        )
         self.row_menu=tk.Menu(self,tearoff=0)
         self.row_menu.add_command(label=_('Öppna original-PDF'),command=self.open_selected_invoice_pdf)
         self.row_menu.add_command(label=_('Importera originalfaktura till vald'),command=self.import_original_invoice)
@@ -3983,6 +4438,8 @@ class ReminderApp(tk.Tk):
             stage_display=(_('IGNORERAD')+' · ' if r['ignored'] else '')+_(stage)
             color_tag=invoice_row_color_tag(r,stage)
             self.tree.insert('', 'end',iid=str(r['id']),values=(r['invoice_no'],r['customer'],r['due_date'],money(float(r['amount'] or 0),r['currency']),money(remain,r['currency']),p1_display,p2_display,reminder_email_status(r),stage_display,fee),tags=(color_tag,) if color_tag else ())
+        refresh_headings=getattr(self.tree,'_refresh_sort_headings',None)
+        if callable(refresh_headings):refresh_headings(sort_column,sort_reverse)
         self.show_detail()
         status=getattr(self,'search_status',None)
         if status is not None:
@@ -4058,6 +4515,10 @@ class ReminderApp(tk.Tk):
             self.detail.configure(text=detail_text)
 
     def show_row_context_menu(self,event):
+        try:
+            if self.tree.identify_region(event.x,event.y)=='heading':return
+        except Exception:
+            report_fault()
         item=self.tree.identify_row(event.y)
         if not item:return
         self.tree.selection_set(item);self.tree.focus(item);self.show_detail()
@@ -4204,6 +4665,7 @@ class ReminderApp(tk.Tk):
                 level,row['invoice_no'],row['customer'],_days,
                 money(max(0.0,float(row['amount'] or 0)-float(row['paid'] or 0)),row['currency']),
             ))
+        enable_treeview_features(tree,columns,labels,initial_sort='days',initial_reverse=True)
         tree.pack(fill='both',expand=True)
         tree.bind('<Double-1>',lambda event:self.open_due_reminder(tree))
         show_all=tk.BooleanVar(value=False)
@@ -4415,6 +4877,103 @@ class ReminderApp(tk.Tk):
             logger.exception('Could not resolve consolidated error log')
             messagebox.showerror(APP_NAME,_('Felloggen kunde inte markeras som åtgärdad. Se den tekniska loggen.'),parent=self)
 
+    def manage_error_log(self):
+        """Inspect active unresolved errors and mark selected or all items resolved."""
+        logger.info('User opened active error management dialog')
+        try:
+            _refresh_and_archive_logs()
+            items=list_unresolved_errors(LOG_DIR)
+        except Exception:
+            logger.exception('Could not load active errors')
+            messagebox.showerror(APP_NAME,_('Felloggen kunde inte läsas. Se den tekniska loggen.'),parent=self)
+            return None
+        if not items:
+            messagebox.showinfo(APP_NAME,_('Det finns inga olösta fel i felloggen.'),parent=self)
+            return None
+        existing=getattr(self,'_error_manager_window',None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():existing.deiconify();existing.lift();existing.focus_force();return existing
+            except tk.TclError:report_fault()
+        w=self._new_toplevel(_('Hantera aktiva fel'))
+        self._error_manager_window=w
+        w.minsize(self._px(720),self._px(460))
+        def close():
+            self._error_manager_window=None
+            w.destroy()
+        w.protocol('WM_DELETE_WINDOW',close)
+        form=ttk.Frame(w,padding=20);form.pack(fill='both',expand=True)
+        ttk.Label(form,text=_('Aktiva olösta fel'),style='Title.TLabel').pack(anchor='w')
+        summary_var=tk.StringVar(value='')
+        ttk.Label(form,textvariable=summary_var,style='Sub.TLabel').pack(anchor='w',pady=(4,10))
+        columns=('timestamp','level','source','summary')
+        labels={'timestamp':_('Tidpunkt'),'level':_('Nivå'),'source':_('Källa'),'summary':_('Sammanfattning')}
+        widths={'timestamp':155,'level':90,'source':115,'summary':420}
+        tree_wrap=ttk.Frame(form);tree_wrap.pack(fill='both',expand=True)
+        tree=ttk.Treeview(tree_wrap,columns=columns,show='headings',selectmode='extended',height=10)
+        for col in columns:
+            tree.heading(col,text=labels[col],anchor='w')
+            tree.column(col,width=self._px(widths[col]),anchor='w',stretch=col=='summary')
+        enable_treeview_features(tree,columns,labels,initial_sort='timestamp',initial_reverse=True)
+        ysb=ttk.Scrollbar(tree_wrap,orient='vertical',command=tree.yview)
+        tree.configure(yscrollcommand=ysb.set)
+        tree.pack(side='left',fill='both',expand=True);ysb.pack(side='right',fill='y')
+        detail_box=tk.Text(form,height=7,wrap='word',state='disabled')
+        detail_box.pack(fill='x',pady=(10,8))
+        apply_widget_contrast(w,getattr(self,'_high_contrast',False),getattr(self,'_theme','light'))
+        item_map={}
+        def show_selected_detail(_event=None):
+            sel=tree.selection()
+            item=item_map.get(sel[0]) if sel else None
+            text=item.body if item is not None else ''
+            detail_box.configure(state='normal')
+            detail_box.delete('1.0','end')
+            if text:detail_box.insert('1.0',text)
+            detail_box.configure(state='disabled')
+        tree.bind('<<TreeviewSelect>>',show_selected_detail)
+        def reload_items():
+            for child in tree.get_children():tree.delete(child)
+            item_map.clear()
+            fresh=list_unresolved_errors(LOG_DIR)
+            for idx,entry in enumerate(fresh):
+                iid=f'err-{idx}'
+                item_map[iid]=entry
+                tree.insert('','end',iid=iid,values=(entry.timestamp,entry.level,entry.source,entry.summary))
+            summary_var.set(_('{count} olösta fel i den aktiva felloggen. Äldre än 30 dagar rensas automatiskt.',count=len(fresh)))
+            if fresh:
+                first=tree.get_children()[0]
+                tree.selection_set(first);tree.focus(first)
+            show_selected_detail()
+            return fresh
+        def resolve_selected():
+            sel=tree.selection()
+            hashes=[item_map[iid].entry_hash for iid in sel if iid in item_map]
+            if not hashes:
+                messagebox.showinfo(APP_NAME,_('Markera ett eller flera fel i listan först.'),parent=w)
+                return
+            res=resolve_selected_errors(LOG_DIR,hashes)
+            self._last_error_log_sig=None
+            log_activity('log','errors_resolved_selected','completed',count=res.resolved_count)
+            remaining=reload_items()
+            if not remaining:
+                messagebox.showinfo(APP_NAME,_('Alla aktiva fel är nu markerade som åtgärdade.'),parent=w)
+                close()
+        def resolve_all():
+            if not messagebox.askyesno(APP_NAME,_('Markera alla fel i felloggen som åtgärdade?\n\nEn kopia sparas i loggarkivet. De tekniska källoggarna ändras inte.'),parent=w):
+                return
+            res=resolve_errors(LOG_DIR)
+            self._last_error_log_sig=None
+            log_activity('log','errors_resolved_all','completed',count=res.resolved_count)
+            messagebox.showinfo(APP_NAME,_('Felloggen markerades som åtgärdad. {count} fel sparades i loggarkivet.',count=res.resolved_count),parent=w)
+            close()
+        buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(6,0))
+        ttk.Button(buttons,text=_('Markera valda som åtgärdade'),command=resolve_selected,style='Accent.TButton').pack(side='left')
+        ttk.Button(buttons,text=_('Markera alla som åtgärdade'),command=resolve_all).pack(side='left',padx=(8,0))
+        ttk.Button(buttons,text=_('Visa samlad fellogg'),command=self.open_log).pack(side='left',padx=(8,0))
+        ttk.Button(buttons,text=_('Stäng'),command=close).pack(side='right')
+        reload_items()
+        return w
+
     def open_technical_log(self):
         """Open the complete local log, including successful PDF diagnostics."""
         logger.info('User opened technical diagnostic log')
@@ -4438,7 +4997,20 @@ class ReminderApp(tk.Tk):
     def _run_scheduled_error_log_refresh(self):
         """Keep the consolidated local view current without touching source logs."""
         if self._quitting:return
-        try:_refresh_and_archive_logs()
+        try:
+            sig=None
+            try:
+                files=[]
+                for entry in sorted(LOG_DIR.iterdir(),key=lambda p:p.name):
+                    if entry.is_file() and entry.name!=ERROR_LOG_NAME:
+                        st=entry.stat()
+                        files.append((entry.name,st.st_mtime_ns,st.st_size))
+                sig=(date.today().isoformat(),tuple(files))
+            except OSError:
+                sig=None
+            if sig is None or getattr(self,'_last_error_log_sig',object())!=sig:
+                _refresh_and_archive_logs()
+                if sig is not None:self._last_error_log_sig=sig
         except Exception:logger.exception('Consolidated error log refresh or daily archive failed')
         if not self._quitting:self.after(ERROR_LOG_REFRESH_INTERVAL_MS,self._run_scheduled_error_log_refresh)
 
@@ -4596,7 +5168,17 @@ class ReminderApp(tk.Tk):
                     source_page=available_pages[relative_page]
                     if source_page<0 or source_page>=len(doc):continue
                     page=doc[source_page];r=fitz.Rect(z['x0']*page.rect.width,z['y0']*page.rect.height,z['x1']*page.rect.width,z['y1']*page.rect.height)
-                    val=self.parse_zone_value(z['field'],page.get_text('text',clip=r))
+                    raw=page.get_text('text',clip=r)
+                    if not raw.strip():
+                        try:
+                            import pytesseract
+                            from PIL import Image
+                            import io
+                            pix=page.get_pixmap(matrix=fitz.Matrix(3,3),clip=r,alpha=False)
+                            raw=pytesseract.image_to_string(Image.open(io.BytesIO(pix.tobytes('png'))),lang='swe+eng')
+                        except Exception:
+                            logger.debug('OCR fallback in apply_saved_zones unavailable or failed',exc_info=True)
+                    val=self.parse_zone_value(z['field'],raw)
                     if val!='':guess[z['field']]=val;applied.append(z['field'])
             if applied:logger.info('Applied saved PDF field zones: vendor=%s fields=%s',vendor,','.join(applied))
         except Exception:logger.exception('Saved PDF zones could not be applied')
@@ -4630,7 +5212,12 @@ class ReminderApp(tk.Tk):
         suggested_bgs=extract_bankgiro_numbers(preview_text)
         if not initial_org and len(suggested_orgs)==1:initial_org=format_org_number(next(iter(suggested_orgs)))
         if not initial_bg and len(suggested_bgs)==1:initial_bg=format_bankgiro_number(next(iter(suggested_bgs)))
-        win=self._new_toplevel(_('Förhandsgranska faktura – markera fält att läsa'));win.geometry('950x790')
+        win=self._new_toplevel(_('Förhandsgranska faktura – markera fält att läsa'))
+        area_left,area_top,area_w,area_h=monitor_work_area(self)
+        preview_w=min(max(780,area_w-48),self._px(1160))
+        preview_h=min(max(560,area_h-48),self._px(860))
+        win.geometry(f'{preview_w}x{preview_h}+{area_left+max(0,(area_w-preview_w)//2)}+{area_top+max(0,(area_h-preview_h)//2)}')
+        win.minsize(min(preview_w,self._px(780)),min(preview_h,self._px(540)))
         top=ttk.Frame(win,padding=(12,8));top.pack(fill='x')
         ttk.Label(top,text=_('Leverantör / mallnamn:')).pack(side='left')
         vendor_var=tk.StringVar(value=original_vendor)
@@ -4656,16 +5243,29 @@ class ReminderApp(tk.Tk):
         left=ttk.Frame(body);left.pack(side='left',fill='both',expand=True)
         nav=ttk.Frame(left);nav.pack(fill='x')
         page_var=tk.StringVar(value=_('Sida 1'))
+        zoom_var=tk.StringVar(value='100 %')
         ttk.Button(nav,text='◀',command=lambda:change_page(-1)).pack(side='left')
         ttk.Label(nav,textvariable=page_var).pack(side='left',padx=10)
         ttk.Button(nav,text='▶',command=lambda:change_page(1)).pack(side='left')
-        ttk.Label(nav,text=_('Markera fält:')).pack(side='left',padx=(25,5))
+        ttk.Button(nav,text='−',command=lambda:change_zoom(-0.25)).pack(side='left',padx=(12,2))
+        ttk.Label(nav,textvariable=zoom_var).pack(side='left',padx=4)
+        ttk.Button(nav,text='+',command=lambda:change_zoom(0.25)).pack(side='left',padx=(2,4))
+        ttk.Button(nav,text=_('Passa sida'),command=lambda:reset_zoom()).pack(side='left')
+        ttk.Label(nav,text=_('Markera fält:')).pack(side='left',padx=(18,5))
         fields={_('Fakturanummer'):'invoice_no',_('Belopp (ATT BETALA)'):'amount',_('Valuta'):'currency',_('Fakturadatum'):'invoice_date',_('Förfallodatum'):'due_date',_('Kundnamn'):'customer',_('Fakturatext / Avser'):'note',_('Org.nr (leverantör)'):'org_number',_('Bankgiro (leverantör)'):'bankgiro_number'}
         field_labels={key:label for label,key in fields.items()}
         field_var=tk.StringVar(value=_('Belopp (ATT BETALA)'))
         ttk.Combobox(nav,textvariable=field_var,state='readonly',values=list(fields),width=24).pack(side='left')
-        canvas=tk.Canvas(left,width=620,height=650,bg='#dfe3ea',highlightthickness=2,highlightcolor='#005a9c',takefocus=1);canvas.pack(fill='both',expand=True,pady=5)
-        right=ttk.Frame(body,width=235,padding=(10,4));right.pack(side='right',fill='y');right.pack_propagate(False)
+        canvas_wrap=ttk.Frame(left);canvas_wrap.pack(fill='both',expand=True,pady=5)
+        canvas=tk.Canvas(canvas_wrap,width=self._px(640),height=self._px(650),bg='#dfe3ea',highlightthickness=2,highlightcolor='#005a9c',takefocus=1)
+        canvas_ysb=ttk.Scrollbar(canvas_wrap,orient='vertical',command=canvas.yview)
+        canvas_xsb=ttk.Scrollbar(canvas_wrap,orient='horizontal',command=canvas.xview)
+        canvas.configure(yscrollcommand=canvas_ysb.set,xscrollcommand=canvas_xsb.set)
+        canvas_ysb.pack(side='right',fill='y');canvas_xsb.pack(side='bottom',fill='x')
+        canvas.pack(side='left',fill='both',expand=True)
+        right_panel_w=max(255,self._px(265))
+        right_wrap_w=right_panel_w-28
+        right=ttk.Frame(body,width=right_panel_w,padding=(10,4));right.pack(side='right',fill='y')
         ttk.Label(right,text=_('Avlästa värden'),style='Heading.TLabel').pack(anchor='w',pady=(0,8))
         logo_files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
         mapped_logo=initial_profile.get('logo_file') if initial_profile else ''
@@ -4675,7 +5275,7 @@ class ReminderApp(tk.Tk):
         ttk.Label(right,text=_('Logotyp som matchar fakturan'),style='BodyBold.TLabel').pack(anchor='w',pady=(3,0))
         logo_combo=ttk.Combobox(right,textvariable=preview_logo_var,state='readonly',values=logo_choices,width=27)
         logo_combo.pack(fill='x',pady=(2,2))
-        ttk.Label(right,text=_('Logotypen kopplas till vald leverantör/mall ovan.'),wraplength=210,style='Sub.TLabel').pack(anchor='w',pady=(0,2))
+        ttk.Label(right,text=_('Logotypen kopplas till vald leverantör/mall ovan.'),wraplength=right_wrap_w,style='Sub.TLabel').pack(anchor='w',pady=(0,2))
         ttk.Button(right,text=_('Matcha bildlogotyp i PDF'),command=lambda:match_visual_supplier()).pack(fill='x',pady=(0,6))
         def load_selected_profile(event=None):
             profile=supplier_profile(vendor_var.get())
@@ -4715,32 +5315,59 @@ class ReminderApp(tk.Tk):
             ttk.Button(row,text=_('Markera'),command=lambda name=label:activate_field(name)).pack(side='right')
             # Identifier values already have editable fields at the top; avoid a duplicate row here.
             if key in ('org_number','bankgiro_number'):continue
-            lab=ttk.Label(right,text=str(guess.get(key,'') or '—'),wraplength=210,style='Sub.TLabel');lab.pack(anchor='w')
+            lab=ttk.Label(right,text=str(guess.get(key,'') or '—'),wraplength=right_wrap_w,style='Sub.TLabel');lab.pack(anchor='w')
             result_labels[key]=lab
-        ttk.Label(right,textvariable=status,wraplength=210,style='Sub.TLabel').pack(anchor='w',pady=8)
-        pending={};state={'page':available_pages[0],'scale':1.0,'photo':None,'start':None,'rect':None,'image_w':1,'image_h':1,'closed':False}
+        ttk.Label(right,textvariable=status,wraplength=right_wrap_w,style='Sub.TLabel').pack(anchor='w',pady=8)
+        pending={};state={'page':available_pages[0],'scale':1.0,'zoom':1.0,'photo':None,'start':None,'rect':None,'image_w':1,'image_h':1,'closed':False}
         def close_preview():
             if state['closed']:return
             state['closed']=True
+            try:canvas.delete('all')
+            except Exception:report_fault()
+            state['photo']=None
             self.close_invoice_preview(win,doc)
         def draw_saved():
             canvas.delete('zone')
             current_vendor=vendor_var.get().strip()
             relative_page=available_pages.index(state['page'])
+            p=doc[state['page']]
             with connect() as db:zs=db.execute('SELECT * FROM pdf_zones WHERE lower(vendor)=lower(?) AND page_index=?',(current_vendor,relative_page)).fetchall()
             for z in zs:
-                p=doc[state['page']];x0=z['x0']*p.rect.width*state['scale'];y0=z['y0']*p.rect.height*state['scale'];x1=z['x1']*p.rect.width*state['scale'];y1=z['y1']*p.rect.height*state['scale']
+                if z['field'] in pending and pending[z['field']].get('page_index')==relative_page:
+                    continue
+                x0=z['x0']*p.rect.width*state['scale'];y0=z['y0']*p.rect.height*state['scale'];x1=z['x1']*p.rect.width*state['scale'];y1=z['y1']*p.rect.height*state['scale']
                 canvas.create_rectangle(x0,y0,x1,y1,outline='#e13f43',width=2,tags='zone')
                 canvas.create_text(x0+3,y0+3,text=_('{field} · {count} matchningar',field=field_labels.get(z['field'],z['field']),count=z['samples']),anchor='nw',fill='#9b2024',tags='zone')
+            for field,zone in pending.items():
+                if zone.get('page_index')!=relative_page:continue
+                x0=zone['x0']*p.rect.width*state['scale'];y0=zone['y0']*p.rect.height*state['scale']
+                x1=zone['x1']*p.rect.width*state['scale'];y1=zone['y1']*p.rect.height*state['scale']
+                canvas.create_rectangle(x0,y0,x1,y1,outline='#1d8c66',width=2,tags='zone')
+                canvas.create_text(x0+3,y0+3,text=field_labels.get(field,field),anchor='nw',fill='#1d8c66',tags='zone')
         def render_page():
+            if state['closed']:return
             page=doc[state['page']]
-            state['scale']=min(610/page.rect.width,620/page.rect.height)
+            try:
+                avail_cw=max(self._px(520),int(canvas.winfo_width())-12)
+                avail_ch=max(self._px(520),int(canvas.winfo_height())-12)
+            except Exception:
+                avail_cw,avail_ch=self._px(640),self._px(640)
+            base_scale=min(avail_cw/max(1.0,page.rect.width),avail_ch/max(1.0,page.rect.height))
+            state['scale']=max(0.4,min(4.0,base_scale*state['zoom']))
+            zoom_var.set(f"{int(round(state['zoom']*100))} %")
             pix=page.get_pixmap(matrix=fitz.Matrix(state['scale'],state['scale']),alpha=False)
             state['image_w'],state['image_h']=pix.width,pix.height
             state['photo']=tk.PhotoImage(data=base64.b64encode(pix.tobytes('png')).decode('ascii'))
-            canvas.delete('all');canvas.config(scrollregion=(0,0,pix.width,pix.height),width=pix.width,height=pix.height)
+            canvas.delete('all');canvas.config(scrollregion=(0,0,pix.width,pix.height))
             canvas.create_image(0,0,image=state['photo'],anchor='nw',tags='page')
             page_var.set(_('Sida {page} av {pages}',page=state['page']+1,pages=len(doc)));draw_saved()
+        def change_zoom(delta):
+            state['zoom']=max(0.5,min(3.0,round(state['zoom']+delta,2)))
+            render_page()
+        def reset_zoom():
+            state['zoom']=1.0
+            render_page()
+        canvas.bind('<Control-MouseWheel>',lambda e:change_zoom(0.25 if getattr(e,'delta',0)>0 else -0.25))
         def change_page(delta):
             position=available_pages.index(state['page'])
             position=max(0,min(len(available_pages)-1,position+delta))
@@ -5523,6 +6150,7 @@ class ReminderApp(tk.Tk):
         for column in columns:
             tree.heading(column,text=labels[column])
             tree.column(column,width=self._px(widths[column]),anchor='w')
+        enable_treeview_features(tree,columns,labels,initial_sort='deleted_at',initial_reverse=True)
         tree.pack(fill='both',expand=True)
         note=ttk.Label(form,text=_('Inget tas bort automatiskt. En faktura ligger kvar här tills du återställer den eller tar bort den permanent.'),style='Sub.TLabel',justify='left',wraplength=620)
         note.pack(anchor='w',pady=(8,0))
@@ -6248,9 +6876,11 @@ class ReminderApp(tk.Tk):
         headings={'kind':'Område','scope':'Namn','field':'Uppgift','value':'Inlärt värde','evidence':'Antal'}
         widths={'kind':110,'scope':230,'field':200,'value':330,'evidence':70}
         tree=ttk.Treeview(form,columns=columns,show='headings',selectmode='browse')
+        translated_headings={col:_(headings[col]) for col in columns}
         for column in columns:
-            tree.heading(column,text=_(headings[column]))
-            tree.column(column,width=widths[column],stretch=column in ('scope','value'))
+            tree.heading(column,text=translated_headings[column])
+            tree.column(column,width=self._px(widths[column]),stretch=column in ('scope','value'))
+        enable_treeview_features(tree,columns,translated_headings,initial_sort='evidence',initial_reverse=True)
         tree.pack(fill='both',expand=True)
         rows={}
         def refresh():
@@ -6569,6 +7199,11 @@ def main():
             report=_refresh_and_archive_logs()
             logger.info('Consolidated error log refreshed: errors=%d sources=%d',report.error_count,report.source_count)
         except Exception:logger.exception('Consolidated error log refresh failed')
+        try:
+            target_root=Path(sys.executable).resolve() if getattr(sys,'frozen',False) else APP_FOLDER
+            cleaned_backups=cleanup_completed_update_backups(target_path=target_root)
+            if cleaned_backups:logger.info('Removed %d completed update backup artifact(s)',cleaned_backups)
+        except Exception:logger.exception('Completed update backup cleanup failed')
         window=ReminderApp()
         window._single_instance=instance
         window._single_instance_activation=activation_requested

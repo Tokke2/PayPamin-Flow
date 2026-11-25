@@ -90,6 +90,15 @@ def release_page(repository: str, tag: str, api=None) -> dict:
         return {}
 
 
+def latest_release_page(repository: str, api=None) -> dict:
+    """Return GitHub's ``releases/latest`` object, or an empty dict when absent."""
+    read = api or _api
+    try:
+        return read(repository, "releases/latest")
+    except ReleaseVerificationError:
+        return {}
+
+
 def _download(url: str, timeout: float = 60.0) -> bytes:
     request = Request(url, headers={"User-Agent": "PayPamin-Flow-release-check"})
     with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed host
@@ -190,6 +199,20 @@ def verify(
     if not release:
         problems.append(f"Releasen för {tag} gick inte att läsa.")
     else:
+        if release.get("draft"):
+            problems.append(f"Releasen för {tag} är ett utkast (draft) och syns inte för appen.")
+        if release.get("prerelease"):
+            problems.append(f"Releasen för {tag} är markerad som förhandsversion (prerelease) och kan därför aldrig vara Latest.")
+        latest = latest_release_page(repository, api=api)
+        if not latest:
+            problems.append(f"Ingen release är markerad som Latest på GitHub (förväntade {tag}).")
+        else:
+            latest_tag = str(latest.get("tag_name") or "")
+            latest_id = latest.get("id")
+            if (latest_tag and latest_tag != tag) or (latest_id and release.get("id") and latest_id != release.get("id")):
+                problems.append(
+                    f"Releasen {tag} är inte markerad som Latest (GitHub rapporterar {latest_tag or latest_id})."
+                )
         body = str(release.get("body") or "")
         if commit[:7] not in body:
             problems.append(

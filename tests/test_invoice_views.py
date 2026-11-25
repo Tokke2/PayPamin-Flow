@@ -192,6 +192,67 @@ class InvoiceViewTests(unittest.TestCase):
         self.assertEqual(fake.current_filter_key, "current")
         self.assertEqual(tabs.select(), "tab-current")
 
+    def test_sort_indicators_and_persistent_column_reordering(self):
+        self.assertEqual(
+            self.app.format_sort_heading("Förfallodatum", True, False),
+            "Förfallodatum ▲",
+        )
+        self.assertEqual(
+            self.app.format_sort_heading("Förfallodatum", True, True),
+            "Förfallodatum ▼",
+        )
+        self.assertEqual(
+            self.app.format_sort_heading("Kund", False, True),
+            "Kund",
+        )
+        valid = ("invoice_no", "customer", "due_date", "amount")
+        self.assertEqual(
+            self.app.parse_column_order("customer,amount,unknown,customer", valid),
+            ("customer", "amount", "invoice_no", "due_date"),
+        )
+
+        class FakeTree:
+            def __init__(self):
+                self.headings = {}
+                self.displaycolumns = "#all"
+                self.bindings = {}
+
+            def __getitem__(self, key):
+                if key == "displaycolumns":
+                    return self.displaycolumns
+                if key == "columns":
+                    return valid
+                raise KeyError(key)
+
+            def configure(self, **kwargs):
+                if "displaycolumns" in kwargs:
+                    self.displaycolumns = tuple(kwargs["displaycolumns"])
+
+            def heading(self, col, **kwargs):
+                self.headings.setdefault(col, {}).update(kwargs)
+
+            def bind(self, seq, func, add=None):
+                self.bindings[seq] = func
+
+        tree = FakeTree()
+        labels = {"invoice_no": "Fakturanr", "customer": "Kund", "due_date": "Förfallodatum", "amount": "Belopp"}
+        self.app.enable_treeview_features(
+            tree,
+            valid,
+            labels,
+            initial_sort="due_date",
+            initial_reverse=False,
+            order_setting_key="invoice_column_order",
+        )
+        self.assertEqual(tree.headings["due_date"]["text"], "Förfallodatum ▲")
+        self.assertEqual(tree.headings["customer"]["text"], "Kund")
+        tree._apply_column_order(["customer", "invoice_no", "due_date", "amount"], persist=True)
+        self.assertEqual(self.app.setting("invoice_column_order"), "customer,invoice_no,due_date,amount")
+        self.assertEqual(tree.displaycolumns, ("customer", "invoice_no", "due_date", "amount"))
+        tree._refresh_sort_headings("amount", True)
+        self.assertEqual(tree.headings["amount"]["text"], "Belopp ▼")
+        self.assertEqual(tree.headings["due_date"]["text"], "Förfallodatum")
+
     def test_tab_change_refreshes_and_logs_without_editing_invoice_data(self):
         row = self.save_invoice("PAID-LOG", paid=1000.0)
         tabs = FakeNotebook("tab-history")

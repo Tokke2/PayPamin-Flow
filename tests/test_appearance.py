@@ -426,12 +426,11 @@ class AppThemeTests(unittest.TestCase):
 
     def test_a_wide_screen_is_actually_used(self):
         width, height, x, y, minimum = self.geometry((2560, 1440), (0, 0, 2560, 1400))
-        self.assertGreater(width, 2000)
-        self.assertGreater(height, 1100)
+        self.assertGreater(width, 1450)
         self.assertLessEqual(width, 2560 - 48)
-        self.assertLessEqual(height, 1400 - 48)
+        self.assertEqual(height, 1400)
         self.assertGreater(x, 0)
-        self.assertGreater(y, 0)
+        self.assertEqual(y, 0)
         self.assertLessEqual(minimum[0], width)
         self.assertLessEqual(minimum[1], height)
 
@@ -439,9 +438,32 @@ class AppThemeTests(unittest.TestCase):
         area = (1920, 40, 1920, 1000)
         width, height, x, y, _minimum = self.geometry((1920, 1080), area)
         self.assertLessEqual(width, 1920 - 48)
-        self.assertLessEqual(height, 1000 - 48)
-        self.assertGreaterEqual(x, 0)
-        self.assertGreaterEqual(y, 40)
+        self.assertEqual(height, 1000)
+        self.assertGreaterEqual(x, 1920)
+        self.assertEqual(y, 40)
+
+    def test_dark_palette_switches_header_wordmark_to_dark_variant(self):
+        light_logo = object()
+        dark_logo = object()
+        logo_widget = Mock()
+        fake = SimpleNamespace(
+            _accessibility_style=None,
+            _high_contrast=False,
+            _theme="dark",
+            _brand_logo=light_logo,
+            _brand_logo_light=light_logo,
+            _brand_logo_dark=dark_logo,
+            _brand_logo_widgets=[logo_widget],
+            _header_backgrounds=[],
+            tree=None,
+            configure=Mock(),
+            winfo_children=lambda: [],
+        )
+        fake._active_brand_logo = lambda: self.app.ReminderApp._active_brand_logo(fake)
+        with patch.object(self.app, "apply_widget_contrast"), patch.object(self.app, "prepare_focus_tree"):
+            self.app.repaint_app_palette(fake)
+        self.assertIs(fake._brand_logo, dark_logo)
+        logo_widget.configure.assert_called_once_with(image=dark_logo)
 
     def test_a_small_screen_still_gets_a_usable_window(self):
         width, height, _x, _y, minimum = self.geometry((1024, 700), (0, 0, 1024, 700))

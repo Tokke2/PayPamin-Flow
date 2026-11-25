@@ -3,13 +3,19 @@
   <title id="ppf-title">PayPamin Flow</title>
   <desc id="ppf-desc">Ett stiliserat fakturadokument som P-märke med en turkos bock för genomförd betalningspåminnelse på mörkblå bakgrund med ett turkost svep, ritat som ren vektor.</desc>
   <metadata>Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.</metadata>
-  <rect width="512" height="512" rx="118" fill="#0B2447"/>
-  <path d="M0 512V206A306 306 0 0 0 306 512Z" fill="#0E8C82"/>
-  <g fill="none" stroke="#FFFFFF" stroke-width="66" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M150 110V376"/>
-    <path d="M150 110H262A79 79 0 0 1 262 268H150"/>
+  <g id="brand-mark">
+    <rect id="mark-plate" width="512" height="512" rx="116" fill="#0B2447"/>
+    <path id="mark-sweep" d="M0 512V208A304 304 0 0 0 304 512Z" fill="#0E8C82"/>
+    <path id="mark-doc-accent" d="M336 108H408" fill="none" stroke="#12B3A6" stroke-width="24" stroke-linecap="round"/>
+    <path id="mark-doc-sub" d="M356 152H408" fill="none" stroke="#12B3A6" stroke-width="18" stroke-linecap="round"/>
+    <g id="mark-monogram-p" fill="none" stroke="#FFFFFF" stroke-width="66" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M148 108V376"/>
+      <path d="M148 108H262A80 80 0 0 1 262 268H148"/>
+    </g>
+    <g id="mark-check-badge">
+      <circle cx="388" cy="388" r="104" fill="#FFFFFF"/>
+      <circle cx="388" cy="388" r="88" fill="#12B3A6"/>
+      <path d="M342 390L372 420L432 354" fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
   </g>
-  <circle cx="388" cy="388" r="104" fill="#FFFFFF"/>
-  <circle cx="388" cy="388" r="90" fill="#12B3A6"/>
-  <path d="M344 390L372 418L430 354" fill="none" stroke="#FFFFFF" stroke-width="31" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

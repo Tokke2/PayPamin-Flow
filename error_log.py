@@ -8,13 +8,14 @@ import re
 import shutil
 import tempfile
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from quiet_faults import report_fault
 
 ERROR_LOG_NAME = "errors.log"
 RESOLVED_ERROR_STATE = "resolved-errors.json"
 RESOLVED_ARCHIVE_FOLDER = "resolved"
+RESOLVED_RETENTION_DAYS = 30
 _SEPARATOR = "=" * 72
 _APP_RECORD = re.compile(
     r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+"
@@ -49,6 +50,15 @@ class ErrorResolutionReport:
     path: Path
     archive_path: Path | None
     resolved_count: int
+
+
+@dataclass(frozen=True)
+class ActiveErrorItem:
+    fingerprint: str
+    timestamp: datetime | None
+    source: str
+    summary: str
+    text: str
 
 
 def _timestamp(value: str) -> datetime | None:
@@ -193,7 +203,12 @@ def refresh_error_log(log_dir: str | Path) -> ErrorLogReport:
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     output_path = log_dir / ERROR_LOG_NAME
-    resolved = _load_resolved(log_dir)
+    raw_resolved = _load_resolved(log_dir)
+    now_utc = datetime.now(timezone.utc)
+    resolved = _prune_expired_resolved(raw_resolved, now_utc)
+    if len(resolved) != len(raw_resolved):
+        state_payload = json.dumps({"format": 1, "resolved": resolved}, indent=2, sort_keys=True) + "\n"
+        _atomic_write(_resolved_path(log_dir), state_payload, prefix=".resolved-errors-")
     entries = _previous_entries(output_path)
     sources = _source_logs(log_dir, output_path)
     for path in sources:
@@ -242,6 +257,133 @@ def refresh_error_log(log_dir: str | Path) -> ErrorLogReport:
     return ErrorLogReport(output_path, len(unique), len(sources))
 
 
+def list_unresolved_errors(log_dir: str | Path) -> list[ActiveErrorItem]:
+    """Refresh and return all currently unresolved error entries, newest first."""
+    log_dir = Path(log_dir)
+    refresh_error_log(log_dir)
+    output_path = log_dir / ERROR_LOG_NAME
+    resolved = _load_resolved(log_dir)
+    items: list[ActiveErrorItem] = []
+    seen: set[str] = set()
+    for entry in _previous_entries(output_path):
+        fingerprint = _fingerprint(entry)
+        if fingerprint in resolved or fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        first_line = next((line.strip() for line in entry.text.splitlines() if line.strip()), "Error")
+        items.append(
+            ActiveErrorItem(
+                fingerprint=fingerprint,
+                timestamp=entry.timestamp,
+                source=entry.source,
+                summary=first_line[:140],
+                text=entry.text,
+            )
+        )
+    minimum = datetime.min.replace(tzinfo=timezone.utc)
+    items.sort(key=lambda item: item.timestamp or minimum, reverse=True)
+    return items
+
+
+def _prune_expired_resolved(resolved: dict[str, str], now: datetime) -> dict[str, str]:
+    cutoff = now - timedelta(days=RESOLVED_RETENTION_DAYS)
+    kept: dict[str, str] = {}
+    for digest, stamp in resolved.items():
+        parsed = _timestamp(stamp)
+        if parsed is None or parsed >= cutoff:
+            kept[digest] = stamp
+    return kept
+
+
+def _archive_entries(
+    log_dir: Path,
+    entries_to_resolve: list[ErrorEntry],
+    *,
+    copy_full_file: Path | None = None,
+    today: date | None = None,
+    now: datetime | None = None,
+) -> ErrorResolutionReport:
+    output_path = log_dir / ERROR_LOG_NAME
+    if not entries_to_resolve:
+        return ErrorResolutionReport(output_path, None, 0)
+
+    resolved = _load_resolved(log_dir)
+    resolved_at = now or datetime.now(timezone.utc)
+    archive_day = today or date.today()
+    archive_dir = log_dir / "arkiv" / RESOLVED_ARCHIVE_FOLDER / archive_day.isoformat()
+    if (log_dir / "arkiv").is_symlink() or archive_dir.is_symlink() or archive_dir.parent.is_symlink():
+        raise OSError("Resolved-error archive must not be a symbolic link")
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    stamp = resolved_at.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    archive_path = archive_dir / f"errors-{stamp}.log"
+    index = 2
+    while archive_path.exists() or archive_path.is_symlink():
+        archive_path = archive_dir / f"errors-{stamp}-{index}.log"
+        index += 1
+    try:
+        if copy_full_file is not None and copy_full_file.is_file():
+            with copy_full_file.open("rb") as source, archive_path.open("xb") as destination:
+                shutil.copyfileobj(source, destination)
+        else:
+            lines = [
+                "# PayPamin Flow resolved error archive",
+                f"# Resolved UTC: {resolved_at.isoformat()}",
+                f"# Errors: {len(entries_to_resolve)}",
+            ]
+            for entry in entries_to_resolve:
+                entry_time = entry.timestamp.isoformat() if entry.timestamp else "unknown time"
+                lines.extend([
+                    "",
+                    _SEPARATOR,
+                    f"SOURCE: {entry.source}",
+                    f"TIME: {entry_time}",
+                    "-" * 72,
+                    entry.text,
+                ])
+            with archive_path.open("xb") as destination:
+                destination.write(("\n".join(lines) + "\n").encode("utf-8"))
+    except Exception:
+        try:
+            archive_path.unlink(missing_ok=True)
+        except OSError:
+            report_fault()
+        raise
+
+    timestamp = resolved_at.isoformat()
+    resolved = _prune_expired_resolved(resolved, resolved_at)
+    for entry in entries_to_resolve:
+        resolved[_fingerprint(entry)] = timestamp
+    payload = json.dumps(
+        {"format": 1, "resolved": dict(sorted(resolved.items()))},
+        ensure_ascii=False, indent=2, sort_keys=True,
+    ) + "\n"
+    _atomic_write(_resolved_path(log_dir), payload, prefix=".resolved-errors-")
+    refresh_error_log(log_dir)
+    return ErrorResolutionReport(output_path, archive_path, len(entries_to_resolve))
+
+
+def resolve_selected_errors(
+    log_dir: str | Path,
+    fingerprints,
+    *,
+    today: date | None = None,
+    now: datetime | None = None,
+) -> ErrorResolutionReport:
+    """Archive and remove only the selected unresolved error fingerprints."""
+    log_dir = Path(log_dir)
+    wanted = {str(value).strip().lower() for value in (fingerprints or ()) if str(value).strip()}
+    output_path = log_dir / ERROR_LOG_NAME
+    if not wanted:
+        return ErrorResolutionReport(output_path, None, 0)
+    resolved = _load_resolved(log_dir)
+    selected = [
+        entry
+        for entry in _previous_entries(output_path)
+        if _fingerprint(entry) in wanted and _fingerprint(entry) not in resolved
+    ]
+    return _archive_entries(log_dir, selected, today=today, now=now)
+
+
 def resolve_errors(
     log_dir: str | Path,
     *,
@@ -260,36 +402,10 @@ def resolve_errors(
     entries = [entry for entry in entries if _fingerprint(entry) not in resolved]
     if not entries:
         return ErrorResolutionReport(output_path, None, 0)
-
-    resolved_at = now or datetime.now(timezone.utc)
-    archive_day = today or date.today()
-    archive_dir = log_dir / "arkiv" / RESOLVED_ARCHIVE_FOLDER / archive_day.isoformat()
-    if (log_dir / "arkiv").is_symlink() or archive_dir.is_symlink() or archive_dir.parent.is_symlink():
-        raise OSError("Resolved-error archive must not be a symbolic link")
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    stamp = resolved_at.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    archive_path = archive_dir / f"errors-{stamp}.log"
-    index = 2
-    while archive_path.exists() or archive_path.is_symlink():
-        archive_path = archive_dir / f"errors-{stamp}-{index}.log"
-        index += 1
-    try:
-        with output_path.open("rb") as source, archive_path.open("xb") as destination:
-            shutil.copyfileobj(source, destination)
-    except Exception:
-        try:
-            archive_path.unlink(missing_ok=True)
-        except OSError:
-            report_fault()
-        raise
-
-    timestamp = resolved_at.isoformat()
-    for entry in entries:
-        resolved[_fingerprint(entry)] = timestamp
-    payload = json.dumps(
-        {"format": 1, "resolved": dict(sorted(resolved.items()))},
-        ensure_ascii=False, indent=2, sort_keys=True,
-    ) + "\n"
-    _atomic_write(_resolved_path(log_dir), payload, prefix=".resolved-errors-")
-    refresh_error_log(log_dir)
-    return ErrorResolutionReport(output_path, archive_path, len(entries))
+    return _archive_entries(
+        log_dir,
+        entries,
+        copy_full_file=output_path,
+        today=today,
+        now=now,
+    )

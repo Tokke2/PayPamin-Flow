@@ -84,7 +84,11 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "assets/paypamin_flow_256.png",
     "assets/paypamin_flow_512.png",
     "assets/paypamin_logo.png",
+    "assets/paypamin_logo_1024.png",
     "assets/paypamin_logo.svg",
+    "assets/paypamin_logo_dark.png",
+    "assets/paypamin_logo_dark_1024.png",
+    "assets/paypamin_logo_dark.svg",
     "assets/paypamin_flow_small.svg",
     "assets/paypamin_flow_tiny.svg",
     "assets/print/paypamin_logo_print.svg",
@@ -140,6 +144,8 @@ def is_python_package_file(filename: str) -> bool:
         return path.suffix.lower() in {".png", ".svg", ".ico", ".icns"}
     if len(path.parts) == 3 and path.parts[:2] in (("assets", "icons"), ("assets", "print")):
         return path.suffix.lower() in {".png", ".pdf", ".svg", ".txt"}
+    if len(path.parts) == 4 and path.parts[:3] == ("assets", "icons", "hidpi"):
+        return path.suffix.lower() == ".png"
     if len(path.parts) == 2 and path.parts[0] == "packaging":
         return filename in {
             "packaging/install_linux.sh",

@@ -90,13 +90,18 @@ def main() -> int:
         build_icons.main(rebuilt)
         problems: list[str] = []
 
-        committed_png = sorted(p for p in ASSETS.rglob("*.png") if p.parent.name != "icons")
+        committed_png = sorted(ASSETS.rglob("*.png"))
         for path in committed_png:
             candidate = rebuilt / path.relative_to(ASSETS)
             if not candidate.is_file():
-                problems.append(f"{path.name}: not produced by the vector masters")
+                problems.append(f"{path.relative_to(ASSETS)}: not produced by the vector masters")
                 continue
             problems.extend(compare_images(path, candidate))
+
+        for candidate in sorted(rebuilt.rglob("*.png")):
+            rel = candidate.relative_to(rebuilt)
+            if not (ASSETS / rel).is_file():
+                problems.append(f"{rel}: missing from committed assets")
 
         # Print PDFs are checked structurally: vector only, one page, and the
         # physical size the README promises to a print shop.
@@ -131,6 +136,10 @@ def main() -> int:
             text = path.read_text(encoding="utf-8")
             if "<text" in text or "font-family" in text:
                 problems.append(f"{path.name}: contains live text instead of outlines")
+            if "scale(1,-1)" in text:
+                problems.append(f"{path.name}: contains inverted Y-axis transform instead of upright coordinates")
+            if 'id="brand-mark' not in text:
+                problems.append(f"{path.name}: missing named editable vector group")
             if "<filter" in text:
                 problems.append(f"{path.name}: contains a filter, which print may not support")
             if "Copyright ©" not in text:

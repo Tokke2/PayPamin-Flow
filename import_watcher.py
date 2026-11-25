@@ -7,6 +7,7 @@ changes or if they are removed and later added back.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,22 +27,22 @@ class ImportFolderMonitor:
         self._handled: dict[Path, FileSignature] = {}
 
     def _snapshot(self) -> dict[Path, FileSignature]:
-        try:
-            candidates = sorted(
-                path
-                for path in self.folder.iterdir()
-                if path.is_file() and path.suffix.lower() == ".pdf"
-            )
-        except (FileNotFoundError, NotADirectoryError):
-            return {}
         current: dict[Path, FileSignature] = {}
-        for path in candidates:
-            try:
-                details = path.stat()
-                current[path] = FileSignature(details.st_size, details.st_mtime_ns)
-            except OSError:
-                # The file may still be moving or being replaced by the export.
-                continue
+        try:
+            with os.scandir(self.folder) as entries:
+                for entry in entries:
+                    if not entry.name.lower().endswith(".pdf"):
+                        continue
+                    try:
+                        if not entry.is_file():
+                            continue
+                        details = entry.stat()
+                    except OSError:
+                        # The file may still be moving or being replaced by the export.
+                        continue
+                    current[self.folder / entry.name] = FileSignature(details.st_size, details.st_mtime_ns)
+        except OSError:
+            return {}
         return current
 
     def poll(self) -> list[Path]:

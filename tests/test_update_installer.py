@@ -400,6 +400,30 @@ class DownloadRetryTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(self.waits, [1.5])
 
+    def test_ready_handshake_removes_backup_immediately_and_startup_cleans_completed_staging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging = root / "paypamin-flow-python-update-test"
+            backup = staging / "backup"
+            backup.mkdir(parents=True)
+            (backup / "old.py").write_text("# backup\n", encoding="utf-8")
+            (root / "leftover.py.bak").write_text("# bak\n", encoding="utf-8")
+            ready = staging / "ready.json"
+            env = {
+                update_installer.UPDATE_READY_FILE_ENV: str(ready),
+                update_installer.UPDATE_READY_TOKEN_ENV: "token-123",
+            }
+            with patch.dict(update_installer.os.environ, env):
+                self.assertTrue(mark_update_ready())
+            self.assertFalse(backup.exists())
+            self.assertTrue((staging / "update-completed.json").is_file())
+            removed = update_installer.cleanup_completed_update_backups(
+                temp_root=root, target_path=root
+            )
+            self.assertEqual(removed, 1)
+            self.assertFalse(staging.exists())
+            self.assertFalse((root / "leftover.py.bak").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -390,5 +390,24 @@ class ApplicationStartupTests(unittest.TestCase):
                     handler.close()
 
 
+    def test_windows_hidden_startupinfo_sets_sw_hide_and_vbs_logs_to_app_log(self):
+        class FakeStartupInfo:
+            def __init__(self):
+                self.dwFlags = 0
+                self.wShowWindow = 99
+
+        with patch.object(console_free.subprocess, "STARTUPINFO", FakeStartupInfo, create=True), patch.object(
+            console_free.subprocess, "STARTF_USESHOWWINDOW", 1, create=True
+        ), patch.object(console_free.subprocess, "SW_HIDE", 0, create=True):
+            info = console_free._hidden_startupinfo()
+            self.assertIsNotNone(info)
+            self.assertEqual(info.dwFlags & 1, 1)
+            self.assertEqual(info.wShowWindow, 0)
+
+        vbs = (Path(__file__).resolve().parents[1] / "start_paypamin_flow.vbs").read_text(encoding="utf-8")
+        self.assertIn("app.log", vbs)
+        self.assertNotIn("startup.log", vbs)
+
+
 if __name__ == "__main__":
     unittest.main()

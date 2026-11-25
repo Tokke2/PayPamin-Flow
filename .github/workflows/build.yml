@@ -9,8 +9,9 @@ on:
         type: string
   push:
     # Arena session branches run the full Windows/macOS/Linux matrix on every
-    # push, so verification never depends on opening a pull request.
-    branches: [main, 'arena/**']
+    # push, so verification never depends on opening a pull request. Never
+    # target main: work happens exclusively on the active session branch.
+    branches: ['arena/**']
   pull_request:
   release:
     types: [published]
@@ -93,8 +94,26 @@ jobs:
         run: |
           version=$(python -c "import app_info; print(app_info.APP_VERSION)")
           tag="v$version"
+          python packaging/release_description.py \
+            --tag "$tag" --repository "$REPOSITORY" --commit "$COMMIT" \
+            --output release-body.md
           if ! gh api "repos/$REPOSITORY/releases/tags/$tag" --jq .id > /dev/null 2>&1; then
-            echo "No release $tag exists yet; nothing to refresh"
+            if gh api "repos/$REPOSITORY/git/ref/tags/$tag" > /dev/null 2>&1; then
+              gh api -X PATCH "repos/$REPOSITORY/git/refs/tags/$tag" \
+                -f sha="$COMMIT" -F force=true > /dev/null
+            else
+              gh api -X POST "repos/$REPOSITORY/git/refs" \
+                -f ref="refs/tags/$tag" -f sha="$COMMIT" > /dev/null
+            fi
+            gh api -X POST "repos/$REPOSITORY/releases" \
+              -f tag_name="$tag" \
+              -f name="PayPamin Flow $version" \
+              -f target_commitish="$COMMIT" \
+              -F body=@release-body.md \
+              -F draft=false \
+              -F prerelease=false \
+              -f make_latest=true > /dev/null
+            echo "Created release $tag at $COMMIT and marked as Latest"
             exit 0
           fi
           # The tag follows the branch, so the archive GitHub generates for it -
@@ -102,12 +121,13 @@ jobs:
           gh api -X PATCH "repos/$REPOSITORY/git/refs/tags/$tag" \
             -f sha="$COMMIT" -F force=true > /dev/null
           release_id=$(gh api "repos/$REPOSITORY/releases/tags/$tag" --jq .id)
-          python packaging/release_description.py \
-            --tag "$tag" --repository "$REPOSITORY" --commit "$COMMIT" \
-            --output release-body.md
           gh api -X PATCH "repos/$REPOSITORY/releases/$release_id" \
-            -F body=@release-body.md > /dev/null
-          echo "Release $tag now points at $COMMIT and its source archive is that code"
+            -f target_commitish="$COMMIT" \
+            -F body=@release-body.md \
+            -F draft=false \
+            -F prerelease=false \
+            -f make_latest=true > /dev/null
+          echo "Release $tag now points at $COMMIT, marked as Latest, and its source archive is that code"
       - name: Verify the release really carries this commit
         # The step above reports what it asked GitHub to do. This one reads the
         # result back - tag, page, file list and the archive itself - so a

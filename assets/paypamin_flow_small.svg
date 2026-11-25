@@ -3,13 +3,17 @@
   <title id="ppf-title">PayPamin Flow</title>
   <desc id="ppf-desc">Förenklad variant för ikoner mellan 24 och 40 px: P-märke med bock på mörkblå bakgrund med ett turkost svep.</desc>
   <metadata>Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.</metadata>
-  <rect width="512" height="512" rx="112" fill="#0B2447"/>
-  <path d="M0 512V236A276 276 0 0 0 276 512Z" fill="#0E8C82"/>
-  <g fill="none" stroke="#FFFFFF" stroke-width="84" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M140 86V386"/>
-    <path d="M140 86H254A86 86 0 0 1 254 244H140"/>
+  <g id="brand-mark-small">
+    <rect id="mark-plate" width="512" height="512" rx="112" fill="#0B2447"/>
+    <path id="mark-sweep" d="M0 512V236A276 276 0 0 0 276 512Z" fill="#0E8C82"/>
+    <g id="mark-monogram-p" fill="none" stroke="#FFFFFF" stroke-width="84" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M140 88V384"/>
+      <path d="M140 88H256A86 86 0 0 1 256 246H140"/>
+    </g>
+    <g id="mark-check-badge">
+      <circle cx="392" cy="392" r="100" fill="#FFFFFF"/>
+      <circle cx="392" cy="392" r="85" fill="#12B3A6"/>
+      <path d="M350 392L378 420L434 358" fill="none" stroke="#FFFFFF" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
   </g>
-  <circle cx="392" cy="392" r="100" fill="#FFFFFF"/>
-  <circle cx="392" cy="392" r="86" fill="#12B3A6"/>
-  <path d="M352 392L378 418L434 358" fill="none" stroke="#FFFFFF" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

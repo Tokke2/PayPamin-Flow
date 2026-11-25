@@ -7,11 +7,14 @@ och kan öppnas direkt från appen via Arkiv → Öppna tryckfiler.
 
 Innehåll
 --------
-paypamin_logo_print.svg        Vektororiginal, plana färger (redigerbart)
+paypamin_logo_print.svg        Redigerbart vektororiginal med namngivna grupper
+                               (brand-mark, wordmark-paypamin, wordmark-flow),
+                               rättvända kurvor och plana färger
 paypamin_logo_print.pdf         Tryckfärdig PDF, vektor, 90 mm bred
 paypamin_logo_print.png         Förhandsvisning 2400 px på vit botten
 
-paypamin_logo_print_mono.svg   Enfärgsoriginal (stämpel, gravyr, etikett)
+paypamin_logo_print_mono.svg   Enfärgsoriginal (stämpel, gravyr, etikett),
+                               redigerbart med namngivna vektorgrupper
 paypamin_logo_print_mono.pdf   Tryckfärdig PDF, en färg
 paypamin_logo_print_mono.png   Förhandsvisning 2400 px
 

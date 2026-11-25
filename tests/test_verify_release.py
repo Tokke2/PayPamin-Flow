@@ -54,7 +54,18 @@ class ReleaseVerificationTests(unittest.TestCase):
             target.write_bytes(content.encode("utf-8"))
         self.payload = make_archive(FILES)
 
-    def api(self, *, tag_commit=COMMIT, body=None, assets=None, tag_type="commit"):
+    def api(
+        self,
+        *,
+        tag_commit=COMMIT,
+        body=None,
+        assets=None,
+        tag_type="commit",
+        draft=False,
+        prerelease=False,
+        latest_tag=TAG,
+        latest_id=444043893,
+    ):
         body = f"<!-- release -->\n- Commit: `{COMMIT[:7]}`\n" if body is None else body
         target = tag_commit
         answers = {}
@@ -64,7 +75,16 @@ class ReleaseVerificationTests(unittest.TestCase):
             answers[f"git/tags/{'d' * 40}"] = {"object": {"sha": COMMIT, "type": "commit"}}
         else:
             answers[f"git/ref/tags/{TAG}"] = {"object": {"sha": target, "type": "commit"}}
-        answers[f"releases/tags/{TAG}"] = {"id": 444043893, "body": body, "assets": assets or []}
+        answers[f"releases/tags/{TAG}"] = {
+            "id": 444043893,
+            "tag_name": TAG,
+            "draft": draft,
+            "prerelease": prerelease,
+            "body": body,
+            "assets": assets or [],
+        }
+        if latest_tag is not None:
+            answers["releases/latest"] = {"id": latest_id, "tag_name": latest_tag}
 
         def read(repository, path):
             if path not in answers:
@@ -105,6 +125,20 @@ class ReleaseVerificationTests(unittest.TestCase):
         problems = self.verify(api=self.api(assets=[{"name": "PayPamin-Flow-Python.zip"}]))
         self.assertTrue(any("uppladdade fil" in problem for problem in problems))
         self.assertIn("PayPamin-Flow-Python.zip", " ".join(problems))
+
+    def test_a_release_that_is_not_marked_latest_is_a_problem(self):
+        problems = self.verify(api=self.api(latest_tag="v0.5.0", latest_id=111))
+        self.assertTrue(any("Latest" in problem for problem in problems))
+
+    def test_a_missing_latest_release_is_a_problem(self):
+        problems = self.verify(api=self.api(latest_tag=None))
+        self.assertTrue(any("Latest" in problem for problem in problems))
+
+    def test_a_draft_or_prerelease_is_a_problem(self):
+        draft_problems = self.verify(api=self.api(draft=True))
+        self.assertTrue(any("utkast" in problem for problem in draft_problems))
+        pre_problems = self.verify(api=self.api(prerelease=True))
+        self.assertTrue(any("prerelease" in problem for problem in pre_problems))
 
     def test_a_missing_release_is_reported(self):
         def read(repository, path):

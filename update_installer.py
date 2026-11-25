@@ -454,21 +454,29 @@ def evaluate_release(
     if release.content_state:
         return release
 
+    target = Path(directory) if directory else Path(__file__).resolve().parent
+    recorded_fp = update_state.installed_files_fingerprint(state_file)
+    local_files_intact = True
+    if recorded_fp:
+        try:
+            local_files_intact = _shipped_fingerprint(target) == recorded_fp
+        except OSError:
+            local_files_intact = False
+
     # The release is the source archive at the tag's commit, so the recorded
-    # commit of the installed copy answers the question outright: equal means
-    # the same code, different means newer or older, and nothing is downloaded.
+    # commit of the installed copy answers the question outright when the
+    # tracked local files still match their installed fingerprint.
     local_commit = update_state.installed_source_commit(state_file)
-    if release.source_commit and local_commit:
+    if release.source_commit and local_commit and local_files_intact:
         state = CONTENT_CURRENT if release.source_commit == local_commit else CONTENT_SOURCE_DIFFERS
         return replace(release, content_state=state)
 
     local_hash = update_state.installed_package_sha256(state_file)
     release_hash = release_package_sha256(release, opener=opener) if release.assets else ""
-    if release_hash and local_hash:
+    if release_hash and local_hash and local_files_intact:
         state = CONTENT_CURRENT if release_hash == local_hash else CONTENT_DIFFERS
         return replace(release, package_sha256=release_hash, content_state=state)
 
-    target = Path(directory) if directory else Path(__file__).resolve().parent
     try:
         content = read_source_content(release, opener=opener)
     except (UpdateInstallError, OSError):
@@ -620,13 +628,14 @@ def _extract_source_tree(archive_path: Path, source_path: Path, root: str, expec
                 version=_package_version(source_path),
             )
         )
-    for path in source_path.rglob("*.py"):
-        try:
-            compile(path.read_bytes(), str(path), "exec")
-        except (OSError, SyntaxError) as exc:
-            raise UpdateInstallError(
-                _("Python-filen i uppdateringen är ogiltig: {name}", name=path.name)
-            ) from exc
+    for pattern in ("*.py", "*.pyw"):
+        for path in source_path.rglob(pattern):
+            try:
+                compile(path.read_bytes(), str(path), "exec")
+            except (OSError, SyntaxError) as exc:
+                raise UpdateInstallError(
+                    _("Python-filen i uppdateringen är ogiltig: {name}", name=path.name)
+                ) from exc
 
 
 def stage_update(
@@ -715,13 +724,78 @@ def rollback_update(installed: InstalledUpdate) -> None:
     _log(installed.plan, "Rolled back Python update")
 
 
+def _preflight_target_writable(target_root: Path) -> None:
+    """Verify the target directory is writable before modifying any file."""
+    target_root.mkdir(parents=True, exist_ok=True)
+    probe = None
+    try:
+        descriptor, probe_name = tempfile.mkstemp(prefix=".paypamin-update-probe-", dir=target_root)
+        os.close(descriptor)
+        probe = Path(probe_name)
+    except OSError as exc:
+        raise UpdateInstallError(
+            _("Uppdateringen kunde inte installeras: {error}", error=exc)
+        ) from exc
+    finally:
+        if probe is not None:
+            try:
+                probe.unlink(missing_ok=True)
+            except OSError:
+                report_fault()
+
+
+def _remove_backup_artifacts(target_root: Path | None) -> None:
+    """Remove leftover temporary or .bak backup files inside the app directory."""
+    if target_root is None or not target_root.is_dir():
+        return
+    try:
+        for current, folders, files in os.walk(target_root):
+            folders[:] = [folder for folder in folders if not folder.startswith(".") and folder not in {"import", "export", "svg"}]
+            base = Path(current)
+            for name in files:
+                if name.endswith(".bak") or name.startswith(".paypamin-update-"):
+                    candidate = base / name
+                    if not candidate.is_symlink():
+                        try:
+                            candidate.unlink(missing_ok=True)
+                        except OSError:
+                            report_fault()
+    except OSError:
+        report_fault()
+
+
+def cleanup_completed_update_backups(
+    temp_root: Path | None = None,
+    target_path: Path | None = None,
+) -> int:
+    """Delete completed update staging/backup folders left by earlier restarts."""
+    if target_path is not None:
+        _remove_backup_artifacts(Path(target_path))
+    root = Path(temp_root) if temp_root is not None else Path(tempfile.gettempdir())
+    removed = 0
+    try:
+        candidates = list(root.glob("paypamin-flow-python-update-*"))
+    except OSError:
+        return 0
+    for folder in candidates:
+        if folder.is_symlink() or not folder.is_dir():
+            continue
+        if (folder / "update-completed.json").is_file():
+            shutil.rmtree(folder, ignore_errors=True)
+            if not folder.exists():
+                removed += 1
+    return removed
+
+
 def install_update(plan: UpdatePlan) -> InstalledUpdate:
     """Atomically replace application-owned Python files, retaining a rollback copy."""
 
+    _preflight_target_writable(plan.target_path)
     installed = InstalledUpdate(plan=plan, replacements=[], previous_state=update_state.read_state())
     backup_root = plan.work_dir / "backup"
     try:
         sources = sorted(path for path in plan.source_path.rglob("*") if path.is_file())
+        fingerprint = _shipped_fingerprint(plan.source_path)
         for source in sources:
             relative_text = source.relative_to(plan.source_path).as_posix()
             if not is_python_package_file(relative_text):
@@ -740,12 +814,17 @@ def install_update(plan: UpdatePlan) -> InstalledUpdate:
             if existed:
                 shutil.copy2(target, backup)
             _replace_file(source, target)
+            if update_state.sha256_file(target) != update_state.sha256_file(source):
+                raise UpdateInstallError(
+                    _("Uppdateringen kunde inte installeras: {error}", error=target.name)
+                )
             installed.replacements.append(Replacement(target=target, backup=backup, existed=existed))
         if plan.package_sha256 or plan.source_commit:
             update_state.record_installed_package(
                 plan.package_sha256,
                 release_id=plan.release.release_id,
                 version=plan.release.version,
+                files_fingerprint=fingerprint,
                 source_commit=plan.source_commit,
             )
         _log(plan, f"Installed Python update {plan.release.version}; restart pending")
@@ -766,11 +845,14 @@ def mark_update_ready() -> bool:
 
     The parent supplies a one-off path and token only to the child process. An
     atomic write prevents the parent from reading a partial acknowledgement.
-    Normal starts without these environment variables do nothing.
+    Once acknowledged, the rollback backup inside the staging directory is no
+    longer needed and is deleted immediately. Normal starts without these
+    environment variables do nothing except sweep any completed update folders.
     """
     filename = os.environ.get(UPDATE_READY_FILE_ENV, "")
     token = os.environ.get(UPDATE_READY_TOKEN_ENV, "")
     if not filename or not token:
+        cleanup_completed_update_backups()
         return False
     ready_file = Path(filename)
     temporary = None
@@ -778,8 +860,16 @@ def mark_update_ready() -> bool:
         descriptor, temporary_name = tempfile.mkstemp(prefix=f".{ready_file.name}.", dir=ready_file.parent)
         os.close(descriptor)
         temporary = Path(temporary_name)
-        temporary.write_text(json.dumps({"token": token, "pid": os.getpid()}), encoding="utf-8")
+        payload = json.dumps({"token": token, "pid": os.getpid()})
+        temporary.write_text(payload, encoding="utf-8")
         os.replace(temporary, ready_file)
+        try:
+            (ready_file.parent / "update-completed.json").write_text(payload, encoding="utf-8")
+        except OSError:
+            report_fault()
+        backup_dir = ready_file.parent / "backup"
+        if backup_dir.is_dir() and not backup_dir.is_symlink():
+            shutil.rmtree(backup_dir, ignore_errors=True)
     except (OSError, ValueError, TypeError):
         return False
     finally:
@@ -888,7 +978,16 @@ def restart_updated_app(installed: InstalledUpdate):
 
 
 def cleanup_update(value: UpdatePlan | InstalledUpdate) -> None:
-    """Remove temporary downloads and rollback copies on a best-effort basis."""
+    """Remove temporary downloads, rollback backups and .bak leftovers."""
 
     plan = value.plan if isinstance(value, InstalledUpdate) else value
-    shutil.rmtree(plan.work_dir, ignore_errors=True)
+    backup_dir = plan.work_dir / "backup"
+    if backup_dir.exists() and not backup_dir.is_symlink():
+        shutil.rmtree(backup_dir, ignore_errors=True)
+    for attempt in range(3):
+        shutil.rmtree(plan.work_dir, ignore_errors=True)
+        if not plan.work_dir.exists():
+            break
+        if attempt < 2:
+            time.sleep(0.05)
+    _remove_backup_artifacts(plan.target_path)

@@ -47,6 +47,25 @@ class WorkflowGuardTests(unittest.TestCase):
         block = _push_trigger_block(self.workflow)
         self.assertTrue(block, "build.yml has no push trigger")
         self.assertIn("arena/**", block)
+        branches_line = next(
+            (line for line in block.splitlines() if line.strip().startswith("branches:")),
+            "",
+        )
+        self.assertNotIn("main", branches_line)
+
+    def test_agents_md_documents_all_hard_rules(self):
+        agents = ROOT / "AGENTS.md"
+        self.assertTrue(agents.is_file(), "AGENTS.md must exist in repository root")
+        text = agents.read_text(encoding="utf-8")
+        for required in ("Latest", "main", "merge", "quiet_faults.report_fault", "errors.log", "7 dagar", "10"):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+    def test_release_refresh_marks_release_as_latest(self):
+        refresh = self.workflow.split("refresh-release-files:", 1)[1]
+        self.assertIn("make_latest=true", refresh)
+        self.assertIn("draft=false", refresh)
+        self.assertIn("prerelease=false", refresh)
 
     def test_pull_requests_still_run_the_same_matrix(self):
         self.assertIn("pull_request:", self.workflow)
