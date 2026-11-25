@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 APP_NAME = "PayPamin Flow"
 APP_SLUG = "paypamin-flow"
 APP_ID = "se.paypamin.flow"
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 APP_AUTHOR = "Rickard Längkvist"
 COPYRIGHT_YEAR = "2026"
 APP_COPYRIGHT = f"Copyright © {COPYRIGHT_YEAR} {APP_AUTHOR}"
@@ -36,6 +36,7 @@ PYTHON_PACKAGE_REQUIRED_FILES = (
     "app_info.py",
     "appearance.py",
     "autostart.py",
+    "bankdays.py",
     "build_info.py",
     "cache_cleaner.py",
     "console_free.py",

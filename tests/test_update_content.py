@@ -269,6 +269,7 @@ class EvaluateReleaseTests(unittest.TestCase):
     def evaluate(self, release, responses, **options):
         return evaluate_release(
             release,
+            current_version=options.pop("current_version", "0.6.0"),
             directory=self.app_dir,
             state_file=self.state_file,
             opener=opener_for(responses),

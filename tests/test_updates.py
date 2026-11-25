@@ -159,7 +159,7 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertEqual(update_change_kind(release, "0.6.0", "a" * 40, "b" * 64), "commit")
         self.assertEqual(update_change_kind(release, "0.6.0", "b" * 40, "a" * 64), "files")
         self.assertEqual(update_change_kind(release, "0.6.0", "", ""), "release")
-        newer = ReleaseInfo("0.7.0", "v0.7.0", release.url)
+        newer = ReleaseInfo("0.8.0", "v0.8.0", release.url)
         self.assertEqual(update_change_kind(newer), "version")
 
     def test_release_identity_is_optional_for_newer_versions(self):

@@ -10,6 +10,13 @@ from datetime import datetime
 from pathlib import Path
 
 EMAIL_PATTERN = re.compile(r"^[^\s@,]+@[^\s@,]+\.[^\s@,]+$")
+CUSTOMER_LANGUAGES = ("", "sv", "en")
+
+
+def normalize_customer_language(value) -> str:
+    """Return ``'sv'`` or ``'en'`` for an explicit customer language, else ``''``."""
+    candidate = str(value or "").strip().lower()
+    return candidate if candidate in {"sv", "en"} else ""
 
 
 class EmailAddressError(ValueError):
@@ -53,12 +60,15 @@ def ensure_customer_contact_schema(db: sqlite3.Connection) -> None:
         customer_name TEXT NOT NULL,
         emails TEXT NOT NULL DEFAULT '',
         logo_file TEXT NOT NULL DEFAULT '',
+        language TEXT NOT NULL DEFAULT '',
         updated TEXT NOT NULL
         )"""
     )
     columns = {row[1] for row in db.execute("PRAGMA table_info(customer_contacts)").fetchall()}
     if "logo_file" not in columns:
         db.execute("ALTER TABLE customer_contacts ADD COLUMN logo_file TEXT NOT NULL DEFAULT ''")
+    if "language" not in columns:
+        db.execute("ALTER TABLE customer_contacts ADD COLUMN language TEXT NOT NULL DEFAULT ''")
 
 
 def get_customer_contact(db: sqlite3.Connection, customer):
@@ -70,8 +80,16 @@ def get_customer_contact(db: sqlite3.Connection, customer):
     ).fetchone()
 
 
-def save_customer_contact(db: sqlite3.Connection, customer, emails, logo_file=None):
-    """Save recipients and reuse the latest non-empty customer SVG choice."""
+def get_customer_language(db: sqlite3.Connection, customer) -> str:
+    """Return saved reminder language (``'sv'``, ``'en'``, or ``''`` for app default)."""
+    contact = get_customer_contact(db, customer)
+    if contact is None or "language" not in contact.keys():
+        return ""
+    return normalize_customer_language(contact["language"])
+
+
+def save_customer_contact(db: sqlite3.Connection, customer, emails, logo_file=None, language=None):
+    """Save recipients, customer SVG choice, and optional per-customer reminder language."""
     name = " ".join(str(customer or "").split())
     key = normalize_customer_key(name)
     if not key:
@@ -79,12 +97,17 @@ def save_customer_contact(db: sqlite3.Connection, customer, emails, logo_file=No
     normalized = normalize_email_addresses(emails)
     existing = get_customer_contact(db, name)
     inherited_logo = ""
-    if existing is not None and "logo_file" in existing.keys():
-        inherited_logo = str(existing["logo_file"] or "")
+    inherited_language = ""
+    if existing is not None:
+        if "logo_file" in existing.keys():
+            inherited_logo = str(existing["logo_file"] or "")
+        if "language" in existing.keys():
+            inherited_language = normalize_customer_language(existing["language"])
     selected_logo = Path(str(logo_file)).name if logo_file else inherited_logo
+    selected_language = inherited_language if language is None else normalize_customer_language(language)
     db.execute(
         """INSERT OR REPLACE INTO customer_contacts
-        (customer_key,customer_name,emails,logo_file,updated) VALUES(?,?,?,?,?)""",
-        (key, name, normalized, selected_logo, datetime.now().isoformat(timespec="seconds")),
+        (customer_key,customer_name,emails,logo_file,language,updated) VALUES(?,?,?,?,?,?)""",
+        (key, name, normalized, selected_logo, selected_language, datetime.now().isoformat(timespec="seconds")),
     )
     return normalized

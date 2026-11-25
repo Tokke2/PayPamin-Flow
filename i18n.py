@@ -882,6 +882,16 @@ _ENGLISH = {
     "Markera valda som åtgärdade": "Mark selected as resolved",
     "Markera alla som åtgärdade": "Mark all as resolved",
     "Passa sida": "Fit page",
+    "Språk för påminnelser": "Reminder language",
+    "Språk för kundens påminnelser": "Customer reminder language",
+    "Appens språk (standard)": "App language (default)",
+    "Svenska": "Swedish",
+    "Engelska (English)": "English",
+    "Påminnelsespråk: {language}": "Reminder language: {language}",
+    "Sista betalningsdag: {date}": "Payment deadline: {date}",
+    "Sista betalningsdag: {date} (framflyttad från {raw} – {reason} till nästa svenska bankdag)": "Payment deadline: {date} (moved from {raw} – {reason} to the next Swedish banking day)",
+    "Förfallodatumet infaller på {reason} ({raw}). Nästa svenska bankdag är {bankday}.": "The due date falls on {reason} ({raw}). The next Swedish banking day is {bankday}.",
+    "Flytta till nästa bankdag": "Move to next banking day",
 }
 
 
@@ -893,6 +903,30 @@ def set_language(language: str) -> None:
 
 def get_language() -> str:
     return _current_language
+
+
+class _LanguageScope:
+    """Context manager that temporarily switches ``_current_language``."""
+
+    def __init__(self, language: str) -> None:
+        self._target = language if language in SUPPORTED_LANGUAGES else ""
+        self._previous = _current_language
+
+    def __enter__(self) -> str:
+        self._previous = get_language()
+        if self._target and self._target != self._previous:
+            set_language(self._target)
+        return get_language()
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if get_language() != self._previous:
+            set_language(self._previous)
+        return False
+
+
+def language_override(language: str) -> _LanguageScope:
+    """Temporarily render strings/dates/money in ``language`` without changing UI language."""
+    return _LanguageScope(language)
 
 
 def language_code(language_name: str) -> str:

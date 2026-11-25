@@ -40,8 +40,8 @@ def package_block(commit: str, tag: str = "", built: str | None = None) -> str:
     if tag:
         lines.append(f"- Tag: `{tag}`")
     lines.append(
-        "- Ladda ner **Source code (zip)** nedan. Appen hämtar samma arkiv automatiskt, "
-        "så det finns inget separat paket att hålla reda på."
+        "- Uppdatera direkt inifrån PayPamin Flow (**Hjälp → Sök efter uppdateringar**), "
+        "eller ladda ner `PayPamin-Flow-Python.zip` respektive **Source code (zip)** nedan."
     )
     lines.append(CLOSING)
     return "\n".join(lines)
@@ -63,6 +63,15 @@ def replace_block(body: str, block: str) -> str:
     return f"{block}\n\n{body}".rstrip() + "\n"
 
 
+DEFAULT_NOTES = """## PayPamin Flow {version}
+
+### Nyheter i denna version
+- **Svenska helg- och bankdagar för betalningsfrister**: Sista betalningsdag på P1/P2 och e-postutkast flyttas automatiskt fram till nästa svenska bankdag om fristen annars skulle infalla på helg, midsommarafton, julafton, nyårsafton eller röd dag.
+- **Tvåspråkig påminnelse-PDF och e-post på kundnivå**: Välj svenska eller engelska per kund i *Redigera kund* eller direkt i *Skapa P1/P2* så får utländska kunder engelska brev och mejlutkast medan appens eget gränssnitt behåller ditt valda språk.
+- **Skarpare HiDPI-gränssnitt, kolumnsortering/flytt och aktiv fellogg**: Responsiv arbetsyteanpassning, `@4x` HiDPI-ikoner, mörkt ordmärke, sortering (`▲`/`▼`) och omordning av tabellkolumner samt selektiv hantering av aktiva fel.
+"""
+
+
 def describe_release(
     *,
     tag: str,
@@ -71,10 +80,12 @@ def describe_release(
     built: str | None = None,
 ) -> str:
     """Read the release body from GitHub and return the rewritten description."""
-    body = subprocess.run(
+    result = subprocess.run(
         ["gh", "api", f"repos/{repository}/releases/tags/{tag}", "--jq", ".body // \"\""],
-        check=True, capture_output=True, text=True,
-    ).stdout
+        check=False, capture_output=True, text=True,
+    )
+    version = str(tag or "").lstrip("v") or "0.7.0"
+    body = result.stdout if result.returncode == 0 and result.stdout.strip() else DEFAULT_NOTES.format(version=version)
     return replace_block(body, package_block(commit, tag, built))
 
 

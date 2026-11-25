@@ -10,12 +10,12 @@ from test_database import load_headless_app
 from update_checker import UPDATE_CHECK_INTERVAL_MS, ReleaseAsset, ReleaseInfo
 
 
-PACKAGE_URL = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.7.0/{PYTHON_RELEASE_ASSET}"
+PACKAGE_URL = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.8.0/{PYTHON_RELEASE_ASSET}"
 RELEASE_ASSETS = (
     ReleaseAsset(PYTHON_RELEASE_ASSET, PACKAGE_URL),
     ReleaseAsset(PYTHON_RELEASE_ASSET + ".sha256", PACKAGE_URL + ".sha256"),
 )
-RELEASE = ReleaseInfo("0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0", assets=RELEASE_ASSETS)
+RELEASE = ReleaseInfo("0.8.0", "v0.8.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.8.0", assets=RELEASE_ASSETS)
 
 
 class ImmediateThread:
@@ -62,7 +62,7 @@ class UpdateUiTests(unittest.TestCase):
             self.app, "update_is_manual_only", return_value=False
         ):
             self.app.ReminderApp._poll_update_check(fake, results)
-        self.assertEqual(calls, [("0.7.0", False)])
+        self.assertEqual(calls, [("0.8.0", False)])
 
     def test_nothing_is_installed_automatically_inside_a_checkout(self):
         """The suite itself runs from a git checkout, so this is the real case."""
@@ -98,7 +98,7 @@ class UpdateUiTests(unittest.TestCase):
         results = queue.Queue()
         results.put(("ok", True, RELEASE))
         self.app.ReminderApp._poll_update_check(fake, results)
-        self.assertEqual(calls, ["0.7.0"])
+        self.assertEqual(calls, ["0.8.0"])
 
     def test_update_button_opens_cached_release_without_rechecking(self):
         calls = []
@@ -302,14 +302,14 @@ class UpdateUiTests(unittest.TestCase):
 
     def test_same_version_release_build_uses_release_comparison(self):
         fake = self.fake_app()
-        release = ReleaseInfo("0.6.0", "v0.6.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.6.0", release_id="200")
+        release = ReleaseInfo("0.7.0", "v0.7.0", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.0", release_id="200")
         calls = []
         fake.show_update_available = lambda value: calls.append(value.release_id)
         results = queue.Queue()
         results.put(("ok", True, release))
         with patch.object(self.app, "is_update_available", return_value=True) as compare:
             self.app.ReminderApp._poll_update_check(fake, results)
-        compare.assert_called_once_with(release, "0.6.0")
+        compare.assert_called_once_with(release, "0.7.0")
         self.assertEqual(calls, ["200"])
 
     def test_install_cannot_start_without_a_release_archive(self):

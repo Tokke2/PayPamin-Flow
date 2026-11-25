@@ -343,7 +343,8 @@ class CustomerContactTests(unittest.TestCase):
         body = query["body"][0].replace("\xa0", " ")
         self.assertIn("1 400,00", body)
         self.assertNotIn("10 149", body)
-        self.assertIn(self.app.format_long_date(date(2026, 10, 11)), body)
+        # 2026-10-01 + 10 days is Sunday 2026-10-11 -> adjusted to Monday 2026-10-12.
+        self.assertIn(self.app.format_long_date(date(2026, 10, 12)), body)
         self.assertTrue(query["subject"][0].startswith("SV: Faktura CONTACT-1001"))
         self.assertEqual(query["bcc"], ["rl@tadega.com"])
 

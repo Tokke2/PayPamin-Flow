@@ -51,11 +51,21 @@ from error_log import (
     resolve_selected_errors,
 )
 from log_archive import RETENTION_DAYS, DailySizeRotatingFileHandler, archive_old_logs
+from bankdays import (
+    adjusted_deadline_date,
+    is_swedish_banking_day,
+    next_swedish_banking_day,
+    non_banking_reason,
+)
 from customer_contacts import (
     EmailAddressError, ensure_customer_contact_schema, get_customer_contact,
+    get_customer_language, normalize_customer_language,
     normalize_email_addresses, parse_email_addresses, save_customer_contact,
 )
-from i18n import SUPPORTED_LANGUAGES, _, format_long_date, format_money, get_language, language_code, set_language
+from i18n import (
+    SUPPORTED_LANGUAGES, _, format_long_date, format_money,
+    get_language, language_code, language_override, set_language,
+)
 import appearance
 import invoice_export
 import invoice_trash
@@ -829,12 +839,12 @@ def invoice_payment_term_days(invoice_date,due_date):
 
 
 def apply_learned_value(values,learned):
-    """Apply one learned value to an invoice form, deriving due dates."""
+    """Apply one learned value to an invoice form, deriving banking-day due dates."""
     if learned.field=='payment_term_days':
         start=dparse(values.get('invoice_date'))
         try:days=int(learned.value)
         except (TypeError,ValueError):return values
-        if start is not None:values['due_date']=(start+timedelta(days=days)).isoformat()
+        if start is not None:values['due_date']=next_swedish_banking_day(start+timedelta(days=days)).isoformat()
         return values
     values[learned.field]=learned.value
     return values
@@ -1320,6 +1330,48 @@ def reminder_fee_for_level(row,level):
     return reminder_fee_for(row)
 
 
+CUSTOMER_LANGUAGE_CHOICES=(
+    ('','Appens språk (standard)'),
+    ('sv','Svenska'),
+    ('en','Engelska (English)'),
+)
+
+
+def customer_reminder_language(row):
+    """Return explicit saved customer language (``'sv'``/``'en'``) or ``''``."""
+    if not row:return ''
+    customer=str(row_value(row,'customer','') or '').strip()
+    if not customer:return ''
+    try:
+        with connect() as db:return get_customer_language(db,customer)
+    except sqlite3.Error:
+        report_fault()
+        return ''
+
+
+def effective_reminder_language(row):
+    """Return language for generating a customer's reminder PDF and email draft."""
+    explicit=customer_reminder_language(row)
+    return explicit if explicit in SUPPORTED_LANGUAGES else get_language()
+
+
+def reminder_deadline_info(start_day,deadline_days,terms=None,language=None):
+    """Return ``(banking_deadline, raw_deadline, skipped_reasons)`` for reminders."""
+    days=int(deadline_days)
+    raw=start_day+timedelta(days=days)
+    if terms is not None and 'bankday_deadlines' not in terms:
+        return raw,raw,()
+    enabled=bool(terms.get('bankday_deadlines',True)) if terms is not None else setting('bankday_deadlines')!='0'
+    if not enabled:
+        return raw,raw,()
+    return adjusted_deadline_date(start_day,days,language=language or get_language())
+
+
+def reminder_deadline_date(start_day,deadline_days,terms=None):
+    """Return the effective payment deadline adjusted to a Swedish banking day."""
+    return reminder_deadline_info(start_day,deadline_days,terms=terms)[0]
+
+
 def current_reminder_terms(fee,customer_type=CUSTOMER_PRIVATE,currency='SEK',agreement=AGREEMENT_NONE,model=None):
     """Capture the terms that affect a reminder PDF, not just its date."""
     customer_type=normalize_customer_type(customer_type)
@@ -1334,16 +1386,18 @@ def current_reminder_terms(fee,customer_type=CUSTOMER_PRIVATE,currency='SEK',agr
         'fee_agreement':normalize_agreement(agreement),
         'objection_days':str(setting('objection_days') or ''),
         'payment_deadline_days':str(setting('payment_deadline_days') or ''),
+        'bankday_deadlines':setting('bankday_deadlines')!='0',
     }
 
 
-def capture_reminder_snapshot(row,fee,day,level):
+def capture_reminder_snapshot(row,fee,day,level,language=None):
     """Keep original P1/P2 content so a later logo edit changes only the logo."""
     if level not in ('P1','P2'):raise ValueError('Unknown reminder level')
     snapshot_row=dict(row)
     snapshot_row.pop('p1_snapshot',None)
     snapshot_row.pop('p2_snapshot',None)
     snapshot_row[level.lower()+'_date']=day
+    chosen_language=language if language in SUPPORTED_LANGUAGES else effective_reminder_language(row)
     return json.dumps({
         'version':1,
         'row':snapshot_row,
@@ -1352,7 +1406,7 @@ def capture_reminder_snapshot(row,fee,day,level):
             row_value(row,'fee_agreement','') or setting('fee_agreement'),
             reminder_fee_model_for(row,level),
         ),
-        'language':get_language(),
+        'language':chosen_language,
     },ensure_ascii=False,sort_keys=True)
 
 
@@ -1580,45 +1634,50 @@ def build_reminder_email_content(row,level,recipients):
     terms=current_reminder_terms(reminder_fee_for(row),invoice_customer_type(row),invoice_currency(row),invoice_fee_agreement(row))
     snapshot_column=level.lower()+'_snapshot'
     snapshot=read_reminder_snapshot(row[snapshot_column] if snapshot_column in row.keys() else '')
+    snapshot_language=''
     if snapshot:
         email_row.update(snapshot['row'])
         terms=snapshot['terms']
+        snapshot_language=str(snapshot.get('language') or '')
+    doc_language=snapshot_language if snapshot_language in SUPPORTED_LANGUAGES else effective_reminder_language(email_row)
     try:fee=float(terms.get('fee') if terms.get('fee') is not None else reminder_fee_for(row))
     except (TypeError,ValueError):fee=reminder_fee_for(row)
     customer_type=normalize_customer_type(terms.get('customer_type') or invoice_customer_type(email_row))
-    fee_label=_(fee_label_key(customer_type,fee,fee_model_for_terms(terms)))
-    fee_text=f'{fee_label}: {money(fee,email_row["currency"])}'
     remaining=max(0,float(email_row['amount'] or 0)-float(email_row['paid'] or 0))
     reminder_day=dparse(email_row.get(level.lower()+'_date')) or date.today()
     try:
         saved_deadline=terms.get('payment_deadline_days')
         deadline_days=int(saved_deadline) if saved_deadline not in (None,'') else 5
     except (TypeError,ValueError):deadline_days=5
-    deadline=format_long_date(reminder_day+timedelta(days=deadline_days))
+    deadline_date=reminder_deadline_date(reminder_day,deadline_days,terms if snapshot else None)
     currency=email_row['currency']
     invoice_no=email_row['invoice_no']
-    values={
-        'invoice_no':invoice_no,'due_date':email_row['due_date'],
-        'remaining':money(remaining,currency),'fee_text':fee_text,
-        'total':money(remaining+fee,currency),
-        'deadline':deadline,
-    }
-    subject=_('Faktura {invoice_no} – betalningspåminnelse',invoice_no=invoice_no)
     company=reminder_email_company(email_row)
-    if company:subject+=f' / {company}'
-    if followup:subject=('Re: ' if get_language()=='en' else 'SV: ')+subject
-    if level=='P2':
-        body=_(
-            'Hej!\n\nTrots tidigare påminnelse är faktura {invoice_no}, som förföll {due_date}, fortfarande obetald. Detta är andra påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura och tillkommer inte igen. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Om betalningen inte har kommit in efter sista betalningsdag kan ärendet lämnas vidare utan ytterligare påminnelse. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.',
-            invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
-            fee_text=values['fee_text'],total=values['total'],deadline=deadline,
-        )
-    else:
-        body=_(
-            'Hej!\n\nFaktura {invoice_no} förföll {due_date} och är fortfarande obetald. Detta är första påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.',
-            invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
-            fee_text=values['fee_text'],total=values['total'],deadline=deadline,
-        )
+    with language_override(doc_language):
+        fee_label=_(fee_label_key(customer_type,fee,fee_model_for_terms(terms)))
+        fee_text=f'{fee_label}: {money(fee,currency)}'
+        deadline=format_long_date(deadline_date)
+        values={
+            'invoice_no':invoice_no,'due_date':email_row['due_date'],
+            'remaining':money(remaining,currency),'fee_text':fee_text,
+            'total':money(remaining+fee,currency),
+            'deadline':deadline,
+        }
+        subject=_('Faktura {invoice_no} – betalningspåminnelse',invoice_no=invoice_no)
+        if company:subject+=f' / {company}'
+        if followup:subject=('Re: ' if get_language()=='en' else 'SV: ')+subject
+        if level=='P2':
+            body=_(
+                'Hej!\n\nTrots tidigare påminnelse är faktura {invoice_no}, som förföll {due_date}, fortfarande obetald. Detta är andra påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura och tillkommer inte igen. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Om betalningen inte har kommit in efter sista betalningsdag kan ärendet lämnas vidare utan ytterligare påminnelse. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.',
+                invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
+                fee_text=values['fee_text'],total=values['total'],deadline=deadline,
+            )
+        else:
+            body=_(
+                'Hej!\n\nFaktura {invoice_no} förföll {due_date} och är fortfarande obetald. Detta är första påminnelsen.\n\nKvarstående fakturabelopp: {remaining}\n{fee_text}\nAtt betala: {total}\nSista betalningsdag: {deadline}\n\nAvgiften debiteras en gång per faktura. Betalningen av hela beloppet ska vara oss tillhanda senast {deadline}. Ange fakturanumret som referens. Påminnelsen skickas som PDF. Om betalningen redan är gjord, kontakta oss med betalningsuppgifter så att vi kan stämma av.',
+                invoice_no=invoice_no,due_date=email_row['due_date'],remaining=values['remaining'],
+                fee_text=values['fee_text'],total=values['total'],deadline=deadline,
+            )
     return {'recipients':addresses,'bcc':REMINDER_BCC,'subject':subject,'body':body}
 
 
@@ -1660,19 +1719,22 @@ def is_fully_paid(row):
 
 
 def p2_due_date(row):
-    """Respect both the configured P2 interval and the printed P1 deadline."""
+    """Respect both the configured P2 interval and the printed banking-day P1 deadline."""
     p1_date=dparse(row['p1_date'])
     if not p1_date:return None
     interval_days=int(setting('p2_days') or 5)
     deadline_days=int(setting('payment_deadline_days') or 5)
     snapshot=read_p1_snapshot(row['p1_snapshot'] if 'p1_snapshot' in row.keys() else '')
+    snapshot_terms=snapshot['terms'] if snapshot else None
     if snapshot:
         try:
-            saved_deadline=snapshot['terms'].get('payment_deadline_days')
+            saved_deadline=snapshot_terms.get('payment_deadline_days')
             if saved_deadline not in (None,''):deadline_days=int(saved_deadline)
         except (TypeError,ValueError):
             report_fault()
-    return p1_date+timedelta(days=max(interval_days,deadline_days))
+    printed_deadline=reminder_deadline_date(p1_date,deadline_days,snapshot_terms)
+    interval_target=p1_date+timedelta(days=interval_days)
+    return max(interval_target,printed_deadline)
 
 
 def next_stage(row):
@@ -4814,11 +4876,20 @@ class ReminderApp(tk.Tk):
             update_hint()
         ttk.Button(links,text=_('Uppdatera lista'),command=reload_choices).pack(side='left')
         ttk.Button(links,text=_('Öppna SVG-mapp'),command=self.open_svg_folder).pack(side='left',padx=(6,0))
-        choice={'value':None,'message':''}
+        saved_cust_lang=customer_reminder_language(row)
+        lang_labels=[_(label) for _code,label in CUSTOMER_LANGUAGE_CHOICES]
+        initial_lang_label=next((_(label) for code,label in CUSTOMER_LANGUAGE_CHOICES if code==saved_cust_lang),lang_labels[0])
+        ttk.Label(form,text=_('Språk för kundens påminnelser'),style='BodyBold.TLabel').pack(anchor='w',pady=(14,0))
+        cust_lang_var=tk.StringVar(value=initial_lang_label)
+        cust_lang_combo=ttk.Combobox(form,textvariable=cust_lang_var,state='readonly',values=lang_labels,width=42)
+        cust_lang_combo.pack(fill='x',pady=(3,0))
+        choice={'value':None,'message':'','language':saved_cust_lang}
         def accept():
             selected=logo_var.get()
             choice['value']=selected if selected and selected!=no_logo and selected in state['choices'] else ''
             choice['message']=reminder_message_text(message_var.get())
+            selected_lang=next((code for code,label in CUSTOMER_LANGUAGE_CHOICES if _(label)==cust_lang_var.get()),'')
+            choice['language']=selected_lang
             window.destroy()
         def cancel():
             window.destroy()
@@ -4833,6 +4904,15 @@ class ReminderApp(tk.Tk):
         if choice['value'] is None:
             logger.info('Reminder creation cancelled in the logo dialogue: invoice=%s level=%s',row['id'],level)
             return None
+        customer_name=str(row_value(row,'customer','') or '').strip()
+        if customer_name and choice['language']!=saved_cust_lang:
+            try:
+                with connect() as db:
+                    existing_contact=get_customer_contact(db,customer_name)
+                    existing_emails=existing_contact['emails'] if existing_contact is not None else str(row_value(row,'email','') or '')
+                    save_customer_contact(db,customer_name,existing_emails,language=choice['language'])
+            except Exception:
+                logger.exception('Could not persist customer reminder language choice: customer=%s',customer_name)
         logo_path,logo_name=self.logo_file_path(choice['value'])
         logger.info(
             'Reminder details chosen: invoice=%s level=%s logo=%s message=%s',
@@ -5805,20 +5885,27 @@ class ReminderApp(tk.Tk):
         if r:self.invoice_dialog('Redigera faktura',row=r)
 
     def edit_customer(self):
-        """Edit the selected invoice's customer and reusable recipient list."""
+        """Edit the selected invoice's customer, reusable recipients and reminder language."""
         r=self.selected()
         if not r:return
         values=apply_saved_customer_contact(dict(r))
+        saved_cust_lang=customer_reminder_language(r)
+        lang_labels=[_(label) for _code,label in CUSTOMER_LANGUAGE_CHOICES]
+        initial_lang_label=next((_(label) for code,label in CUSTOMER_LANGUAGE_CHOICES if code==saved_cust_lang),lang_labels[0])
         w=self._new_toplevel(_('Redigera kund'));w.grab_set();w.resizable(True,True)
         form=self._dialog_form(w,padding=20)
         ttk.Label(form,text=_('Kundnamn')).grid(row=0,column=0,sticky='w',padx=(0,12),pady=5)
         customer_entry=ttk.Entry(form,width=52);customer_entry.grid(row=0,column=1,pady=5);customer_entry.insert(0,r['customer'])
         ttk.Label(form,text=_('E-postadresser')).grid(row=1,column=0,sticky='w',padx=(0,12),pady=5)
         email_entry=ttk.Entry(form,width=52);email_entry.grid(row=1,column=1,pady=5);email_entry.insert(0,values.get('email',''))
+        ttk.Label(form,text=_('Språk för påminnelser')).grid(row=2,column=0,sticky='w',padx=(0,12),pady=5)
+        cust_lang_var=tk.StringVar(value=initial_lang_label)
+        cust_lang_combo=ttk.Combobox(form,textvariable=cust_lang_var,state='readonly',values=lang_labels,width=49)
+        cust_lang_combo.grid(row=2,column=1,sticky='w',pady=5)
         ttk.Label(
             form,text=_('Flera adresser: separera med kommatecken (,). Kundens adresser återanvänds på nästa faktura till samma kund.'),
             wraplength=470,
-        ).grid(row=2,column=0,columnspan=2,sticky='w',pady=(5,12))
+        ).grid(row=3,column=0,columnspan=2,sticky='w',pady=(5,12))
         def save():
             customer=customer_entry.get().strip()
             if not customer:
@@ -5826,14 +5913,17 @@ class ReminderApp(tk.Tk):
             try:emails=normalize_email_addresses(email_entry.get())
             except EmailAddressError as exc:
                 messagebox.showerror(_('Ogiltig e-postadress'),_('Kontrollera adressen: {email}',email=exc.address),parent=w);return
+            chosen_lang=next((code for code,label in CUSTOMER_LANGUAGE_CHOICES if _(label)==cust_lang_var.get()),'')
             record=dict(r);record['customer']=customer;record['email']=emails
             duplicate=save_invoice_record(record,r['id'])
             if duplicate:
                 show_duplicate_invoice(duplicate,parent=w);return
+            with connect() as db:
+                save_customer_contact(db,customer,emails,record.get('logo_file'),language=chosen_lang)
             refresh_json_journal(parent=w)
-            logger.info('Customer contact updated: invoice=%s recipients=%d',r['id'],len(parse_email_addresses(emails)))
+            logger.info('Customer contact updated: invoice=%s recipients=%d language=%s',r['id'],len(parse_email_addresses(emails)),chosen_lang or 'default')
             w.destroy();self.refresh()
-        buttons=ttk.Frame(form);buttons.grid(row=3,column=0,columnspan=2,sticky='e')
+        buttons=ttk.Frame(form);buttons.grid(row=4,column=0,columnspan=2,sticky='e')
         ttk.Button(buttons,text=_('Spara'),command=save,style='Accent.TButton').pack(side='left',padx=(0,7))
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='left')
         w.wait_window()
@@ -5918,6 +6008,38 @@ class ReminderApp(tk.Tk):
                 except Exception:logger.exception('Declined learning suggestions could not be recorded')
                 log_activity('learning','suggestions_declined','completed',fields=','.join(item.field for item in learned_suggestions))
         review_row=len(fields)+3
+        due_bankday_frame=ttk.Frame(form)
+        due_bankday_label=ttk.Label(due_bankday_frame,text='',style='Sub.TLabel',wraplength=380,justify='left')
+        due_bankday_label.pack(side='left',padx=(0,8))
+        def shift_due_to_bankday():
+            parsed_due=dparse(entries['due_date'].get().strip())
+            if parsed_due is None or is_swedish_banking_day(parsed_due):return
+            next_bday=next_swedish_banking_day(parsed_due)
+            entries['due_date'].delete(0,'end')
+            entries['due_date'].insert(0,next_bday.isoformat())
+            update_due_bankday_hint()
+        due_bankday_btn=ttk.Button(due_bankday_frame,text=_('Flytta till nästa bankdag'),command=shift_due_to_bankday)
+        due_bankday_btn.pack(side='left')
+        due_bankday_row=review_row
+        review_row+=1
+        def update_due_bankday_hint(*_args):
+            if enrich_original:
+                due_bankday_frame.grid_remove()
+                return
+            parsed_due=dparse(entries['due_date'].get().strip())
+            reason=non_banking_reason(parsed_due,get_language()) if parsed_due is not None else ''
+            if parsed_due is not None and reason:
+                next_bday=next_swedish_banking_day(parsed_due)
+                due_bankday_label.configure(
+                    text=_('Förfallodatumet infaller på {reason} ({raw}). Nästa svenska bankdag är {bankday}.',
+                           reason=reason,raw=parsed_due.isoformat(),bankday=next_bday.isoformat())
+                )
+                due_bankday_frame.grid(row=due_bankday_row,column=0,columnspan=2,sticky='w',pady=(2,4))
+            else:
+                due_bankday_frame.grid_remove()
+        entries['due_date'].bind('<KeyRelease>',update_due_bankday_hint)
+        entries['due_date'].bind('<FocusOut>',update_due_bankday_hint)
+        update_due_bankday_hint()
         if learned_applied:
             applied_fields=', '.join(sorted({_(LEARNING_FIELD_LABELS.get(item.field,item.field)) for item in learned_applied}))
             ttk.Label(form,text=_('Inlärda förslag som du godkände: {fields}',fields=applied_fields),style='Sub.TLabel',wraplength=520).grid(row=review_row,column=0,columnspan=2,sticky='w',pady=(6,0))
@@ -6513,7 +6635,19 @@ class ReminderApp(tk.Tk):
                 logo_choice=self.choose_reminder_details(r,level)
                 if logo_choice is None:break
             logo_file,logo_path,logo_name,reminder_message=logo_choice
+            doc_language=effective_reminder_language(r)
+            deadline_days_cfg=int(setting('payment_deadline_days') or 5)
+            deadline_bday,raw_deadline,skipped_reasons=reminder_deadline_info(date.today(),deadline_days_cfg,language=get_language())
+            if skipped_reasons and deadline_bday!=raw_deadline:
+                deadline_line=_('Sista betalningsdag: {date} (framflyttad från {raw} – {reason} till nästa svenska bankdag)',
+                                date=deadline_bday.isoformat(),raw=raw_deadline.isoformat(),reason=', '.join(skipped_reasons))
+            else:
+                deadline_line=_('Sista betalningsdag: {date}',date=deadline_bday.isoformat())
             confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}\n{note}\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee,fee_model)),fee=money(fee,r['currency']),note=reminder_fee_note(r),template=template_name,logo=logo_name)
+            confirmation+='\n'+deadline_line
+            if doc_language!=get_language():
+                doc_lang_label=SUPPORTED_LANGUAGES.get(doc_language,doc_language)
+                confirmation+='\n'+_('Påminnelsespråk: {language}',language=doc_lang_label)
             if reminder_message:
                 confirmation+='\n'+_('Meddelanderad: {message}',message=reminder_message)
             for issue in assessment.warnings:
@@ -6537,7 +6671,7 @@ class ReminderApp(tk.Tk):
             # the next reminder and for a regeneration.
             reminder_row=dict(r)
             reminder_row['logo_file']=logo_file;reminder_row['reminder_message']=reminder_message
-            snapshot=capture_reminder_snapshot(reminder_row,fee,day,level)
+            snapshot=capture_reminder_snapshot(reminder_row,fee,day,level,language=doc_language)
             with connect() as db:
                 if level=='P1':
                     db.execute('UPDATE invoices SET p1_date=?,p1_snapshot=?,sent_count=sent_count+1,logo_file=?,reminder_message=? WHERE id=?',(day,snapshot,logo_file,reminder_message,r['id']))
@@ -6549,7 +6683,7 @@ class ReminderApp(tk.Tk):
                 try:
                     record_reminder_journal(
                         DB_PATH,JOURNAL_PATH,r['id'],level,day,fee,current_reminder_terms(fee,invoice_customer_type(r),invoice_currency(r),invoice_fee_agreement(r),fee_model),
-                        get_language(),Path(logo_path).name if logo_path else (logo_file or ''),Path(str(result)).name,
+                        doc_language,Path(logo_path).name if logo_path else (logo_file or ''),Path(str(result)).name,
                     )
                     logger.info('Reminder journal updated: invoice=%s level=%s date=%s',r['id'],level,day)
                 except Exception as exc:
@@ -6719,17 +6853,20 @@ class ReminderApp(tk.Tk):
             fee=chargeable_fee(customer_type,fee,fee_model_for_terms(effective_terms))
         # One fee per claim: P2 repeats the P1 fee, it never adds a second one.
         total=remaining+float(fee or 0)
-        deadline_date=today+timedelta(days=int(effective_terms.get('payment_deadline_days') or 5))
-        deadline=format_long_date(deadline_date)
-        p2_warning=_('Ansökan om betalningsföreläggande lämnas in till Kronofogden om betalning inte kommit oss tillhanda senast den {deadline}. Kostnader för att driva ärendet kan tillkomma till dess full betalning har skett.',deadline=deadline) if level=='P2' else ''
-        logger.info('Reminder generated: level=%s',level)
+        deadline_days_val=int(effective_terms.get('payment_deadline_days') or 5)
+        deadline_date=reminder_deadline_date(today,deadline_days_val,effective_terms if reminder_terms is not None else None)
+        doc_language=get_language() if reminder_terms is not None else effective_reminder_language(r)
+        logger.info('Reminder generated: level=%s language=%s',level,doc_language)
         pdf_out=Path(output_path) if output_path else reminder_file_path(r,level,today)
         temporary_pdf=None;dialog_options={'parent':parent} if parent is not None else {}
         try:
             descriptor,temporary_name=tempfile.mkstemp(prefix='.paypamin-reminder-',suffix='.pdf',dir=EXPORT_DIR)
             os.close(descriptor);temporary_pdf=Path(temporary_name)
-            if reminder_terms is None:self.write_pdf(temporary_pdf,r,level,fee,today,remaining,total,p2_warning,logo_path)
-            else:self.write_pdf(temporary_pdf,r,level,fee,today,remaining,total,p2_warning,logo_path,effective_terms)
+            with language_override(doc_language):
+                deadline=format_long_date(deadline_date)
+                p2_warning=_('Ansökan om betalningsföreläggande lämnas in till Kronofogden om betalning inte kommit oss tillhanda senast den {deadline}. Kostnader för att driva ärendet kan tillkomma till dess full betalning har skett.',deadline=deadline) if level=='P2' else ''
+                if reminder_terms is None:self.write_pdf(temporary_pdf,r,level,fee,today,remaining,total,p2_warning,logo_path)
+                else:self.write_pdf(temporary_pdf,r,level,fee,today,remaining,total,p2_warning,logo_path,effective_terms)
             os.replace(temporary_pdf,pdf_out)
             logger.info('Reminder PDF created: path=%s',pdf_out)
             try:
@@ -6804,7 +6941,8 @@ class ReminderApp(tk.Tk):
         story.append(Paragraph(f'<b>{escape(str(r["customer"]))}</b>',styles['SmallText']))
         story.append(Paragraph(_('Betalningspåminnelse nummer {number}',number=n),styles['LetterTitle']))
         story.append(Paragraph(_('Vi saknar fortfarande betalning för nedanstående faktura. Om betalning redan har gjorts, vänligen bortse från denna påminnelse.'),styles['SmallText']))
-        deadline_date=today+timedelta(days=int(effective_terms.get('payment_deadline_days') or 5))
+        deadline_days_val=int(effective_terms.get('payment_deadline_days') or 5)
+        deadline_date=reminder_deadline_date(today,deadline_days_val,effective_terms if reminder_terms is not None else None)
         deadline_text=format_long_date(deadline_date)
         story.append(Paragraph(f"<b>{escape(_('Betalning ska vara oss tillhanda senast {date}.',date=deadline_text))}</b>",styles['SmallText']))
         if level=='P2': story.append(Paragraph(escape(p2_warning),styles['AlertText']))
