@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from currency import find_currency_code, normalize_currency
 from i18n import _
@@ -115,17 +115,17 @@ class InvoiceSection:
     text: str
 
 
-def _spatial_customer_from_fitz_page(page):
-    """Recover recipient name when two PDF header columns share Y coordinates."""
+def _spatial_header_columns_from_fitz_page(page):
+    """Return de-interleaved (right_column_text, left_column_text) from a PDF page."""
     if not hasattr(page, 'rect') or not hasattr(page, 'get_text'):
-        return ''
+        return '', ''
     width = float(getattr(page.rect, 'width', 0.0) or 0.0)
     height = float(getattr(page.rect, 'height', 0.0) or 0.0)
     if width <= 0 or height <= 0:
-        return ''
+        return '', ''
     data = page.get_text('dict')
     if not isinstance(data, dict):
-        return ''
+        return '', ''
     right_lines = []
     left_lines = []
     split_x = width * 0.42
@@ -149,23 +149,40 @@ def _spatial_customer_from_fitz_page(page):
                 right_lines.append(item)
             else:
                 left_lines.append(item)
-    for col_items in (right_lines, left_lines):
-        if not col_items:
-            continue
-        col_items.sort(key=lambda entry: (entry[0], entry[1]))
-        col_text = '\n'.join(entry[2] for entry in col_items)
-        customer = extract_customer_name(col_text)
-        if customer:
-            return customer
-    return ''
+    right_lines.sort(key=lambda entry: (entry[0], entry[1]))
+    left_lines.sort(key=lambda entry: (entry[0], entry[1]))
+    return (
+        '\n'.join(entry[2] for entry in right_lines),
+        '\n'.join(entry[2] for entry in left_lines),
+    )
 
 
 def _extract_single_fitz_page(page):
     raw_text = page.get_text('text')
-    if raw_text.strip() and not extract_customer_name(raw_text):
-        spatial_customer = _spatial_customer_from_fitz_page(page)
-        if spatial_customer:
-            return f'{raw_text.rstrip()}\nFakturaadress: {spatial_customer}\n'
+    if not raw_text.strip():
+        return raw_text
+    need_customer = not extract_customer_name(raw_text)
+    need_terms = not extract_payment_terms(raw_text)
+    if not need_customer and not need_terms:
+        return raw_text
+    right_col, left_col = _spatial_header_columns_from_fitz_page(page)
+    extras = []
+    if need_customer:
+        for col_text in (right_col, left_col):
+            if col_text:
+                spatial_customer = extract_customer_name(col_text)
+                if spatial_customer:
+                    extras.append(f'Fakturaadress: {spatial_customer}')
+                    break
+    if need_terms:
+        for col_text in (left_col, right_col):
+            if col_text:
+                spatial_terms = extract_payment_terms(col_text)
+                if spatial_terms:
+                    extras.append(f'Betalningsvillkor: {spatial_terms}')
+                    break
+    if extras:
+        return raw_text.rstrip() + '\n' + '\n'.join(extras) + '\n'
     return raw_text
 
 
@@ -671,6 +688,111 @@ def clean_customer_zone_text(text):
     return raw_lines[0][:100]
 
 
+_PAYMENT_TERMS_LABEL_RE = re.compile(
+    r'^(?:betalningsvillkor|bet\.?\s*villkor|betalvillkor|kredittid|'
+    r'payment\s*terms|terms\s+of\s+payment)\s*[:#-]?\s*(.*)$',
+    re.I,
+)
+_PAYMENT_TERMS_TRAILING_STOP_RE = re.compile(
+    r'\s+(?:dr[öo]jsm[åa]lsr[äa]nta|r[äa]nta\s+efter|f[oö]rfallodatum|f[oö]rfallodag|'
+    r'fakturadatum|fakturanummer|fakturanr|kundnr|kundnummer|v[åa]r\s+referens|'
+    r'er\s+referens|leveransvillkor|leveranss[äa]tt|due\s*date|invoice\s*(?:no|number|date)|'
+    r'late\s+interest|penalty\s+interest)\b.*$',
+    re.I,
+)
+_PAYMENT_TERMS_VALUE_RE = re.compile(
+    r'(?:\b\d{1,3}\s*(?:dagar(?:\s+netto)?|dag|dgr(?:\s+netto)?|d\b|days?(?:\s+net)?|'
+    r'kal\.?\s*dagar|bankdagar)\b|'
+    r'\bnet(?:to)?\s*\d{1,3}(?:\s*(?:dagar|days?))?\b|'
+    r'\b(?:omg[åa]ende|kontant|vid\s+anfordran|f[oö]rskott|autogiro|'
+    r'due\s+on\s+receipt|upon\s+receipt|immediate(?:ly)?|cash\s+on\s+delivery)\b)',
+    re.I,
+)
+
+
+def _clean_payment_terms_candidate(raw):
+    candidate = re.sub(r'\s+', ' ', str(raw or '')).strip(' \t:;,-')
+    if not candidate:
+        return ''
+    candidate = _PAYMENT_TERMS_TRAILING_STOP_RE.sub('', candidate).strip(' \t:;,-')
+    if not candidate or len(candidate) > 80:
+        return ''
+    if _DATE_OR_PAGE_ONLY_RE.match(candidate):
+        return ''
+    if not _PAYMENT_TERMS_VALUE_RE.search(candidate):
+        return ''
+    return candidate[:80]
+
+
+def parse_payment_terms_days(terms):
+    """Return integer credit days from payment terms (e.g. '30 dagar netto' -> 30)."""
+    cleaned = re.sub(r'\s+', ' ', str(terms or '')).strip()
+    if not cleaned:
+        return None
+    if re.search(
+        r'\b(?:omg[åa]ende|kontant|vid\s+anfordran|due\s+on\s+receipt|upon\s+receipt|immediate(?:ly)?)\b',
+        cleaned, re.I,
+    ):
+        return 0
+    m = re.search(
+        r'\b(\d{1,3})\s*(?:dagar|dag|dgr|d\b|days?|kal\.?\s*dagar)\b|\bnet(?:to)?\s*(\d{1,3})\b',
+        cleaned, re.I,
+    )
+    if not m:
+        return None
+    days = int(m.group(1) or m.group(2))
+    return days if 0 <= days <= 365 else None
+
+
+def extract_payment_terms(text_or_lines):
+    """Extract payment terms (e.g. '30 dagar netto', '10 dagar', 'Net 30') from invoice text."""
+    if isinstance(text_or_lines, str):
+        raw_lines = text_or_lines.splitlines()
+    else:
+        raw_lines = list(text_or_lines)
+    lines = [re.sub(r'\s+', ' ', str(ln or '')).strip() for ln in raw_lines if str(ln or '').strip()]
+    for idx, line in enumerate(lines):
+        match = _PAYMENT_TERMS_LABEL_RE.match(line)
+        if not match:
+            # Also support mid-line label in multi-column text, e.g.
+            # "Fakturadatum 2026-11-01 Betalningsvillkor: 30 dagar netto"
+            inline = re.search(
+                r'\b(?:betalningsvillkor|bet\.?\s*villkor|betalvillkor|kredittid|payment\s*terms)\s*[:#-]?\s*([^\n]{1,80})',
+                line, re.I,
+            )
+            if inline:
+                cand = _clean_payment_terms_candidate(inline.group(1))
+                if cand:
+                    return cand
+            continue
+        cand = _clean_payment_terms_candidate(match.group(1))
+        if cand:
+            return cand
+        for follow in lines[idx + 1:idx + 4]:
+            cand = _clean_payment_terms_candidate(follow)
+            if cand:
+                return cand
+    return ''
+
+
+def clean_payment_terms_zone(text):
+    """Clean a user-selected payment-terms zone in the PDF preview."""
+    raw_lines = [re.sub(r'\s+', ' ', ln).strip() for ln in str(text or '').splitlines() if ln.strip()]
+    if not raw_lines:
+        return ''
+    parsed = extract_payment_terms(raw_lines)
+    if parsed:
+        return parsed
+    for line in raw_lines:
+        stripped = _PAYMENT_TERMS_LABEL_RE.sub(r'\1', line).strip(' \t:;,-')
+        cand = _clean_payment_terms_candidate(stripped)
+        if cand:
+            return cand
+        if stripped and not _PAYMENT_TERMS_LABEL_RE.match(line + ':'):
+            return stripped[:80]
+    return raw_lines[0][:80]
+
+
 def parse_invoice_text(text):
     """Extract likely fields from Swedish and English invoice PDFs; review all suggestions."""
     lines=[re.sub(r'\s+',' ',ln).strip() for ln in text.splitlines()]
@@ -692,6 +814,11 @@ def parse_invoice_text(text):
     issued=find_value(r'(?:fakturadatum|fakturadato|invoice\s*date)')
     im=re.search(r'(\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})',issued)
     invoice_date=normalize_date(im.group(1)) if im else ''
+    payment_terms=extract_payment_terms(lines)
+    if not due and invoice_date and payment_terms:
+        terms_days=parse_payment_terms_days(payment_terms)
+        if terms_days is not None:
+            due=(date.fromisoformat(invoice_date)+timedelta(days=terms_days)).isoformat()
     # Use a payable gross total, never VAT or an ex-VAT subtotal. Support
     # Fortnox's Swedish labels and common English invoice labels/layouts.
     payable_labels=list(re.finditer(PAYABLE_LABEL_PATTERN,cleaned,re.I))
@@ -699,7 +826,16 @@ def parse_invoice_text(text):
     customer=extract_customer_name(lines)
     # Prefer explicit invoice text and support multiline/table-based descriptions.
     description = _description_from_lines(lines)
-    return {'invoice_no':number,'invoice_date':invoice_date,'due_date':due,'amount':amount,'currency':detect_invoice_currency(cleaned,payable_labels),'customer':customer,'note':description}
+    return {
+        'invoice_no':number,
+        'invoice_date':invoice_date,
+        'due_date':due,
+        'payment_terms':payment_terms,
+        'amount':amount,
+        'currency':detect_invoice_currency(cleaned,payable_labels),
+        'customer':customer,
+        'note':description,
+    }
 
 def normalize_date(s):
     if not s:return ''

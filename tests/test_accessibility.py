@@ -524,6 +524,180 @@ class AccessibilityAppIntegrationTests(unittest.TestCase):
         save.assert_called_once_with(self.app.FONT_SCALE_SETTING, "1.5")
         journal.assert_called_once_with(parent=fake)
 
+    def test_fit_window_to_screen_centers_unmapped_dialog_on_master_monitor_away_from_seam(self):
+        master = SimpleNamespace(
+            winfo_ismapped=lambda: 1,
+            winfo_rootx=lambda: 2100,
+            winfo_rooty=lambda: 120,
+            winfo_width=lambda: 1400,
+            winfo_height=lambda: 900,
+        )
+        dialog = Mock()
+        dialog.master = master
+        dialog.winfo_ismapped.return_value = 0
+        dialog.winfo_screenwidth.return_value = 3840
+        dialog.winfo_screenheight.return_value = 1080
+        dialog.winfo_reqwidth.return_value = 480
+        dialog.winfo_reqheight.return_value = 460
+        # Windows cascades unmapped Toplevels at (26, 26) on the primary screen
+        dialog.winfo_x.return_value = 26
+        dialog.winfo_y.return_value = 26
+        with patch.object(accessibility, "monitor_work_area", return_value=(1920, 0, 3840, 1040)):
+            size = accessibility.fit_window_to_screen(dialog)
+        self.assertEqual(size, (480, 460))
+        geom = dialog.geometry.call_args.args[0]
+        parts = geom.replace("x", "+").split("+")
+        x, y = int(parts[2]), int(parts[3])
+        # Must be centered on Monitor 2 (around x=2560), never clamped to the x=1920 DPI seam!
+        self.assertGreater(x, 2200)
+        self.assertLess(x + 480, 3800)
+        self.assertGreater(y, 100)
+
+    def test_scrollable_form_prevents_configure_feedback_loop_and_scrollbar_ping_pong(self):
+        tk_mod = SimpleNamespace(
+            Canvas=lambda master, **kw: FakeCanvas(master, **kw),
+        )
+
+        class FakeGridWidget:
+            def __init__(self, master=None, **kw):
+                self.master = master
+                self.kw = kw
+                self.mapped = False
+                self.grid_calls = 0
+                self.remove_calls = 0
+                self.bindings = {}
+                self.req_w = 420
+                self.req_h = 400
+
+            def grid(self, **_kw):
+                self.mapped = True
+                self.grid_calls += 1
+
+            def grid_remove(self):
+                self.mapped = False
+                self.remove_calls += 1
+
+            def set(self, *_a):
+                pass
+
+            def columnconfigure(self, *_a, **_kw):
+                pass
+
+            def rowconfigure(self, *_a, **_kw):
+                pass
+
+            def bind(self, seq, fn, add=None):
+                self.bindings[seq] = fn
+
+            def pack(self, **_kw):
+                pass
+
+            def update_idletasks(self):
+                pass
+
+            def winfo_reqwidth(self):
+                return self.req_w
+
+            def winfo_reqheight(self):
+                return self.req_h
+
+        class FakeCanvas(FakeGridWidget):
+            def __init__(self, master=None, **kw):
+                super().__init__(master, **kw)
+                self.width = 428
+                self.height = 400
+                self.scrollregion_calls = 0
+                self.itemconfigure_calls = 0
+
+            def create_window(self, *_a, **_kw):
+                return 1
+
+            def configure(self, **kw):
+                if "width" in kw:
+                    self.width = kw["width"]
+                if "height" in kw:
+                    self.height = kw["height"]
+                if "scrollregion" in kw:
+                    self.scrollregion_calls += 1
+
+            def itemconfigure(self, _item, **kw):
+                self.itemconfigure_calls += 1
+
+            def bbox(self, _tag):
+                return (0, 0, self.req_w, self.req_h)
+
+            def winfo_width(self):
+                return self.width
+
+            def winfo_height(self):
+                return self.height
+
+            def yview(self, *_a):
+                pass
+
+            def xview(self, *_a):
+                pass
+
+            def yview_moveto(self, *_a):
+                pass
+
+            def xview_moveto(self, *_a):
+                pass
+
+            def cget(self, _key):
+                return (0, 0, self.req_w, self.req_h)
+
+        ttk_mod = SimpleNamespace(
+            Frame=lambda master=None, **kw: FakeGridWidget(master, **kw),
+            Scrollbar=lambda master=None, **kw: FakeGridWidget(master, **kw),
+        )
+        win = SimpleNamespace(
+            bind=lambda *_a, **_kw: None,
+            winfo_width=lambda: 460,
+            winfo_height=lambda: 440,
+            cget=lambda _k: "#ffffff",
+        )
+        sf = accessibility.ScrollableForm(win, tk_mod, ttk_mod, padding=20)
+        sf.form.req_w = 420
+        sf.form.req_h = 400
+        fitted = sf.fit_to_content(max_width=600, max_height=600)
+        # Headroom (+8px) prevents exact-pixel boundary oscillation
+        self.assertEqual(fitted, (428, 408))
+        self.assertFalse(sf.vertical.mapped)
+        self.assertFalse(sf.horizontal.mapped)
+
+        # Simulate pathological Configure ping-pong where hiding vertical scrollbar
+        # makes content 5px taller and showing it makes content 5px shorter at fixed outer size
+        for step in range(30):
+            sf.form.req_h = 415 if not sf.vertical.mapped else 400
+            sf._canvas_changed(SimpleNamespace(width=428))
+        # Toggle latch stops oscillation after at most 3 toggles!
+        self.assertLessEqual(sf.vertical.grid_calls + sf.vertical.remove_calls, 5)
+        # Repeated identical Configure events emit zero redundant scrollregion/itemconfigure calls
+        sr_before = sf.canvas.scrollregion_calls
+        ic_before = sf.canvas.itemconfigure_calls
+        for _ in range(10):
+            sf._canvas_changed(SimpleNamespace(width=428))
+        self.assertEqual(sf.canvas.scrollregion_calls, sr_before)
+        self.assertEqual(sf.canvas.itemconfigure_calls, ic_before)
+
+    def test_modal_dialog_finalizes_before_grab_and_skips_duplicate_idle_finalize(self):
+        events = []
+        window = SimpleNamespace(
+            grab_set=lambda: events.append("grab_set"),
+        )
+        fake = SimpleNamespace()
+        fake._set_window_icon = lambda _w: events.append("icon")
+        fake._finalize_window_actions = lambda _w: events.append("actions")
+        fake._finalize_toplevel = lambda w, _from_idle=False: self.app.ReminderApp._finalize_toplevel(
+            fake, w, _from_idle=_from_idle
+        )
+        with patch.object(self.app, "fit_window_to_screen", side_effect=lambda _w: events.append("fit")):
+            self.app.ReminderApp._prepare_modal_toplevel(fake, window)
+            # Deferred after_idle callback firing later must be a no-op
+            self.app.ReminderApp._finalize_toplevel(fake, window, _from_idle=True)
+        self.assertEqual(events, ["icon", "actions", "fit", "grab_set"])
+
 
 if __name__ == "__main__":
     unittest.main()

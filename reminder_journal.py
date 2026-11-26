@@ -34,7 +34,7 @@ MAX_JOURNAL_BYTES = 100 * 1024 * 1024
 MAX_JOURNAL_RECORDS = 100_000
 
 INVOICE_COLUMNS = (
-    "customer", "invoice_no", "due_date", "invoice_date", "template_vendor",
+    "customer", "invoice_no", "due_date", "invoice_date", "payment_terms", "template_vendor",
     "reviewed", "logo_file", "amount", "currency", "paid", "paid_before_marking",
     "paid_marked_at", "paid_marked_source", "email", "source",
     "source_hash", "ignored", "note", "p1_date", "p2_date", "sent_count",
@@ -487,6 +487,7 @@ def _invoice_values(invoice, now):
     values["sent_count"] = int(values["sent_count"] or 0)
     values["customer_type"] = values["customer_type"] or "private"
     values["fee_agreement"] = values["fee_agreement"] or ""
+    values["payment_terms"] = str(values["payment_terms"] or "").strip()[:80]
     for column in (
         "p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date",
         "ledger_first_seen", "ledger_last_seen", "paid_marked_at", "paid_marked_source",
@@ -600,6 +601,8 @@ def import_journal(database_path, journal_path, source_path, *, now: datetime | 
                 by_number.setdefault(_normalise_invoice_number(row["invoice_no"]), int(row["id"]))
                 if row["source_hash"]:
                     by_hash.setdefault(row["source_hash"], int(row["id"]))
+            existing_cols = {row[1] for row in db.execute("PRAGMA table_info(invoices)").fetchall()}
+            active_cols = tuple(c for c in INVOICE_COLUMNS if c in existing_cols) or INVOICE_COLUMNS
             for imported in payload["invoices"]:
                 values = _invoice_values(imported, now)
                 number_key = _normalise_invoice_number(values["invoice_no"])
@@ -614,8 +617,9 @@ def import_journal(database_path, journal_path, source_path, *, now: datetime | 
                     for column in (
                         "p1_date", "p2_date", "p1_snapshot", "p2_snapshot",
                         "p1_draft_date", "p2_draft_date", "p1_sent_date", "p2_sent_date",
+                        "payment_terms",
                     ):
-                        if not local[column] and values[column]:
+                        if column in existing_cols and not local[column] and values[column]:
                             updates.append(f"{column}=?")
                             parameters.append(values[column])
                     if not local["sent_count"] and values["sent_count"]:
@@ -631,11 +635,11 @@ def import_journal(database_path, journal_path, source_path, *, now: datetime | 
                         parameters.append(local_id)
                         db.execute(f"UPDATE invoices SET {','.join(updates)} WHERE id=?", parameters)
                 else:
-                    columns = ",".join(INVOICE_COLUMNS)
-                    placeholders = ",".join("?" for _column in INVOICE_COLUMNS)
+                    columns = ",".join(active_cols)
+                    placeholders = ",".join("?" for _column in active_cols)
                     cursor = db.execute(
                         f"INSERT INTO invoices({columns}) VALUES({placeholders})",
-                        tuple(values[column] for column in INVOICE_COLUMNS),
+                        tuple(values[column] for column in active_cols),
                     )
                     local_id = int(cursor.lastrowid)
                     result["invoices_added"] += 1

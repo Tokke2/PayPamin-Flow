@@ -320,6 +320,79 @@ class MultiInvoicePdfTests(unittest.TestCase):
         self.assertEqual([section.page_indexes for section in sections], [(0,), (1,)])
         self.assertEqual([parse_invoice_text(section.text)["invoice_no"] for section in sections], ["8301", "8302"])
 
+    def test_extracts_payment_terms_and_derives_due_date_when_missing(self):
+        from invoice_parser import extract_payment_terms, parse_payment_terms_days
+
+        # Explicit payment terms + missing due_date -> computes due_date = invoice_date + days
+        parsed = parse_invoice_text(
+            "Faktura 9401\n"
+            "Kundnamn: Nordisk Teknik AB\n"
+            "Fakturadatum: 2026-11-01\n"
+            "Betalningsvillkor: 30 dagar netto\n"
+            "Att betala: 4 500,00 SEK\n"
+        )
+        self.assertEqual(parsed["customer"], "Nordisk Teknik AB")
+        self.assertEqual(parsed["payment_terms"], "30 dagar netto")
+        self.assertEqual(parsed["invoice_date"], "2026-11-01")
+        self.assertEqual(parsed["due_date"], "2026-12-01")
+
+        # Explicit due_date on the PDF always takes precedence over derived days
+        explicit = parse_invoice_text(
+            "Faktura 9402\n"
+            "Fakturaadress:\n"
+            "Svenska Bygg & Tak AB\n"
+            "Storgatan 12\n"
+            "111 22 Stockholm\n"
+            "Fakturadatum: 2026-11-01\n"
+            "Förfallodatum: 2026-11-20\n"
+            "Bet.villkor: 15 dagar netto Dröjsmålsränta: 8%\n"
+            "Summa att betala: 2 250,00 kr\n"
+        )
+        self.assertEqual(explicit["customer"], "Svenska Bygg & Tak AB")
+        self.assertEqual(explicit["payment_terms"], "15 dagar netto")
+        self.assertEqual(explicit["due_date"], "2026-11-20")
+
+        # Multi-line & English & immediate payment terms
+        self.assertEqual(extract_payment_terms("Betalningsvillkor\nDröjsmålsränta 8%\n10 dagar netto"), "10 dagar netto")
+        self.assertEqual(extract_payment_terms("Payment terms: Net 14 days"), "Net 14 days")
+        self.assertEqual(parse_payment_terms_days("Net 14 days"), 14)
+        self.assertEqual(parse_payment_terms_days("Omgående"), 0)
+
+    def test_two_column_pdf_recovers_both_customer_and_payment_terms(self):
+        import fitz
+
+        doc = fitz.open()
+        try:
+            page = doc.new_page(width=595, height=842)
+            # Left column: metadata where label and value are separated across Y rows
+            page.insert_text((40, 80), "Tadega AB")
+            page.insert_text((40, 110), "Fakturanummer: 9505")
+            page.insert_text((40, 130), "Fakturadatum: 2026-11-05")
+            page.insert_text((40, 150), "Betalningsvillkor")
+            page.insert_text((40, 168), "20 dagar netto")
+            # Right column at overlapping Y coordinates: customer recipient block
+            page.insert_text((320, 130), "Kund:")
+            page.insert_text((320, 150), "Mälardalen Maskin AB")
+            page.insert_text((320, 168), "Industrivägen 4")
+            page.insert_text((320, 186), "721 30 Västerås")
+            page.insert_text((40, 500), "Att betala 6 800,00 SEK")
+            pdf_bytes = doc.tobytes()
+        finally:
+            doc.close()
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = Path(tmp) / "twocol.pdf"
+            pdf_path.write_bytes(pdf_bytes)
+            sections = extract_invoice_sections(pdf_path)
+        self.assertEqual(len(sections), 1)
+        parsed = parse_invoice_text(sections[0].text)
+        self.assertEqual(parsed["customer"], "Mälardalen Maskin AB")
+        self.assertEqual(parsed["payment_terms"], "20 dagar netto")
+        self.assertEqual(parsed["due_date"], "2026-11-25")
+
 
 if __name__ == "__main__":
     unittest.main()

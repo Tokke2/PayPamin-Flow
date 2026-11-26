@@ -800,7 +800,17 @@ def monitor_work_area(window):
         user32.MonitorFromPoint.restype = ctypes.c_void_p
         user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MonitorInfo)]
         user32.GetMonitorInfoW.restype = wintypes.BOOL
-        source = int(window.winfo_id())
+        target_window = window
+        try:
+            win_mapped = window.winfo_ismapped()
+            master = getattr(window, "master", None)
+            if type(win_mapped) in (bool, int) and not bool(win_mapped) and master is not None:
+                master_mapped = master.winfo_ismapped()
+                if type(master_mapped) in (bool, int) and bool(master_mapped):
+                    target_window = master
+        except Exception:
+            target_window = window
+        source = int(target_window.winfo_id())
         hwnd = int(user32.GetAncestor(source, 2) or 0) or source  # GA_ROOT
         monitor = user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
         if not monitor:
@@ -832,6 +842,28 @@ def monitor_work_area(window):
         return fallback
 
 
+def _master_center_on_monitor(window, area_left, area_top, area_width, area_height, width, height):
+    """Center a new dialog over its mapped parent when on the same monitor."""
+    try:
+        master = getattr(window, "master", None)
+        if master is not None:
+            mapped = master.winfo_ismapped()
+            if type(mapped) in (bool, int) and bool(mapped):
+                mx, my = int(master.winfo_rootx()), int(master.winfo_rooty())
+                mw, mh = int(master.winfo_width()), int(master.winfo_height())
+                if mw >= 200 and mh >= 150:
+                    cx = mx + (mw - width) // 2
+                    cy = my + (mh - height) // 2
+                    if area_left <= cx + width // 2 <= area_left + area_width:
+                        return cx, cy
+    except Exception:
+        report_fault()
+    return (
+        area_left + max(0, (area_width - width) // 2),
+        area_top + max(0, (area_height - height) // 2),
+    )
+
+
 def fit_window_to_screen(window, margin=24, min_width=360, min_height=240):
     """Make a dialog resizable and keep its requested geometry usable.
 
@@ -860,11 +892,25 @@ def fit_window_to_screen(window, margin=24, min_width=360, min_height=240):
             x, y = int(window.winfo_x()), int(window.winfo_y())
         except Exception:
             x = y = 0
-        if x <= 0 and y <= 0:
-            x = area_left + max(0, (area_width - width) // 2)
-            y = area_top + max(0, (area_height - height) // 2)
-        x = min(max(area_left, x), max(area_left, area_left + area_width - width))
+        # Center when unpositioned or when Tk placed the cascade coordinates on a
+        # different monitor, avoiding inter-monitor DPI seam oscillation on Windows.
+        outside_monitor = (
+            x < area_left or x >= area_left + area_width
+            or y < area_top or y >= area_top + area_height
+        )
+        if (x <= 0 and y <= 0) or (
+            outside_monitor and getattr(window, "__dict__", {}).get("_accessibility_positioned") is not True
+        ):
+            x, y = _master_center_on_monitor(
+                window, area_left, area_top, area_width, area_height, width, height
+            )
+        inset = min(int(margin), max(0, (area_width - width) // 2))
+        x = min(max(area_left + inset, x), max(area_left, area_left + area_width - width))
         y = min(max(area_top, y), max(area_top, area_top + area_height - height))
+        try:
+            window._accessibility_positioned = True
+        except Exception:
+            report_fault()
         window.geometry(f"{width}x{height}+{x}+{y}")
         return width, height
     except Exception:
@@ -1047,6 +1093,12 @@ class ScrollableForm:
         self.canvas._accessibility_scroll_form = self.form
         self.window._accessibility_scrollable_form = self
         self._syncing = False
+        self._vscroll_visible = True
+        self._hscroll_visible = False
+        self._last_scrollregion = None
+        self._last_item_width = None
+        self._outer_size_key = None
+        self._toggle_count = 0
         self.form.bind("<Configure>", self._content_changed, add="+")
         self.canvas.bind("<Configure>", self._canvas_changed, add="+")
         # The toplevel is the last stop in Tk's binding order, so the wheel
@@ -1058,6 +1110,43 @@ class ScrollableForm:
             except Exception:
                 continue
         self._content_changed()
+
+    def _set_vertical_visible(self, visible: bool, *, count_toggle: bool = True):
+        if visible == self._vscroll_visible:
+            return
+        if not visible and count_toggle and self._toggle_count >= 3:
+            return
+        self._vscroll_visible = visible
+        if count_toggle:
+            self._toggle_count += 1
+        if visible:
+            self.vertical.grid()
+        else:
+            self.vertical.grid_remove()
+            self.canvas.yview_moveto(0.0)
+
+    def _set_horizontal_visible(self, visible: bool, *, count_toggle: bool = True):
+        if visible == self._hscroll_visible:
+            return
+        if not visible and count_toggle and self._toggle_count >= 3:
+            return
+        self._hscroll_visible = visible
+        if count_toggle:
+            self._toggle_count += 1
+        if visible:
+            self.horizontal.grid()
+        else:
+            self.horizontal.grid_remove()
+            self.canvas.xview_moveto(0.0)
+
+    def _update_outer_size_latch(self):
+        try:
+            key = (int(self.window.winfo_width()), int(self.window.winfo_height()))
+        except Exception:
+            return
+        if key != self._outer_size_key and key[0] > 1 and key[1] > 1:
+            self._outer_size_key = key
+            self._toggle_count = 0
 
     def fit_to_content(self, max_width=1100, max_height=800):
         """Request a canvas size that matches the content, capped to a maximum.
@@ -1073,17 +1162,14 @@ class ScrollableForm:
         try:
             content_width = max(1, int(self.form.winfo_reqwidth()))
             content_height = max(1, int(self.form.winfo_reqheight()))
-            capped_width = min(int(max_width), content_width)
-            capped_height = min(int(max_height), content_height)
+            needs_vscroll = content_height > int(max_height)
+            extra_w = 22 if needs_vscroll else 8
+            capped_width = min(int(max_width), content_width + extra_w)
+            capped_height = min(int(max_height), content_height + 8)
             self.canvas.configure(width=capped_width, height=capped_height)
-            if content_height <= capped_height + 1:
-                self.vertical.grid_remove()
-            else:
-                self.vertical.grid()
-            if content_width <= capped_width + 1:
-                self.horizontal.grid_remove()
-            else:
-                self.horizontal.grid()
+            self._toggle_count = 0
+            self._set_vertical_visible(content_height > capped_height + 1, count_toggle=False)
+            self._set_horizontal_visible(content_width > capped_width + 1, count_toggle=False)
             return (capped_width, capped_height)
         except Exception:
             return None
@@ -1135,9 +1221,13 @@ class ScrollableForm:
             return
         self._syncing = True
         try:
+            self._update_outer_size_latch()
             bounds = self.canvas.bbox("all")
             if bounds:
-                self.canvas.configure(scrollregion=bounds)
+                bounds_key = tuple(int(v) for v in bounds)
+                if bounds_key != self._last_scrollregion:
+                    self._last_scrollregion = bounds_key
+                    self.canvas.configure(scrollregion=bounds)
             self._sync_vertical_scrollbar()
             self._sync_horizontal_scrollbar()
         finally:
@@ -1148,7 +1238,9 @@ class ScrollableForm:
             viewport_width = int(getattr(event, "width", 0) or self.canvas.winfo_width())
             if viewport_width > 1:
                 requested = max(viewport_width, int(self.form.winfo_reqwidth()))
-                self.canvas.itemconfigure(self.item, width=requested)
+                if requested != self._last_item_width:
+                    self._last_item_width = requested
+                    self.canvas.itemconfigure(self.item, width=requested)
         except Exception:
             report_fault()
         self._content_changed()
@@ -1158,11 +1250,10 @@ class ScrollableForm:
             viewport_height = int(self.canvas.winfo_height())
             required_height = int(self.form.winfo_reqheight())
             if viewport_height > 1:
-                if required_height > viewport_height + 1:
-                    self.vertical.grid()
-                else:
-                    self.vertical.grid_remove()
-                    self.canvas.yview_moveto(0.0)
+                if required_height > viewport_height + 2:
+                    self._set_vertical_visible(True)
+                elif required_height <= viewport_height - 4:
+                    self._set_vertical_visible(False)
         except Exception:
             report_fault()
 
@@ -1170,10 +1261,11 @@ class ScrollableForm:
         try:
             viewport_width = int(self.canvas.winfo_width())
             required_width = int(self.form.winfo_reqwidth())
-            if viewport_width > 1 and required_width > viewport_width + 1:
-                self.horizontal.grid()
-            else:
-                self.horizontal.grid_remove()
+            if viewport_width > 1:
+                if required_width > viewport_width + 2:
+                    self._set_horizontal_visible(True)
+                elif required_width <= viewport_width - 4:
+                    self._set_horizontal_visible(False)
         except Exception:
             report_fault()
 

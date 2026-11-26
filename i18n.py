@@ -923,6 +923,8 @@ _ENGLISH = {
     "Arkiverad faktura": "Archived invoice",
     "Den här PDF-filen ligger i en arkivmapp under importmappen och importeras inte på nytt.": "This PDF file is inside an archive folder under the import folder and will not be imported again.",
     "Arkiverade faktura-PDF:er (ÅÅÅÅ/MM): {archived}": "Archived invoice PDFs (YYYY/MM): {archived}",
+    "Betalningsvillkor": "Payment terms",
+    "Betalningsvillkor: {terms}": "Payment terms: {terms}",
 }
 
 

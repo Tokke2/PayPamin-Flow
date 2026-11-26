@@ -350,6 +350,30 @@ class AutomaticImportUiTests(unittest.TestCase):
         self.assertTrue((import_dir / "2026" / "11" / "faktura_6002.pdf").is_file())
         self.assertTrue(split_6003.is_file())
 
+    def test_auto_save_imported_invoice_persists_customer_payment_terms_and_derived_due_date(self):
+        self.app.init_db()
+        saved = self.app.try_auto_save_imported_invoice(
+            {
+                "customer": "Kista Elektronik AB",
+                "invoice_no": "7701",
+                "invoice_date": "2026-11-10",
+                "due_date": "",
+                "payment_terms": "30 dagar netto",
+                "amount": 5200.0,
+                "currency": "SEK",
+                "note": "Serviceavtal november",
+            },
+            source="import/faktura_7701.pdf",
+            source_hash="hash-7701",
+        )
+        self.assertTrue(saved)
+        with self.app.connect() as db:
+            row = db.execute("SELECT * FROM invoices WHERE invoice_no='7701'").fetchone()
+        self.assertEqual(row["customer"], "Kista Elektronik AB")
+        self.assertEqual(row["payment_terms"], "30 dagar netto")
+        self.assertEqual(row["due_date"], "2026-12-10")
+        self.assertEqual(row["customer_type"], "business")
+
 
 if __name__ == "__main__":
     unittest.main()

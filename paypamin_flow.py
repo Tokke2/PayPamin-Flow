@@ -70,8 +70,9 @@ import appearance
 import invoice_export
 import invoice_trash
 from invoice_parser import (
-    clean_customer_zone_text, clean_invoice_note, extract_invoice_sections,
-    normalize_date, parse_amount_value, parse_invoice_text,
+    clean_customer_zone_text, clean_invoice_note, clean_payment_terms_zone,
+    extract_invoice_sections, normalize_date, parse_amount_value,
+    parse_invoice_text, parse_payment_terms_days,
 )
 from import_watcher import (
     ImportFolderMonitor, archive_import_pdf, can_split_pdf_pages,
@@ -620,7 +621,8 @@ def init_db():
     with connect() as db:
         db.execute("""CREATE TABLE IF NOT EXISTS invoices (
             id INTEGER PRIMARY KEY, customer TEXT NOT NULL, invoice_no TEXT NOT NULL,
-            due_date TEXT NOT NULL, invoice_date TEXT DEFAULT '', template_vendor TEXT DEFAULT '', reviewed INTEGER NOT NULL DEFAULT 1,
+            due_date TEXT NOT NULL, invoice_date TEXT DEFAULT '', payment_terms TEXT NOT NULL DEFAULT '',
+            template_vendor TEXT DEFAULT '', reviewed INTEGER NOT NULL DEFAULT 1,
             logo_file TEXT,
             amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'SEK', paid REAL NOT NULL DEFAULT 0,
             paid_before_marking REAL, paid_marked_at TEXT NOT NULL DEFAULT '', paid_marked_source TEXT NOT NULL DEFAULT '',
@@ -651,6 +653,7 @@ def init_db():
         # The fee depends on who the customer is (4 § vs 4 a § lag 1981:739).
         if 'customer_type' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN customer_type TEXT NOT NULL DEFAULT 'private'")
         if 'fee_agreement' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN fee_agreement TEXT NOT NULL DEFAULT ''")
+        if 'payment_terms' not in existing:db.execute("ALTER TABLE invoices ADD COLUMN payment_terms TEXT NOT NULL DEFAULT ''")
         ensure_ledger_schema(db)
         ensure_journal_schema(db)
         invoice_trash.ensure_trash_schema(db)
@@ -1038,7 +1041,7 @@ def has_ledger_import_basis(row):
 
 ORIGINAL_INVOICE_PROTECTED_FIELDS = ('invoice_no', 'amount', 'currency', 'paid')
 ORIGINAL_INVOICE_ENRICHABLE_FIELDS = (
-    'customer', 'invoice_date', 'due_date', 'email', 'note', 'template_vendor',
+    'customer', 'invoice_date', 'due_date', 'payment_terms', 'email', 'note', 'template_vendor',
 )
 
 
@@ -1157,6 +1160,7 @@ def save_invoice_record(values,row_id=None):
         if duplicate is None:
             params=(
                 values['customer'],values['invoice_no'],values['invoice_date'],values['due_date'],
+                str(values.get('payment_terms') or '').strip()[:80],
                 values['template_vendor'],values['amount'],values['currency'],values['paid'],
                 values['email'],values['source'],values.get('source_hash',''),values['note'],values['reviewed'],
                 values.get('logo_file'),normalize_customer_type(values.get('customer_type')),
@@ -1164,11 +1168,11 @@ def save_invoice_record(values,row_id=None):
             )
             if row_id is None:
                 db.execute('''INSERT INTO invoices(
-                    customer,invoice_no,invoice_date,due_date,template_vendor,amount,currency,paid,email,
+                    customer,invoice_no,invoice_date,due_date,payment_terms,template_vendor,amount,currency,paid,email,
                     source,source_hash,note,reviewed,logo_file,customer_type,fee_agreement,created
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',params+(datetime.now().isoformat(timespec='seconds'),))
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',params+(datetime.now().isoformat(timespec='seconds'),))
             else:
-                db.execute('''UPDATE invoices SET customer=?,invoice_no=?,invoice_date=?,due_date=?,
+                db.execute('''UPDATE invoices SET customer=?,invoice_no=?,invoice_date=?,due_date=?,payment_terms=?,
                     template_vendor=?,amount=?,currency=?,paid=?,email=?,source=?,source_hash=?,note=?,reviewed=?,logo_file=?,
                     customer_type=?,fee_agreement=?
                     WHERE id=?''',params+(row_id,))
@@ -1247,7 +1251,14 @@ def try_auto_save_imported_invoice(guess,source,source_hash):
     if not isinstance(guess,dict):return False
     customer=str(guess.get('customer') or '').strip()
     invoice_no=str(guess.get('invoice_no') or '').strip()
+    inv_date_raw=str(guess.get('invoice_date') or '').strip()
+    inv_date=normalize_date(inv_date_raw) or (inv_date_raw if dparse(inv_date_raw) else '')
+    payment_terms=str(guess.get('payment_terms') or '').strip()[:80]
     due_raw=normalize_date(str(guess.get('due_date') or '').strip()) or str(guess.get('due_date') or '').strip()
+    if not dparse(due_raw) and inv_date and payment_terms:
+        terms_days=parse_payment_terms_days(payment_terms)
+        if terms_days is not None:
+            due_raw=(date.fromisoformat(inv_date)+timedelta(days=terms_days)).isoformat()
     if not customer or not invoice_no or not dparse(due_raw):
         return False
     raw_amount=guess.get('amount')
@@ -1258,8 +1269,6 @@ def try_auto_save_imported_invoice(guess,source,source_hash):
         amount=float(parsed_amt) if parsed_amt is not None else 0.0
     if amount<=0:
         return False
-    inv_date_raw=str(guess.get('invoice_date') or '').strip()
-    inv_date=normalize_date(inv_date_raw) or (inv_date_raw if dparse(inv_date_raw) else '')
     currency_candidate=str(guess.get('currency') or 'SEK').strip()
     currency=normalize_currency(currency_candidate) if is_valid_currency(currency_candidate) else 'SEK'
     enriched=apply_saved_customer_contact({
@@ -1267,6 +1276,7 @@ def try_auto_save_imported_invoice(guess,source,source_hash):
         'invoice_no':invoice_no,
         'invoice_date':inv_date,
         'due_date':due_raw,
+        'payment_terms':payment_terms,
         'template_vendor':str(guess.get('template_vendor') or '').strip(),
         'amount':amount,
         'currency':currency,
@@ -3343,7 +3353,9 @@ class ReminderApp(tk.Tk):
         except tk.TclError:
             logger.exception('Secondary window icon could not be loaded')
 
-    def _finalize_toplevel(self,window):
+    def _finalize_toplevel(self,window,_from_idle=False):
+        if _from_idle and getattr(window,'__dict__',{}).get('_toplevel_finalized') is True:
+            return
         # Repeat native branding after mapping so Windows cannot retain the
         # generic pythonw.exe icon in the taskbar or window switcher.
         self._set_window_icon(window)
@@ -3360,12 +3372,21 @@ class ReminderApp(tk.Tk):
             except Exception:
                 report_fault()
         fit_window_to_screen(window)
+        try:window._toplevel_finalized=True
+        except Exception:report_fault()
+
+    def _prepare_modal_toplevel(self,window):
+        """Size, center and style a modal dialog before grabbing pointer/focus."""
+        finalize=getattr(self,'_finalize_toplevel',None)
+        if callable(finalize):finalize(window)
+        try:window.grab_set()
+        except tk.TclError:report_fault()
 
     def _new_toplevel(self,title):
         window=tk.Toplevel(self)
         window.title(title);window.transient(self);window.resizable(True,True)
         self._set_window_icon(window)
-        window.after_idle(lambda: self._finalize_toplevel(window))
+        window.after_idle(lambda: self._finalize_toplevel(window,_from_idle=True))
         return window
 
     def _dialog_form(self,window,padding=20):
@@ -4729,7 +4750,7 @@ class ReminderApp(tk.Tk):
     def _choose_ledger_export_scope(self):
         """Ask which invoices should be included in the ledger export."""
         chosen={'scope':None}
-        w=self._new_toplevel(_('Exportera reskontra'));w.grab_set();w.resizable(False,False)
+        w=self._new_toplevel(_('Exportera reskontra'))
         form=self._dialog_form(w,padding=20)
         ttk.Label(form,text=_('Välj vilka fakturor som ska ingå i reskontraexporten:')).pack(anchor='w',pady=(0,10))
         scope_var=tk.StringVar(value='all')
@@ -4747,6 +4768,9 @@ class ReminderApp(tk.Tk):
             w.destroy()
         ttk.Button(buttons,text=_('Exportera…'),command=confirm,style='Accent.TButton').pack(side='right')
         ttk.Button(buttons,text=_('Avbryt'),command=w.destroy).pack(side='right',padx=(0,8))
+        prep=getattr(self,'_prepare_modal_toplevel',None)
+        if callable(prep):prep(w)
+        else:w.grab_set()
         w.wait_window()
         return chosen['scope']
 
@@ -4880,6 +4904,9 @@ class ReminderApp(tk.Tk):
             review=_('Granskad') if r['reviewed'] else _('KRÄVER GRANSKNING')
             note=r['note'] or _('Ingen fakturatext')
             detail_text=_('{customer} · {invoice_no} · Belopp: {amount} · {stage} · {review} · Mall: {vendor} · Logotyp: {logo} · {note}',customer=r['customer'],invoice_no=r['invoice_no'],amount=money(float(r['amount'] or 0),r['currency']),stage=_(next_stage(r)),review=review,vendor=vendor,logo=logo_name,note=note)
+            terms_str=str(row_value(r,'payment_terms','') or '').strip()
+            if terms_str:
+                detail_text+=' · '+_('Betalningsvillkor: {terms}',terms=terms_str)
             email_status=' · '.join(
                 reminder_email_status(r,level) for level in ('P1','P2') if r[level.lower()+'_date']
             )
@@ -5142,7 +5169,7 @@ class ReminderApp(tk.Tk):
         choices,suggested_name,missing=self.reminder_logo_options(row)
         state={'choices':choices,'missing':missing}
         window=self._new_toplevel(_('Skapa {level}',level=level))
-        window.grab_set();window.resizable(True,True)
+        window.resizable(True,True)
         form=self._dialog_form(window,padding=22)
         ttk.Label(form,text=_('Skapa {level}',level=level),style='Title.TLabel').pack(anchor='w')
         ttk.Label(
@@ -5210,6 +5237,9 @@ class ReminderApp(tk.Tk):
         buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(14,0))
         ttk.Button(buttons,text=_('Fortsätt med {level}',level=level),command=accept,style='Accent.TButton').pack(side='left')
         ttk.Button(buttons,text=_('Avbryt'),command=cancel).pack(side='right')
+        prep=getattr(self,'_prepare_modal_toplevel',None)
+        if callable(prep):prep(window)
+        else:window.grab_set()
         combo.focus_set()
         window.wait_window()
         if choice['value'] is None:
@@ -5533,6 +5563,7 @@ class ReminderApp(tk.Tk):
             m=re.search(r'([A-Z]*\d[A-Z0-9./-]*)',raw,re.I)
             return m.group(1) if m else raw.splitlines()[0]
         if field=='customer':return clean_customer_zone_text(raw)
+        if field=='payment_terms':return clean_payment_terms_zone(raw)
         if field=='note':return clean_invoice_note(raw)
         return raw[:300]
 
@@ -5643,7 +5674,7 @@ class ReminderApp(tk.Tk):
         ttk.Button(nav,text='+',command=lambda:change_zoom(0.25)).pack(side='left',padx=(2,4))
         ttk.Button(nav,text=_('Passa sida'),command=lambda:reset_zoom()).pack(side='left')
         ttk.Label(nav,text=_('Markera fält:')).pack(side='left',padx=(18,5))
-        fields={_('Fakturanummer'):'invoice_no',_('Belopp (ATT BETALA)'):'amount',_('Valuta'):'currency',_('Fakturadatum'):'invoice_date',_('Förfallodatum'):'due_date',_('Kundnamn'):'customer',_('Fakturatext / Avser'):'note',_('Org.nr (leverantör)'):'org_number',_('Bankgiro (leverantör)'):'bankgiro_number'}
+        fields={_('Fakturanummer'):'invoice_no',_('Belopp (ATT BETALA)'):'amount',_('Valuta'):'currency',_('Fakturadatum'):'invoice_date',_('Förfallodatum'):'due_date',_('Betalningsvillkor'):'payment_terms',_('Kundnamn'):'customer',_('Fakturatext / Avser'):'note',_('Org.nr (leverantör)'):'org_number',_('Bankgiro (leverantör)'):'bankgiro_number'}
         field_labels={key:label for label,key in fields.items()}
         field_var=tk.StringVar(value=_('Belopp (ATT BETALA)'))
         ttk.Combobox(nav,textvariable=field_var,state='readonly',values=list(fields),width=24).pack(side='left')
@@ -5977,10 +6008,11 @@ class ReminderApp(tk.Tk):
                                 continue
                             if duplicate:
                                 if has_ledger_import_basis(duplicate) and not str(duplicate['source'] or '').strip():
+                                    new_terms=str(row_value(duplicate,'payment_terms','') or '').strip() or str(guess.get('payment_terms') or '').strip()[:80]
                                     if len(candidates)==1:
                                         with connect() as db:
                                             saved_hash=str(duplicate['source_hash'] or '').strip() or candidate_hash
-                                            db.execute('UPDATE invoices SET source=?,source_hash=? WHERE id=?',(source,saved_hash,duplicate['id']))
+                                            db.execute('UPDATE invoices SET source=?,source_hash=?,payment_terms=? WHERE id=?',(source,saved_hash,new_terms,duplicate['id']))
                                         logger.info('Linked import-folder PDF to existing ledger invoice: invoice=%s file=%s',duplicate['invoice_no'],path.name)
                                     elif split_batch:
                                         extracted_link=extract_section_pdf_to_import(path,IMPORT_DIR,section.page_indexes,invoice_no=str(duplicate['invoice_no'] or ''))
@@ -5988,7 +6020,7 @@ class ReminderApp(tk.Tk):
                                             if callable(mark_handled):mark_handled(extracted_link)
                                             with connect() as db:
                                                 saved_hash=str(duplicate['source_hash'] or '').strip() or file_sha256(extracted_link)
-                                                db.execute('UPDATE invoices SET source=?,source_hash=? WHERE id=?',(str(extracted_link),saved_hash,duplicate['id']))
+                                                db.execute('UPDATE invoices SET source=?,source_hash=?,payment_terms=? WHERE id=?',(str(extracted_link),saved_hash,new_terms,duplicate['id']))
                                             logger.info('Split and linked batch PDF section to existing ledger invoice: invoice=%s file=%s',duplicate['invoice_no'],extracted_link.name)
                                 duplicates+=1
                                 logger.info('Duplicate import blocked: existing_id=%s file=%s pages=%s',duplicate['id'],path.name,','.join(str(index+1) for index in section.page_indexes))
@@ -6304,7 +6336,7 @@ class ReminderApp(tk.Tk):
         saved_cust_lang=customer_reminder_language(r)
         lang_labels=[_(label) for _code,label in CUSTOMER_LANGUAGE_CHOICES]
         initial_lang_label=next((_(label) for code,label in CUSTOMER_LANGUAGE_CHOICES if code==saved_cust_lang),lang_labels[0])
-        w=self._new_toplevel(_('Redigera kund'));w.grab_set();w.resizable(True,True)
+        w=self._new_toplevel(_('Redigera kund'));w.resizable(True,True)
         form=self._dialog_form(w,padding=20)
         ttk.Label(form,text=_('Kundnamn')).grid(row=0,column=0,sticky='w',padx=(0,12),pady=5)
         customer_entry=ttk.Entry(form,width=52);customer_entry.grid(row=0,column=1,pady=5);customer_entry.insert(0,r['customer'])
@@ -6338,13 +6370,16 @@ class ReminderApp(tk.Tk):
         buttons=ttk.Frame(form);buttons.grid(row=4,column=0,columnspan=2,sticky='e')
         ttk.Button(buttons,text=_('Spara'),command=save,style='Accent.TButton').pack(side='left',padx=(0,7))
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='left')
+        prep=getattr(self,'_prepare_modal_toplevel',None)
+        if callable(prep):prep(w)
+        else:w.grab_set()
         w.wait_window()
 
     def invoice_dialog(self,title,row=None,source='',guess=None,source_hash='',enrich_original=False):
-        w=self._new_toplevel(_(title));w.grab_set();w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
-        fields=[('Kundnamn','customer'),('Fakturanummer','invoice_no'),('Fakturadatum (ÅÅÅÅ-MM-DD)','invoice_date'),('Förfallodatum (ÅÅÅÅ-MM-DD)','due_date'),('Fakturabelopp','amount'),('Valuta (ISO-kod, t.ex. SEK/EUR)','currency'),('Redan betalt','paid'),('E-post','email'),('Fakturatext / Avser','note')]
+        w=self._new_toplevel(_(title));w.resizable(True,True);w.configure(bg=window_palette(self)['background'])
+        fields=[('Kundnamn','customer'),('Fakturanummer','invoice_no'),('Fakturadatum (ÅÅÅÅ-MM-DD)','invoice_date'),('Förfallodatum (ÅÅÅÅ-MM-DD)','due_date'),('Betalningsvillkor','payment_terms'),('Fakturabelopp','amount'),('Valuta (ISO-kod, t.ex. SEK/EUR)','currency'),('Redan betalt','paid'),('E-post','email'),('Fakturatext / Avser','note')]
         enriched=merge_original_invoice_values(row,guess) if enrich_original and row is not None else None
-        vals={k:(enriched[k] if enriched is not None else (row[k] if row else (guess or {}).get(k,''))) for _label,k in fields}
+        vals={k:(enriched.get(k,'') if enriched is not None else (row_value(row,k,'') if row else (guess or {}).get(k,''))) for _label,k in fields}
         vals['currency']=normalize_currency(vals.get('currency'))
         vals['source']=source if enrich_original else (row['source'] if row else source)
         vals['source_hash']=source_hash if enrich_original else (row['source_hash'] if row else source_hash)
@@ -6449,6 +6484,16 @@ class ReminderApp(tk.Tk):
                 due_bankday_frame.grid(row=due_bankday_row,column=0,columnspan=2,sticky='w',pady=(2,4))
             else:
                 due_bankday_frame.grid_remove()
+        def maybe_fill_due_from_terms(*_args):
+            if enrich_original or entries['due_date'].get().strip():
+                return
+            inv_d=dparse(normalize_date(entries['invoice_date'].get().strip()) or entries['invoice_date'].get().strip())
+            days=parse_payment_terms_days(entries['payment_terms'].get().strip())
+            if inv_d is not None and days is not None:
+                entries['due_date'].insert(0,(inv_d+timedelta(days=days)).isoformat())
+                update_due_bankday_hint()
+        entries['payment_terms'].bind('<FocusOut>',maybe_fill_due_from_terms)
+        entries['invoice_date'].bind('<FocusOut>',maybe_fill_due_from_terms)
         entries['due_date'].bind('<KeyRelease>',update_due_bankday_hint)
         entries['due_date'].bind('<FocusOut>',update_due_bankday_hint)
         update_due_bankday_hint()
@@ -6492,6 +6537,9 @@ class ReminderApp(tk.Tk):
             saved=True
             w.destroy();self.refresh()
         ttk.Button(form,text=_('Spara'),command=save,style='Accent.TButton').grid(row=review_row+1,column=1,sticky='e',pady=(12,0))
+        prep=getattr(self,'_prepare_modal_toplevel',None)
+        if callable(prep):prep(w)
+        else:w.grab_set()
         w.wait_window()
         return saved
 
@@ -7168,7 +7216,7 @@ class ReminderApp(tk.Tk):
         logo_files=sorted(p.name for p in SVG_DIR.glob('*.svg') if p.is_file())
         _current_logo_path,current_logo=self.invoice_logo(r)
         choices=[_('(Ingen logotyp)')]+logo_files
-        w=self._new_toplevel(_('Redigera {level}',level=level));w.grab_set();w.resizable(True,True)
+        w=self._new_toplevel(_('Redigera {level}',level=level));w.resizable(True,True)
         form=self._dialog_form(w,padding=20)
         ttk.Label(form,text=_('Välj logotyp och meddelanderad för {level}. PDF:en skrivs om med ursprungligt påminnelsedatum.',level=level),wraplength=390).pack(anchor='w',pady=(0,10))
         ttk.Label(form,text=_('Logotyp'),style='BodyBold.TLabel').pack(anchor='w')
@@ -7197,6 +7245,9 @@ class ReminderApp(tk.Tk):
         buttons=ttk.Frame(form);buttons.pack(fill='x')
         ttk.Button(buttons,text=_('Spara och skriv om {level}',level=level),command=save,style='Accent.TButton').pack(side='left')
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='right')
+        prep=getattr(self,'_prepare_modal_toplevel',None)
+        if callable(prep):prep(w)
+        else:w.grab_set()
         w.wait_window()
 
     def update_p1_logo(self,row,logo_file,parent=None):
