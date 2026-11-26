@@ -254,18 +254,13 @@ class ImportFolderMonitor:
     def mark_handled(self, path: str | Path) -> None:
         """Mark a newly split per-invoice PDF as handled so it is not re-polled."""
         target = Path(path)
+        canonical = self.folder / target.name
         try:
-            if target.is_symlink() or not target.is_file():
+            if canonical.is_symlink() or not canonical.is_file():
                 return
-            details = target.stat()
+            details = canonical.stat()
         except OSError:
             return
         signature = FileSignature(details.st_size, details.st_mtime_ns)
-        self._handled[target] = signature
-        self._pending.pop(target, None)
-        try:
-            resolved = target.resolve()
-            self._handled[resolved] = signature
-            self._pending.pop(resolved, None)
-        except OSError:
-            return
+        self._handled[canonical] = signature
+        self._pending.pop(canonical, None)

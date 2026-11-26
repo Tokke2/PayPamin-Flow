@@ -105,14 +105,14 @@ jobs:
               gh api -X POST "repos/$REPOSITORY/git/refs" \
                 -f ref="refs/tags/$tag" -f sha="$COMMIT" > /dev/null
             fi
-            gh api -X POST "repos/$REPOSITORY/releases" \
+            release_id=$(gh api -X POST "repos/$REPOSITORY/releases" \
               -f tag_name="$tag" \
               -f name="PayPamin Flow $version" \
               -f target_commitish="$COMMIT" \
               -F body=@release-body.md \
               -F draft=false \
               -F prerelease=false \
-              -f make_latest=true > /dev/null
+              -f make_latest=true --jq .id)
           else
             # The tag follows the branch, so the archive GitHub generates for it -
             # the one newer installs download - is this commit.
@@ -126,7 +126,6 @@ jobs:
               -F prerelease=false \
               -f make_latest=true > /dev/null
           fi
-          release_id=$(gh api "repos/$REPOSITORY/releases/tags/$tag" --jq .id)
           # Build and attach PayPamin-Flow-Python.zip + .sha256 so existing 0.6.0
           # installations (e.g. b2f6ac48f496) can self-update directly in-app
           # without manual download.
@@ -136,10 +135,16 @@ jobs:
             --release-id "$release_id" \
             --release-commit "$COMMIT"
           git checkout -- build_info.py
-          gh release upload "$tag" \
-            release-assets/PayPamin-Flow-Python.zip \
-            release-assets/PayPamin-Flow-Python.zip.sha256 \
-            --clobber --repo "$REPOSITORY"
+          for attempt in 1 2 3; do
+            if gh release upload "$tag" \
+              release-assets/PayPamin-Flow-Python.zip \
+              release-assets/PayPamin-Flow-Python.zip.sha256 \
+              --clobber --repo "$REPOSITORY"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 3
+          done
           rm -rf release-assets release-body.md
           echo "Release $tag now points at $COMMIT, marked as Latest, with Python update package attached"
       - name: Verify the release really carries this commit
