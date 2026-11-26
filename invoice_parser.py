@@ -115,6 +115,60 @@ class InvoiceSection:
     text: str
 
 
+def _spatial_customer_from_fitz_page(page):
+    """Recover recipient name when two PDF header columns share Y coordinates."""
+    if not hasattr(page, 'rect') or not hasattr(page, 'get_text'):
+        return ''
+    width = float(getattr(page.rect, 'width', 0.0) or 0.0)
+    height = float(getattr(page.rect, 'height', 0.0) or 0.0)
+    if width <= 0 or height <= 0:
+        return ''
+    data = page.get_text('dict')
+    if not isinstance(data, dict):
+        return ''
+    right_lines = []
+    left_lines = []
+    split_x = width * 0.42
+    max_y = height * 0.52
+    for block in data.get('blocks', ()):
+        if block.get('type', 0) != 0:
+            continue
+        for line in block.get('lines', ()):
+            bbox = line.get('bbox') or (0.0, 0.0, 0.0, 0.0)
+            x0, y0 = float(bbox[0]), float(bbox[1])
+            if y0 > max_y:
+                continue
+            text = re.sub(
+                r'\s+', ' ',
+                ''.join(span.get('text', '') for span in line.get('spans', ())),
+            ).strip()
+            if not text:
+                continue
+            item = (round(y0 / 2.0) * 2.0, x0, text)
+            if x0 >= split_x:
+                right_lines.append(item)
+            else:
+                left_lines.append(item)
+    for col_items in (right_lines, left_lines):
+        if not col_items:
+            continue
+        col_items.sort(key=lambda entry: (entry[0], entry[1]))
+        col_text = '\n'.join(entry[2] for entry in col_items)
+        customer = extract_customer_name(col_text)
+        if customer:
+            return customer
+    return ''
+
+
+def _extract_single_fitz_page(page):
+    raw_text = page.get_text('text')
+    if raw_text.strip() and not extract_customer_name(raw_text):
+        spatial_customer = _spatial_customer_from_fitz_page(page)
+        if spatial_customer:
+            return f'{raw_text.rstrip()}\nFakturaadress: {spatial_customer}\n'
+    return raw_text
+
+
 def extract_pdf_pages(path):
     """Extract text page by page, retaining OCR support for scanned PDFs."""
 
@@ -123,7 +177,7 @@ def extract_pdf_pages(path):
     except ImportError as exc:
         raise ValueError(_('PDF-läsning kräver PyMuPDF. Installera med: pip install pymupdf')) from exc
     with fitz.open(path) as doc:
-        pages=[page.get_text('text') for page in doc]
+        pages=[_extract_single_fitz_page(page) for page in doc]
     if not any(text.strip() for text in pages):
         # Optional OCR fallback for scanned PDFs (requires pytesseract + Tesseract + pdf2image).
         try:
@@ -305,7 +359,7 @@ NOTE_TABLE_HEADER_PATTERN = re.compile(r'\b(?:benämning|beskrivning|artikelbesk
 NOTE_STOP_PATTERN = re.compile(
     r'\b(?:summa|exkl\.?\s*moms|moms|att\s*betala|total\s*due|amount\s*due|'
     r'grand\s*total|totalt|totalbelopp|vat|subtotal|netto|net|öresavrundning|betalningsvillkor|'
-    r'bankgiro|plusgiro|iban|förfallodatum|due\s*date|payment\s*terms)\b', re.I
+    r'bankgiro|plusgiro|iban|förfallodatum|due\s*date|payment\s*terms|fakturaadress)\b', re.I
 )
 NOTE_NUMBER_ONLY_PATTERN = re.compile(
     r'^[\d\s.,:;+%()/\\-]+(?:\s*(?:kr|sek|eur|usd|gbp|nok|dkk|jpy|chf|pln|czk|huf))?$', re.I
@@ -387,6 +441,236 @@ def _description_from_lines(lines):
     return ''
 
 
+_INVOICE_TITLE_ONLY_RE = re.compile(
+    r'^(?:faktura|kontantfaktura|kreditfaktura|debetfaktura|samlingsfaktura|delfaktura|'
+    r'invoice|tax\s+invoice|credit\s+note)(?:\s+(?:nr\.?\s*|#\s*)?[A-Z0-9./-]+)?$',
+    re.I,
+)
+_BILLING_HEADER_ONLY_RE = re.compile(
+    r'^(?:fakturaadress|faktureringsadress|fakturamottagare|kundens\s+namn|kundnamn|'
+    r'mottagare|k[oö]pare|betalare|faktureras\s*till|kund|bill\s*to|billed\s*to|'
+    r'invoice\s*to|customer(?:\s+name)?)\s*[:#-]?\s*$',
+    re.I,
+)
+_DELIVERY_HEADER_ONLY_RE = re.compile(
+    r'^(?:leveransadress|godsadress|levereras\s*till|h[äa]mtningsadress|skadeplats|'
+    r'delivery\s*address|ship(?:ping)?\s*to)\s*[:#-]?\s*$',
+    re.I,
+)
+_INLINE_CUSTOMER_LABEL_RE = re.compile(
+    r'^(?:fakturaadress|faktureringsadress|fakturamottagare|kundens\s+namn|kundnamn|'
+    r'mottagare|k[oö]pare|betalare|faktureras\s*till|'
+    r'kund\b(?!\s*(?:nr|nummer|kontakt|kod|kategori|typ|grupp|reskontra))|'
+    r'bill\s*to|billed\s*to|invoice\s*to|'
+    r'customer(?:\s+name)?\b(?!\s*(?:no|number|id|code|ledger)))\s*[:#-]?\s*(.*)$',
+    re.I,
+)
+_POSTAL_CITY_LINE_RE = re.compile(
+    r'^(?:(?:(?:SE|S|FI|DE|FR|PL)\s*-?\s*)?\d{3}\s?\d{2}|(?:NO|N|DK|CH|AT|BE|NL)\s*-\s*\d{4})'
+    r'\s+[A-Za-zÅÄÖåäöÆØÅæøåÜüß][A-Za-zÅÄÖåäöÆØÅæøåÜüß\s./-]{1,}$'
+)
+_POSTAL_FAKE_UNIT_RE = re.compile(
+    r'^\S+(?:\s+\S+)?\s+(?:kr|sek|eur|usd|gbp|nok|dkk|st|stk|styck|tim|timmar|moms|exkl|inkl)\b',
+    re.I,
+)
+_BODY_OR_FOOTER_START_RE = re.compile(
+    r'^(?:artikel(?:nr|nummer)?\b|art\.?\s*nr\b|ben[äa]mning\b|specifikation\b|'
+    r'vara/tj[äa]nst\b|beskrivning\b|description\b|avser\b|fakturatext\b|'
+    r'att\s+betala\b|summa\s+att\s+betala\b|totalt\s+att\s+betala\b|'
+    r'total\s+due\b|amount\s+due\b|grand\s+total\b|'
+    r'postadress\b|bes[öo]ksadress\b|utdelningsadress\b|'
+    r'godk[äa]nd\s+f[öo]r\s+f-?skatt|innehar\s+f-?skatt|styrelsens\s+s[äa]te|'
+    r'bankgiro\b|plusgiro\b|iban\b)',
+    re.I,
+)
+_METADATA_STOP_RE = re.compile(
+    r'^(?:faktura|kontantfaktura|kreditfaktura|debetfaktura|samlingsfaktura|delfaktura|'
+    r'invoice|tax\s+invoice|credit\s+note|fakturanr|fakturanummer|invoice\s*(?:no|number|#)|'
+    r'fakturadatum|fakturadato|invoice\s*date|f[oö]rfallodatum|f[oö]rfallodag|f[oö]rfaller|'
+    r'due\s*date|kundnr|kundnummer|customer\s*(?:no|number|id)|'
+    r'er\s+referens|v[åa]r\s+referens|ert\s+ordernr|v[åa]rt\s+ordernr|ordernr|ordernummer|'
+    r'betalningsvillkor|payment\s*terms|dr[öo]jsm[åa]lsr[äa]nta|leveransvillkor|leveranss[äa]tt|'
+    r'leveransdatum|org\.?\s*nr|organisationsnr|organisationsnummer|momsreg|vat\s*(?:no|reg)|'
+    r'reg\.?\s*nr|skadenr|skadenummer|telefon|tel\.?\b|v[äa]xel|e-?post|email|hemsida|webb|'
+    r'www\.|ocr\b|sida\s+\d|page\s+\d)\b',
+    re.I,
+)
+_ADDRESS_SUBLINE_RE = re.compile(
+    r'^(?:c/o\b|att\.?\s*[: ]|box\s+\d|postbox\s+\d|p\.?o\.?\s*box\b|fe\s+\d|skador\s+fe\s+\d)',
+    re.I,
+)
+_TRAILING_COLUMN_METADATA_RE = re.compile(
+    r'\s+(?:fakturanummer|fakturanr|fakturadatum|f[oö]rfallodatum|kundnr|kundnummer|'
+    r'v[åa]r\s+referens|er\s+referens|org\.?\s*nr|betalningsvillkor|'
+    r'invoice\s*(?:no\.?|number|date|#)|due\s*date|customer\s*(?:no\.?|number))\b.*$',
+    re.I,
+)
+_DATE_OR_PAGE_ONLY_RE = re.compile(
+    r'^(?:\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d+\s*(?:/|\()\s*\d+\)?)$'
+)
+
+
+def _is_postal_city_line(line):
+    return bool(_POSTAL_CITY_LINE_RE.match(line)) and not bool(_POSTAL_FAKE_UNIT_RE.match(line))
+
+
+def _clean_customer_candidate(raw):
+    candidate = re.sub(r'\s+', ' ', str(raw or '')).strip(' \t:;-')
+    if not candidate:
+        return ''
+    candidate = _TRAILING_COLUMN_METADATA_RE.sub('', candidate).strip(' \t:;-')
+    if not candidate or len(candidate) < 2:
+        return ''
+    if re.fullmatch(r'(?:nr\.?\s*|#\s*)?[\d\s./-]+', candidate, re.I):
+        return ''
+    if _DATE_OR_PAGE_ONLY_RE.match(candidate) or _is_postal_city_line(candidate):
+        return ''
+    if (
+        _BILLING_HEADER_ONLY_RE.match(candidate)
+        or _DELIVERY_HEADER_ONLY_RE.match(candidate)
+        or _METADATA_STOP_RE.match(candidate)
+        or _BODY_OR_FOOTER_START_RE.match(candidate)
+        or _ADDRESS_SUBLINE_RE.match(candidate)
+    ):
+        return ''
+    if not re.search(r'[A-Za-zÅÄÖåäöÆØÅæøå]', candidate):
+        return ''
+    return candidate[:100]
+
+
+def _sender_header_key(non_empty_lines):
+    """Detect a top-of-page supplier title immediately preceding 'Faktura' / 'Invoice'."""
+    if len(non_empty_lines) < 2:
+        return ''
+    first = non_empty_lines[0]
+    if _BILLING_HEADER_ONLY_RE.match(first) or _INLINE_CUSTOMER_LABEL_RE.match(first):
+        return ''
+    for probe in non_empty_lines[1:4]:
+        if _INVOICE_TITLE_ONLY_RE.match(probe):
+            return first.casefold()
+    return ''
+
+
+def extract_customer_name(text_or_lines):
+    """Extract the billing customer name from Swedish/English invoice text."""
+    if isinstance(text_or_lines, str):
+        raw_lines = text_or_lines.splitlines()
+    else:
+        raw_lines = list(text_or_lines)
+    lines = [re.sub(r'\s+', ' ', str(ln or '')).strip() for ln in raw_lines]
+    non_empty = [ln for ln in lines if ln]
+    sender_key = _sender_header_key(non_empty)
+
+    header_lines = []
+    for ln in non_empty:
+        if _BODY_OR_FOOTER_START_RE.match(ln):
+            break
+        header_lines.append(ln)
+        if len(header_lines) >= 45:
+            break
+
+    labelled_postal_customers = []
+    unlabelled_postal_customers = []
+    for idx, line in enumerate(header_lines):
+        if not _is_postal_city_line(line):
+            continue
+        block = []
+        is_billing = False
+        is_delivery = False
+        for up in range(idx - 1, max(-1, idx - 6), -1):
+            prev = header_lines[up]
+            if _BILLING_HEADER_ONLY_RE.match(prev):
+                is_billing = True
+                break
+            if _DELIVERY_HEADER_ONLY_RE.match(prev):
+                is_delivery = True
+                break
+            if (
+                _is_postal_city_line(prev)
+                or _METADATA_STOP_RE.match(prev)
+                or _DATE_OR_PAGE_ONLY_RE.match(prev)
+                or _INLINE_CUSTOMER_LABEL_RE.match(prev)
+            ):
+                if _INLINE_CUSTOMER_LABEL_RE.match(prev):
+                    inline_match = _INLINE_CUSTOMER_LABEL_RE.match(prev)
+                    inline_val = _clean_customer_candidate(inline_match.group(1))
+                    if inline_val:
+                        block.append(inline_val)
+                        is_billing = True
+                break
+            if sender_key and prev.casefold() == sender_key and up == 0:
+                break
+            block.append(prev)
+        block.reverse()
+        if is_delivery or not block:
+            continue
+        # An unlabelled postal block needs at least [customer_name, street_or_box]
+        # above the postal-code line so a single interleaved street line is never
+        # mistaken for a customer name.
+        if not is_billing and len(block) < 2:
+            continue
+        chosen = ''
+        for entry in block:
+            cleaned_entry = _clean_customer_candidate(entry)
+            if not cleaned_entry:
+                continue
+            if not is_billing and sender_key and cleaned_entry.casefold() == sender_key:
+                continue
+            chosen = cleaned_entry
+            break
+        if chosen:
+            if is_billing:
+                labelled_postal_customers.append(chosen)
+            else:
+                unlabelled_postal_customers.append(chosen)
+
+    if labelled_postal_customers:
+        return labelled_postal_customers[0]
+
+    # Explicit customer/billing labels (both header and full text for appended spatial hints).
+    for scan_pool in (header_lines, non_empty):
+        for idx, line in enumerate(scan_pool):
+            match = _INLINE_CUSTOMER_LABEL_RE.match(line)
+            if not match:
+                continue
+            inline_candidate = _clean_customer_candidate(match.group(1))
+            if inline_candidate:
+                return inline_candidate
+            for follow in scan_pool[idx + 1:idx + 5]:
+                if _DELIVERY_HEADER_ONLY_RE.match(follow) or _METADATA_STOP_RE.match(follow):
+                    break
+                if _ADDRESS_SUBLINE_RE.match(follow):
+                    continue
+                next_candidate = _clean_customer_candidate(follow)
+                if next_candidate:
+                    return next_candidate
+
+    if unlabelled_postal_customers:
+        return unlabelled_postal_customers[0]
+    return ''
+
+
+def clean_customer_zone_text(text):
+    """Extract a clean customer name from a user-drawn PDF preview zone."""
+    raw_lines = [re.sub(r'\s+', ' ', ln).strip() for ln in str(text or '').splitlines() if ln.strip()]
+    if not raw_lines:
+        return ''
+    parsed = extract_customer_name(raw_lines)
+    if parsed:
+        return parsed
+    for line in raw_lines:
+        match = _INLINE_CUSTOMER_LABEL_RE.match(line)
+        if match:
+            cleaned = _clean_customer_candidate(match.group(1))
+            if cleaned:
+                return cleaned
+            continue
+        cleaned = _clean_customer_candidate(line)
+        if cleaned:
+            return cleaned
+    return raw_lines[0][:100]
+
+
 def parse_invoice_text(text):
     """Extract likely fields from Swedish and English invoice PDFs; review all suggestions."""
     lines=[re.sub(r'\s+',' ',ln).strip() for ln in text.splitlines()]
@@ -412,46 +696,7 @@ def parse_invoice_text(text):
     # Fortnox's Swedish labels and common English invoice labels/layouts.
     payable_labels=list(re.finditer(PAYABLE_LABEL_PATTERN,cleaned,re.I))
     amount=_payable_amount(cleaned,payable_labels) or 0.0
-    # Prefer the customer postal block: company name immediately above a street address
-    # and Swedish postal-code/city line (Fortnox Tadega layout, e.g. Protector Försäkring ASA).
-    customer=''
-    for i,line in enumerate(lines):
-        if re.search(r'\b\d{3}\s?\d{2}\s+[A-Za-zÅÄÖåäö]',line):
-            street=''
-            for j in range(max(0,i-2),i):
-                candidate=lines[j]
-                if re.search(r'\d',candidate) and re.search(r'[A-Za-zÅÄÖåäö]',candidate) and not re.search(r'\b(?:FE|BOX|POSTBOX|KUNDNR)\b',candidate,re.I):
-                    street=candidate
-            if street:
-                street_i=lines.index(street)
-                for k in range(street_i-1,max(-1,street_i-3),-1):
-                    candidate=lines[k].strip()
-                    if candidate and not re.search(r'^(?:leveransadress|faktura|fakturanr|fakturanummer|kundnr|er referens|org(?:anis)?ationsnr|telefon|e-?post)\b',candidate,re.I) and not re.search(r'\d{3}\s?\d{2}',candidate):
-                        customer=candidate;break
-            if customer: break
-    # Fallbacks for common labels. Do not treat Kundnr as the customer-name label.
-    if not customer:
-        cm=re.search(r'(?im)^\s*(?:fakturamottagare|kundnamn|kund\b)\s*[:]?\s*([^\n]{2,80})',cleaned)
-        if cm:
-            candidate=cm.group(1).strip()
-            if not re.fullmatch(r'(?:nr\.?\s*)?\d+',candidate,re.I): customer=candidate
-            if not customer:
-                after=cleaned[cm.end():].splitlines()
-                for ln in after[:4]:
-                    ln=ln.strip()
-                    if ln and not re.search(r'^(?:kundnr|kundnummer|org(?:anis)?ationsnr|fakturanummer|datum|adress|er referens)\b',ln,re.I) and not re.fullmatch(r'\d+',ln):
-                        customer=ln;break
-    if not customer:
-        m=re.search(r'(?im)^\s*(?:faktureras\s*till|bill\s*to)\s*[:]?\s*([^\n]*)',cleaned)
-        if m:
-            candidate=m.group(1).strip()
-            if candidate:
-                customer=candidate
-            else:
-                for ln in cleaned[m.end():].splitlines()[:4]:
-                    ln=ln.strip()
-                    if ln and not re.search(r'^(?:kundnr|kundnummer|org(?:anis)?ationsnr|fakturanummer|invoice|date|datum|adress)\b',ln,re.I):
-                        customer=ln;break
+    customer=extract_customer_name(lines)
     # Prefer explicit invoice text and support multiline/table-based descriptions.
     description = _description_from_lines(lines)
     return {'invoice_no':number,'invoice_date':invoice_date,'due_date':due,'amount':amount,'currency':detect_invoice_currency(cleaned,payable_labels),'customer':customer,'note':description}

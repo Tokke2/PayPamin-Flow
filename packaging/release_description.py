@@ -66,9 +66,9 @@ def replace_block(body: str, block: str) -> str:
 DEFAULT_NOTES = """## PayPamin Flow {version}
 
 ### Nyheter i denna version
-- **Spara fakturor som klump-PDF eller enskilda PDF:er i `import/`**: En PDF med flera olika fakturor delas automatiskt upp (1 faktura per sida om inget annat anges som `Sida 1 av 2` / `2/2` / `Fortsättning` eller upprepat fakturanummer), varje faktura sparas som egen PDF i `import/` och totalimporteras direkt utan dialogrutor.
-- **Automatisk års-/månadsarkivering vid betalning via reskontran**: När en faktura markeras som betald via reskontran flyttas dess PDF automatiskt från `import/` till `import/ÅÅÅÅ/MM/` och arkiverade filer importeras aldrig igen.
-- **Exportera reskontra med antal påminnelser och datum**: Exportera kundreskontran till Excel-kompatibel `.csv` eller utskriftsklar liggande A4-`.pdf` inklusive antal påminnelser samt faktura-, förfallo-, P1-, P2-, senaste påminnelse-, betal- och reskontradatum.
+- **Förbättrad avläsning av kundnamn vid PDF-import**: Läser automatiskt av kundnamn från svenska och engelska faktura-PDF:er (Fortnox, Cabas, Visma m.fl.) inklusive fönsterkuvert i tvåkolumnslayout, `Box`/`Postbox`/`FE`-adresser, `c/o`-rader, gårds-/byadresser utan gatunummer samt väljer `Fakturaadress` framför `Leveransadress` och avsändarens sidfot.
+- **Spara fakturor som klump-PDF eller enskilda PDF:er i `import/`**: En PDF med flera olika fakturor delas automatiskt upp (1 faktura per sida om inget annat anges) och totalimporteras direkt.
+- **Automatisk års-/månadsarkivering & reskontraexport**: Betalda reskontrafakturor flyttas till `import/ÅÅÅÅ/MM/` och reskontran kan exporteras till `.csv` och liggande A4-`.pdf`.
 """
 
 

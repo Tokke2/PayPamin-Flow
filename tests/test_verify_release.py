@@ -22,11 +22,11 @@ import verify_release as verification  # noqa: E402
 
 COMMIT = "cef8317e515dd32845ec8315f7ff0916aa583a91"
 OTHER = "b2f6ac4aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-TAG = "v0.7.2"
+TAG = "v0.7.3"
 REPOSITORY = "Tokke2/PayPamin-Flow"
 
 
-def make_archive(files, root="PayPamin-Flow-0.7.2"):
+def make_archive(files, root="PayPamin-Flow-0.7.3"):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         for name, content in files.items():
@@ -35,7 +35,7 @@ def make_archive(files, root="PayPamin-Flow-0.7.2"):
 
 
 FILES = {
-    "app_info.py": "APP_VERSION = \"0.7.2\"\n",
+    "app_info.py": "APP_VERSION = \"0.7.3\"\n",
     "paypamin_flow.py": "print('hej')\n",
     "tests/test_smoke.py": "pass\n",
 }

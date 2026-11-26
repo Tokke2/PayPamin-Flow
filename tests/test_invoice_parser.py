@@ -1,11 +1,14 @@
+import tempfile
 import sys
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from invoice_parser import (
-    clean_invoice_note, extract_invoice_sections, normalize_amount,
-    parse_amount_value, parse_invoice_text, split_invoice_pages,
+    clean_customer_zone_text, clean_invoice_note, extract_customer_name,
+    extract_invoice_sections, normalize_amount, parse_amount_value,
+    parse_invoice_text, split_invoice_pages,
 )
 
 
@@ -156,6 +159,89 @@ Att betala 6 563,00"""
     def test_note_cleanup_preserves_a_bare_year(self):
         self.assertEqual(clean_invoice_note("Medlemsavgift 2026"), "Medlemsavgift 2026")
         self.assertEqual(clean_invoice_note("Konsulttjänst 5250 SEK"), "Konsulttjänst")
+
+    def test_extracts_customer_with_box_postbox_and_fe_addresses(self):
+        box_invoice = (
+            "NORDISK BILGLAS AB\nFaktura 7100\n"
+            "LKAB Berg & Betong AB\nBox 952\n971 28 Luleå\n"
+            "ATT BETALA 4 200,00 SEK"
+        )
+        fe_invoice = (
+            "NORDISK BILGLAS AB\nFaktura 7101\n"
+            "Trygg-Hansa Glasskador\nFE 380\n838 80 Frösön\n"
+            "ATT BETALA 1 800,00 SEK"
+        )
+        self.assertEqual(parse_invoice_text(box_invoice)["customer"], "LKAB Berg & Betong AB")
+        self.assertEqual(parse_invoice_text(fe_invoice)["customer"], "Trygg-Hansa Glasskador")
+
+    def test_extracts_customer_with_care_of_and_digitless_rural_street(self):
+        care_of_invoice = (
+            "Fakturanummer 7102\n"
+            "Pleione AB\nc/o Thomas Dahlin\nKungsgatan 4\n111 43 Stockholm\n"
+            "ATT BETALA 2 500,00 SEK"
+        )
+        rural_invoice = (
+            "Fakturanummer 7103\n"
+            "Andreas Andersson\nByvägen\n733 92 Sala\n"
+            "ATT BETALA 950,00 SEK"
+        )
+        self.assertEqual(parse_invoice_text(care_of_invoice)["customer"], "Pleione AB")
+        self.assertEqual(parse_invoice_text(rural_invoice)["customer"], "Andreas Andersson")
+
+    def test_prefers_fakturaadress_over_leveransadress_and_ignores_footer_sender(self):
+        invoice = (
+            "TADEGA AB\nFaktura\n"
+            "Leveransadress\nVerkstaden Norr\nIndustrivägen 2\n972 54 Luleå\n"
+            "Fakturaadress\nLinde Material Handling AB\nBox 1063\n701 10 Örebro\n"
+            "Artikel Benämning Antal Summa\n Vindrutebyte 1 st 5 000,00\n"
+            "ATT BETALA 5 000,00 SEK\n"
+            "Postadress\nTadega AB\nStorgatan 1\n111 22 Stockholm"
+        )
+        self.assertEqual(parse_invoice_text(invoice)["customer"], "Linde Material Handling AB")
+
+        no_customer_only_footer = (
+            "TADEGA AB\nFaktura 7200\nFakturadatum 2026-11-01\nKundnr 841630700\n"
+            "ATT BETALA 1 250,00 SEK\n"
+            "Postadress\nTadega AB\nStorgatan 1\n111 22 Stockholm"
+        )
+        self.assertEqual(parse_invoice_text(no_customer_only_footer)["customer"], "")
+
+    def test_clean_customer_zone_strips_labels_and_sublines(self):
+        self.assertEqual(
+            clean_customer_zone_text("Fakturaadress\nLKAB Berg & Betong AB\nBox 952\n971 28 Luleå"),
+            "LKAB Berg & Betong AB",
+        )
+        self.assertEqual(
+            clean_customer_zone_text("Kund: Genberg Art & Design"),
+            "Genberg Art & Design",
+        )
+        self.assertEqual(extract_customer_name("Kundnr: 841630700\nInvoice to:\nTomas Wistrand Produktion Aktiebolag"), "Tomas Wistrand Produktion Aktiebolag")
+
+    def test_spatial_two_column_pdf_recovers_right_window_envelope_customer(self):
+        import fitz
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = Path(tmp) / "two_col.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=595, height=842)
+            # Row-by-row insertion interleaves left metadata and right C5 window-envelope
+            page.insert_text((40, 120), "Fakturadatum: 2026-11-01")
+            page.insert_text((320, 120), "Andreas Andersson")
+            page.insert_text((40, 135), "Förfallodatum: 2026-12-01")
+            page.insert_text((320, 135), "Storgatan 12")
+            page.insert_text((40, 150), "Kundnr: 10542")
+            page.insert_text((320, 150), "733 31 Sala")
+            page.insert_text((40, 175), "Fakturanummer: 9901")
+            page.insert_text((40, 260), "ATT BETALA 1 500,00 SEK")
+            doc.save(pdf_path)
+            doc.close()
+
+            sections = extract_invoice_sections(str(pdf_path))
+            self.assertEqual(len(sections), 1)
+            parsed = parse_invoice_text(sections[0].text)
+            self.assertEqual(parsed["customer"], "Andreas Andersson")
+            self.assertEqual(parsed["invoice_no"], "9901")
+            self.assertEqual(parsed["amount"], 1500.0)
 
 
 class MultiInvoicePdfTests(unittest.TestCase):

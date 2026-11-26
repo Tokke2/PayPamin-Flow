@@ -70,8 +70,8 @@ import appearance
 import invoice_export
 import invoice_trash
 from invoice_parser import (
-    clean_invoice_note, extract_invoice_sections, normalize_date,
-    parse_amount_value, parse_invoice_text,
+    clean_customer_zone_text, clean_invoice_note, extract_invoice_sections,
+    normalize_date, parse_amount_value, parse_invoice_text,
 )
 from import_watcher import (
     ImportFolderMonitor, archive_import_pdf, can_split_pdf_pages,
@@ -1196,7 +1196,8 @@ def refresh_json_journal(parent=None):
 _BUSINESS_NAME_PATTERN=re.compile(
     r'(?i)(?:\b(?:ab|aktiebolag|hb|handelsbolag|kb|kommanditbolag|ek\.\s*för\.?|'
     r'ekonomisk\s+förening|asa|as|oy|oyj|a/s|ltd\.?|limited|gmbh|inc\.?|corp\.?|'
-    r'llc|plc|b\.v\.|s\.a\.|kommun|region|myndighet|stiftelse|förening)\b)'
+    r'llc|plc|b\.v\.|s\.a\.|kommun|region|myndighet|stiftelse|förening|'
+    r'försäkring(?:ar|sbolag)?|glasskador|filial|bank)\b)'
 )
 
 
@@ -5531,7 +5532,7 @@ class ReminderApp(tk.Tk):
         if field=='invoice_no':
             m=re.search(r'([A-Z]*\d[A-Z0-9./-]*)',raw,re.I)
             return m.group(1) if m else raw.splitlines()[0]
-        if field=='customer':return raw.splitlines()[0][:100]
+        if field=='customer':return clean_customer_zone_text(raw)
         if field=='note':return clean_invoice_note(raw)
         return raw[:300]
 

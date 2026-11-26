@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 APP_NAME = "PayPamin Flow"
 APP_SLUG = "paypamin-flow"
 APP_ID = "se.paypamin.flow"
-APP_VERSION = "0.7.2"
+APP_VERSION = "0.7.3"
 APP_AUTHOR = "Rickard Längkvist"
 COPYRIGHT_YEAR = "2026"
 APP_COPYRIGHT = f"Copyright © {COPYRIGHT_YEAR} {APP_AUTHOR}"
