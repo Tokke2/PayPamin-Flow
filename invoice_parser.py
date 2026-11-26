@@ -144,55 +144,132 @@ def extract_pdf(path):
     return '\n'.join(extract_pdf_pages(path))
 
 
+_EXPLICIT_PAGE_RE = re.compile(
+    r'\b(?:sida|sid\.?|page)\s*[:.#-]?\s*(\d{1,3})\s*(?:av|of|/|\()\s*(\d{1,3})\)?',
+    re.I,
+)
+_BARE_PAGE_LINE_RE = re.compile(r'^(\d{1,2})\s*(?:\(\s*(\d{1,2})\s*\)|/\s*(\d{1,2}))$')
+_CONTINUATION_WORD_RE = re.compile(
+    r'\b(?:fortsättning|forts\.|continuation|continued|överfört|transport)\b',
+    re.I,
+)
+_NEXT_PAGE_HINT_RE = re.compile(
+    r'\b(?:fortsätter\s+på\s+nästa\s+sida|continued\s+on\s+next\s+page)\b',
+    re.I,
+)
+
+
+def _page_position(text):
+    """Return ``(current_page, total_pages)`` when stated on the page, else None."""
+    explicit = _EXPLICIT_PAGE_RE.search(text)
+    if explicit:
+        cur, tot = int(explicit.group(1)), int(explicit.group(2))
+        if 1 <= cur <= tot <= 200:
+            return (cur, tot)
+    non_empty = [line.strip() for line in str(text or '').splitlines() if line.strip()]
+    edge_lines = non_empty[:8] + non_empty[-8:]
+    for line in edge_lines:
+        bare = _BARE_PAGE_LINE_RE.fullmatch(line)
+        if bare:
+            cur = int(bare.group(1))
+            tot = int(bare.group(2) or bare.group(3))
+            if 1 <= cur <= tot <= 50:
+                return (cur, tot)
+    return None
+
+
 def _continuation_page(text):
-    match=re.search(r'\b(?:sida|page)\s+(\d+)\s+(?:av|of)\s+(\d+)\b',text,re.I)
-    if match and int(match.group(1))>1:
+    pos = _page_position(text)
+    if pos is not None and pos[0] > 1:
         return True
-    return bool(re.search(r'\b(?:fortsättning|forts\.|continuation|continued)\b',text,re.I))
+    return bool(_CONTINUATION_WORD_RE.search(text))
+
+
+def _expects_next_page(text):
+    pos = _page_position(text)
+    if pos is not None and pos[0] < pos[1]:
+        return True
+    return bool(_NEXT_PAGE_HINT_RE.search(text))
 
 
 def split_invoice_pages(page_texts):
-    """Group continuation pages and split when a new invoice number begins.
+    """Split a PDF into individual invoices: 1 invoice per page unless stated otherwise.
 
-    A repeated invoice number belongs to the same invoice. A page without a
-    new number is also treated as a continuation, which prevents totals or
-    references on a later page from becoming separate invoices accidentally.
+    Pages stay grouped as one multi-page invoice only when stated:
+    - the same invoice number is repeated across pages,
+    - a page states continuation (e.g. ``Sida 2 av 2``, ``2(2)``, ``2/2``,
+      ``Page 2 of 2``, ``Fortsättning``, ``Continued``),
+    - the previous page stated ``Sida 1 av 2`` / ``Fortsätter på nästa sida``, or
+    - the previous page had an invoice number without any payable total yet and
+      the next page is an unnumbered specification/total overflow page.
+    Otherwise each non-blank page becomes its own invoice.
     """
 
-    sections=[]
-    page_texts=list(page_texts)
-    current=[]
-    current_number=''
-    current_complete=False
+    sections = []
+    page_texts = list(page_texts)
+    current = []
+    current_number = ''
+    current_complete = False
+    prev_expects_more = False
+    prev_explicitly_finished = False
 
     def finish():
         if current:
-            sections.append(InvoiceSection(tuple(current),'\n'.join(str(page_texts[index]) for index in current)))
+            sections.append(InvoiceSection(tuple(current), '\n'.join(str(page_texts[index]) for index in current)))
 
-    for index,text in enumerate(page_texts):
-        text=str(text)
+    for index, text in enumerate(page_texts):
+        text = str(text)
         if not text.strip():
             if current:
                 current.append(index)
             continue
-        page_guess=parse_invoice_text(text)
-        number=page_guess.get('invoice_no','')
-        normalized=''.join(number.split()).casefold()
-        current_normalized=''.join(current_number.split()).casefold()
-        starts_new=bool(current) and bool(normalized) and (
-            (bool(current_normalized) and normalized!=current_normalized)
-            or (not current_normalized and current_complete and not _continuation_page(text))
-        )
-        if starts_new:
-            finish()
-            current=[]
-            current_number=''
-            current_complete=False
+        page_guess = parse_invoice_text(text)
+        number = page_guess.get('invoice_no', '')
+        normalized = ''.join(number.split()).casefold()
+        current_normalized = ''.join(current_number.split()).casefold()
+        pos = _page_position(text)
+        has_total = bool(re.search(rf'(?:{PAYABLE_LABEL_PATTERN}|{TOTAL_LABEL_PATTERN})', text, re.I))
+
+        if current:
+            if normalized and current_normalized:
+                if normalized != current_normalized:
+                    is_continuation = False
+                else:
+                    is_continuation = not (pos is not None and pos[0] == 1 and prev_explicitly_finished)
+            elif pos is not None and pos[0] == 1:
+                is_continuation = False
+            elif _continuation_page(text):
+                is_continuation = True
+            elif prev_expects_more and not normalized:
+                is_continuation = True
+            elif (
+                bool(current_normalized)
+                and not normalized
+                and not current_complete
+                and not prev_explicitly_finished
+                and not page_guess.get('invoice_date')
+                and not page_guess.get('due_date')
+            ):
+                is_continuation = True
+            else:
+                # Default rule: 1 invoice per page unless stated otherwise.
+                is_continuation = False
+
+            if not is_continuation:
+                finish()
+                current = []
+                current_number = ''
+                current_complete = False
+                prev_expects_more = False
+                prev_explicitly_finished = False
+
         current.append(index)
         if number:
-            current_number=number
-        if re.search(rf'(?:{PAYABLE_LABEL_PATTERN}|{TOTAL_LABEL_PATTERN})',text,re.I):
-            current_complete=True
+            current_number = number
+        if has_total:
+            current_complete = True
+        prev_expects_more = _expects_next_page(text)
+        prev_explicitly_finished = bool(pos is not None and pos[0] >= pos[1])
     finish()
     return sections
 

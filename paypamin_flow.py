@@ -73,8 +73,13 @@ from invoice_parser import (
     clean_invoice_note, extract_invoice_sections, normalize_date,
     parse_amount_value, parse_invoice_text,
 )
-from import_watcher import ImportFolderMonitor, iter_import_pdfs
+from import_watcher import (
+    ImportFolderMonitor, archive_import_pdf, can_split_pdf_pages,
+    extract_section_pdf_to_import, is_archived_import_pdf, iter_import_pdfs,
+    restore_archived_import_pdf,
+)
 import learning
+import ledger_export
 from ledger_import import (
     LedgerImportError, apply_ledger_import, ensure_ledger_schema,
     plan_ledger_import, read_ledger_report,
@@ -1288,6 +1293,107 @@ def try_auto_save_imported_invoice(guess,source,source_hash):
     )
     logger.info('Automatically imported invoice from import folder: invoice=%s customer=%s source=%s',invoice_no,customer,source)
     return True
+
+
+def is_ledger_paid_row(row):
+    """Return True when ``row`` is fully paid and settled/tracked via the ledger."""
+    if not is_fully_paid(row):
+        return False
+    source_kind=str(row_value(row,'paid_marked_source','') or '').strip()
+    return source_kind=='ledger' or has_ledger_import_basis(row)
+
+
+def archive_ledger_paid_import_pdfs(archive_date=None):
+    """Archive top-level ``import/`` PDFs into ``import/YYYY/MM/`` once paid via ledger.
+
+    Updates ``invoices.source`` in SQLite to point to the archived destination
+    so opening the original PDF from history continues to work seamlessly.
+    """
+    archived_count=0
+    try:
+        IMPORT_DIR.mkdir(parents=True,exist_ok=True)
+        resolved_import_dir=IMPORT_DIR.resolve()
+    except OSError:
+        report_fault()
+        return 0
+    with connect() as db:
+        rows=db.execute('SELECT * FROM invoices').fetchall()
+        by_source={}
+        for row in rows:
+            raw_source=str(row['source'] or '').strip()
+            if not raw_source:continue
+            try:resolved=Path(raw_source).expanduser().resolve()
+            except OSError:continue
+            if resolved.parent==resolved_import_dir and resolved.is_file():
+                by_source.setdefault(resolved,[]).append(row)
+        for source_file,linked_rows in by_source.items():
+            # Keep a multi-invoice PDF in import/ until all of its invoices are paid.
+            if any(not is_fully_paid(item) for item in linked_rows):
+                continue
+            if not any(is_ledger_paid_row(item) for item in linked_rows):
+                continue
+            primary=linked_rows[0]
+            chosen_date=(
+                archive_date
+                or str(row_value(primary,'paid_marked_at','') or '')[:10]
+                or str(row_value(primary,'ledger_last_seen','') or '')
+                or str(row_value(primary,'due_date','') or '')
+            )
+            try:
+                destination=archive_import_pdf(
+                    source_file,IMPORT_DIR,archive_date=chosen_date,
+                    invoice_no=str(primary['invoice_no'] or ''),
+                )
+            except OSError:
+                logger.exception('Could not archive paid invoice PDF: %s',source_file)
+                continue
+            if destination is None:
+                continue
+            archived_count+=1
+            new_source=str(destination)
+            for item in linked_rows:
+                db.execute('UPDATE invoices SET source=? WHERE id=?',(new_source,item['id']))
+            logger.info('Archived ledger-paid invoice PDF: invoice=%s to=%s',primary['invoice_no'],new_source)
+            log_activity('invoice','import_pdf_archived','completed',invoice_no=primary['invoice_no'],archive_path=new_source)
+        # Also match unlinked top-level single-invoice PDFs in import/ whose
+        # invoice number belongs to a ledger-paid row without a saved source.
+        unlinked_paid={
+            normalize_invoice_number(row['invoice_no']):row
+            for row in rows
+            if is_ledger_paid_row(row) and not str(row['source'] or '').strip()
+        }
+        if unlinked_paid:
+            for pdf_path in iter_import_pdfs(IMPORT_DIR):
+                try:candidates=read_invoice_candidates(pdf_path)
+                except Exception:
+                    report_fault()
+                    continue
+                if len(candidates)!=1:continue
+                _sec,guess,candidate_hash=candidates[0]
+                matched=unlinked_paid.get(normalize_invoice_number(guess.get('invoice_no','')))
+                if matched is None:continue
+                chosen_date=(
+                    archive_date
+                    or str(row_value(matched,'paid_marked_at','') or '')[:10]
+                    or str(row_value(matched,'ledger_last_seen','') or '')
+                    or str(row_value(matched,'due_date','') or '')
+                )
+                try:
+                    destination=archive_import_pdf(
+                        pdf_path,IMPORT_DIR,archive_date=chosen_date,
+                        invoice_no=str(matched['invoice_no'] or ''),
+                    )
+                except OSError:
+                    logger.exception('Could not archive unlinked paid invoice PDF: %s',pdf_path)
+                    continue
+                if destination is None:continue
+                archived_count+=1
+                saved_hash=str(matched['source_hash'] or '').strip() or candidate_hash
+                db.execute('UPDATE invoices SET source=?,source_hash=? WHERE id=?',(str(destination),saved_hash,matched['id']))
+                unlinked_paid.pop(normalize_invoice_number(matched['invoice_no']),None)
+                logger.info('Linked and archived ledger-paid invoice PDF: invoice=%s to=%s',matched['invoice_no'],destination)
+                log_activity('invoice','import_pdf_archived','completed',invoice_no=matched['invoice_no'],archive_path=str(destination))
+    return archived_count
 
 
 def show_duplicate_invoice(duplicate,parent=None):
@@ -4321,6 +4427,7 @@ class ReminderApp(tk.Tk):
         file_menu.add_command(label=_('Återställ säkerhetskopia'),command=self.restore_backup)
         file_menu.add_command(label=_('Importera JSON-journal'),command=self.import_journal)
         file_menu.add_command(label=_('Importera reskontralista'),command=self.import_ledger_list)
+        file_menu.add_command(label=_('Exportera reskontra'),command=self.export_ledger)
         file_menu.add_command(label=_('Öppna exportmapp'),command=self.open_export_folder)
         file_menu.add_command(label=_('Exportera listan till CSV'),command=self.export_invoices_csv)
         file_menu.add_command(label=_('Öppna tryckfiler'),command=self.open_print_folder)
@@ -4407,7 +4514,7 @@ class ReminderApp(tk.Tk):
             reflow()
             bar.bind('<Configure>',reflow,add='+')
 
-        primary_actions=[('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton')]
+        primary_actions=[('Skanna importmapp',self.scan_import_folder,'Accent.TButton'),('Öppna importmapp',self.open_import_folder,'TButton'),('Öppna exportmapp',self.open_export_folder,'TButton'),('Exportera reskontra',self.export_ledger,'TButton'),('Lägg till faktura-PDF',self.import_invoice,'TButton'),('Lägg till manuellt',self.add_invoice,'TButton'),('Skapa påminnelse',self.make_reminder,'TButton')]
         secondary_actions=[('Redigera P1',self.edit_p1,'TButton'),('Redigera P2',self.edit_p2,'TButton'),('Markera som betald',self.mark_invoice_paid,'TButton'),('Ångra betalmarkering',self.undo_invoice_paid,'TButton'),('Ignorera / återaktivera',self.toggle_ignore,'TButton'),('Redigera vald',self.edit_invoice,'TButton'),('Visa samlad fellogg',self.open_log,'TButton')]
         for actions,padding in ((primary_actions,(24,7,24,5)),(secondary_actions,(24,0,24,14))):
             bar=ttk.Frame(self,padding=padding);bar.pack(fill='x')
@@ -4575,6 +4682,107 @@ class ReminderApp(tk.Tk):
         messagebox.showinfo(
             _('CSV-filen är klar'),
             summary+'\n\n'+_('Filen innehåller listan som den ser ut nu: flik, sökning och sortering.'),
+            parent=self,
+        )
+        return Path(selected)
+
+    def ledger_export_records(self,scope='all'):
+        """Build complete ledger records including reminder counts and all dates."""
+        flt,query,sort_col,sort_rev=current_view_options(self)
+        if scope=='view':
+            selected_rows=invoice_view(flt,query,sort_col,sort_rev)[0]
+        else:
+            all_rows=invoice_view('all','',sort_col,sort_rev)[0]
+            if scope=='open':
+                selected_rows=[(r,stage,remain) for r,stage,remain in all_rows if remain>0.005 and not r['ignored']]
+            elif scope=='reminded':
+                selected_rows=[(r,stage,remain) for r,stage,remain in all_rows if ledger_export.reminder_count_for(r)>0]
+            else:
+                selected_rows=all_rows
+        records=[]
+        for r,stage,remain in selected_rows:
+            records.append({
+                'invoice_no':r['invoice_no'],
+                'customer':r['customer'],
+                'invoice_date':r['invoice_date'] or '',
+                'due_date':r['due_date'] or '',
+                'amount':float(r['amount'] or 0),
+                'paid':float(r['paid'] or 0),
+                'balance':remain,
+                'currency':r['currency'] or 'SEK',
+                'fee':charged_fee_for(r) if r['p1_date'] else '',
+                'payment_status':ledger_export.payment_status_label(r),
+                'stage':(_('IGNORERAD')+' · ' if r['ignored'] else '')+_(stage),
+                'reminder_count':ledger_export.reminder_count_for(r),
+                'p1_date':r['p1_date'] or '',
+                'p1_sent_date':str(row_value(r,'p1_sent_date','') or ''),
+                'p2_date':r['p2_date'] or '',
+                'p2_sent_date':str(row_value(r,'p2_sent_date','') or ''),
+                'latest_reminder_date':ledger_export.latest_reminder_date_for(r),
+                'paid_date':ledger_export.paid_date_for(r),
+                'ledger_last_seen':str(row_value(r,'ledger_last_seen','') or ''),
+                'note':r['note'] or '',
+            })
+        return records
+
+    def _choose_ledger_export_scope(self):
+        """Ask which invoices should be included in the ledger export."""
+        chosen={'scope':None}
+        w=self._new_toplevel(_('Exportera reskontra'));w.grab_set();w.resizable(False,False)
+        form=self._dialog_form(w,padding=20)
+        ttk.Label(form,text=_('Välj vilka fakturor som ska ingå i reskontraexporten:')).pack(anchor='w',pady=(0,10))
+        scope_var=tk.StringVar(value='all')
+        options=(
+            ('all',_('Hela reskontran (öppna och betalda fakturor)')),
+            ('open',_('Endast öppna / obetalda fakturor')),
+            ('reminded',_('Endast fakturor med påminnelser')),
+            ('view',_('Aktuell vy och sökning')),
+        )
+        for code,label in options:
+            ttk.Radiobutton(form,text=label,value=code,variable=scope_var).pack(anchor='w',pady=3)
+        buttons=ttk.Frame(form);buttons.pack(fill='x',pady=(14,0))
+        def confirm():
+            chosen['scope']=scope_var.get()
+            w.destroy()
+        ttk.Button(buttons,text=_('Exportera…'),command=confirm,style='Accent.TButton').pack(side='right')
+        ttk.Button(buttons,text=_('Avbryt'),command=w.destroy).pack(side='right',padx=(0,8))
+        w.wait_window()
+        return chosen['scope']
+
+    def export_ledger(self,scope=None,target_path=None):
+        """Export the customer ledger with reminder counts and dates (CSV or PDF)."""
+        chosen_scope=scope or self._choose_ledger_export_scope()
+        if not chosen_scope:return None
+        records=self.ledger_export_records(chosen_scope)
+        if not records:
+            messagebox.showinfo(_('Inget att exportera'),_('Det finns inga fakturor i det valda reskontraurvalet.'),parent=self)
+            return None
+        EXPORT_DIR.mkdir(parents=True,exist_ok=True)
+        selected=str(target_path) if target_path else filedialog.asksaveasfilename(
+            parent=self,title=_('Exportera reskontra'),initialdir=str(EXPORT_DIR),
+            initialfile=ledger_export.suggested_name(scope=chosen_scope),
+            defaultextension='.csv',
+            filetypes=[(_('CSV-fil (Excel)'),'*.csv'),(_('PDF-rapport'),'*.pdf'),(_('Alla filer'),'*.*')],
+        )
+        if not selected:return None
+        columns=[(key,_(label)) for key,label in ledger_export.COLUMNS]
+        try:
+            written=ledger_export.write(selected,records,columns=columns,title=_('Kundreskontra — PayPamin Flow'))
+        except OSError as exc:
+            logger.error('Ledger export failed: %s',exc)
+            messagebox.showerror(_('Kunde inte exportera'),_('Reskontrafilen kunde inte skrivas: {error}',error=exc),parent=self)
+            return None
+        stats=ledger_export.summary_stats(records)
+        log_activity(
+            'ledger','ledger_exported','completed',
+            count=written,scope=chosen_scope,reminders=stats['total_reminders'],path=str(selected),
+        )
+        messagebox.showinfo(
+            _('Reskontra exporterad'),
+            _(
+                '{count} fakturor exporterade till:\n{path}\n\nPåminda fakturor: {reminded} · Totalt antal påminnelser: {reminders}',
+                count=written,path=selected,reminded=stats['reminded_invoices'],reminders=stats['total_reminders'],
+            ),
             parent=self,
         )
         return Path(selected)
@@ -5698,20 +5906,39 @@ class ReminderApp(tk.Tk):
         self._import_scan_running=True
         try:
             IMPORT_DIR.mkdir(parents=True,exist_ok=True)
-            files=sorted(Path(p) for p in paths) if paths is not None else iter_import_pdfs(IMPORT_DIR)
+            if paths is not None:
+                files=[]
+                for candidate_path in sorted(Path(p) for p in paths):
+                    if is_archived_import_pdf(candidate_path,IMPORT_DIR):
+                        logger.info('Archived invoice PDF ignored during scan: file=%s',candidate_path)
+                        continue
+                    files.append(candidate_path)
+            else:
+                files=iter_import_pdfs(IMPORT_DIR)
             if not files:
-                if not automatic:messagebox.showinfo(_('Importmapp tom'),_('Lägg faktura-PDF:er i mappen (eller valfri undermapp):\n{folder}',folder=IMPORT_DIR),parent=self)
+                if not automatic:messagebox.showinfo(_('Importmapp tom'),_('Lägg faktura-PDF:er i mappen:\n{folder}',folder=IMPORT_DIR),parent=self)
                 return
             imported=skipped=failed=duplicates=paid_skipped=0
             for path in files:
                 if not ui_is_alive(self):
                     logger.info('Import scan stopped because the window closed: imported=%d remaining=%d',imported,len(files)-imported)
                     break
+                if is_archived_import_pdf(path,IMPORT_DIR):
+                    logger.info('Archived invoice PDF skipped: file=%s',path)
+                    continue
                 try:
                     candidates=read_invoice_candidates(path)
                     logger.info('PDF import found %d invoice section(s): file=%s',len(candidates),path.name)
+                    try:in_import_root=path.resolve().parent==IMPORT_DIR.resolve()
+                    except OSError:in_import_root=False
+                    split_batch=len(candidates)>1 and in_import_root and can_split_pdf_pages(path)
+                    file_failed=0
+                    all_sections_resolved=True
+                    monitor=getattr(self,'_import_monitor',None)
+                    mark_handled=getattr(monitor,'mark_handled',None)
                     for section,guess,candidate_hash in candidates:
                         if not ui_is_alive(self):
+                            all_sections_resolved=False
                             logger.info('Import scan stopped before the next invoice section')
                             break
                         try:
@@ -5720,25 +5947,93 @@ class ReminderApp(tk.Tk):
                             if duplicate and is_fully_paid(duplicate):
                                 paid_skipped+=1
                                 logger.info('Paid invoice import skipped: existing_id=%s file=%s pages=%s',duplicate['id'],path.name,','.join(str(index+1) for index in section.page_indexes))
+                                if is_ledger_paid_row(duplicate):
+                                    chosen_date=(
+                                        str(row_value(duplicate,'paid_marked_at','') or '')[:10]
+                                        or str(row_value(duplicate,'ledger_last_seen','') or '')
+                                        or str(row_value(duplicate,'due_date','') or '')
+                                    )
+                                    if len(candidates)==1:
+                                        try:
+                                            archived_dest=archive_import_pdf(path,IMPORT_DIR,archive_date=chosen_date,invoice_no=str(duplicate['invoice_no'] or ''))
+                                            if archived_dest is not None:
+                                                with connect() as db:
+                                                    saved_hash=str(duplicate['source_hash'] or '').strip() or candidate_hash
+                                                    db.execute('UPDATE invoices SET source=?,source_hash=? WHERE id=?',(str(archived_dest),saved_hash,duplicate['id']))
+                                        except OSError:
+                                            logger.exception('Could not archive already-paid invoice PDF: %s',path)
+                                    elif split_batch and not str(duplicate['source'] or '').strip():
+                                        extracted_paid=extract_section_pdf_to_import(path,IMPORT_DIR,section.page_indexes,invoice_no=str(duplicate['invoice_no'] or ''))
+                                        if extracted_paid is not None:
+                                            try:
+                                                archived_dest=archive_import_pdf(extracted_paid,IMPORT_DIR,archive_date=chosen_date,invoice_no=str(duplicate['invoice_no'] or ''))
+                                                if archived_dest is not None:
+                                                    with connect() as db:
+                                                        saved_hash=str(duplicate['source_hash'] or '').strip() or file_sha256(archived_dest)
+                                                        db.execute('UPDATE invoices SET source=?,source_hash=? WHERE id=?',(str(archived_dest),saved_hash,duplicate['id']))
+                                            except OSError:
+                                                logger.exception('Could not archive split paid invoice PDF: %s',extracted_paid)
                                 continue
                             if duplicate:
+                                if has_ledger_import_basis(duplicate) and not str(duplicate['source'] or '').strip():
+                                    if len(candidates)==1:
+                                        with connect() as db:
+                                            saved_hash=str(duplicate['source_hash'] or '').strip() or candidate_hash
+                                            db.execute('UPDATE invoices SET source=?,source_hash=? WHERE id=?',(source,saved_hash,duplicate['id']))
+                                        logger.info('Linked import-folder PDF to existing ledger invoice: invoice=%s file=%s',duplicate['invoice_no'],path.name)
+                                    elif split_batch:
+                                        extracted_link=extract_section_pdf_to_import(path,IMPORT_DIR,section.page_indexes,invoice_no=str(duplicate['invoice_no'] or ''))
+                                        if extracted_link is not None:
+                                            if callable(mark_handled):mark_handled(extracted_link)
+                                            with connect() as db:
+                                                saved_hash=str(duplicate['source_hash'] or '').strip() or file_sha256(extracted_link)
+                                                db.execute('UPDATE invoices SET source=?,source_hash=? WHERE id=?',(str(extracted_link),saved_hash,duplicate['id']))
+                                            logger.info('Split and linked batch PDF section to existing ledger invoice: invoice=%s file=%s',duplicate['invoice_no'],extracted_link.name)
                                 duplicates+=1
                                 logger.info('Duplicate import blocked: existing_id=%s file=%s pages=%s',duplicate['id'],path.name,','.join(str(index+1) for index in section.page_indexes))
                                 continue
-                            vendor=self.guess_supplier(section.text,path=str(path) if len(candidates)==1 else None,page_indexes=section.page_indexes)
+                            vendor=self.guess_supplier(section.text,path=str(path) if (len(candidates)==1 or split_batch) else None,page_indexes=section.page_indexes)
                             guess['template_vendor']=vendor
                             guess=self.apply_saved_zones(str(path),vendor,guess,page_indexes=section.page_indexes)
+                            if split_batch:
+                                post_zone_dup=find_duplicate_invoice(guess.get('invoice_no',''),candidate_hash)
+                                if post_zone_dup and is_fully_paid(post_zone_dup):
+                                    paid_skipped+=1
+                                    continue
+                                if post_zone_dup:
+                                    duplicates+=1
+                                    continue
+                            preview_path=str(path)
+                            preview_pages=section.page_indexes
+                            if split_batch:
+                                extracted_pdf=extract_section_pdf_to_import(path,IMPORT_DIR,section.page_indexes,invoice_no=str(guess.get('invoice_no') or ''))
+                                if extracted_pdf is not None:
+                                    source=str(extracted_pdf.resolve())
+                                    candidate_hash=file_sha256(extracted_pdf)
+                                    preview_path=str(extracted_pdf)
+                                    preview_pages=tuple(range(len(section.page_indexes)))
+                                    if callable(mark_handled):mark_handled(extracted_pdf)
+                                else:
+                                    all_sections_resolved=False
                             if try_auto_save_imported_invoice(guess,source,candidate_hash):
                                 imported+=1
                                 continue
-                            guess=self.preview_invoice(str(path),guess,vendor,page_indexes=section.page_indexes)
+                            guess=self.preview_invoice(preview_path,guess,vendor,page_indexes=preview_pages)
                             self.add_invoice(source=source,guess=guess,source_hash=candidate_hash)
                             with connect() as db:
                                 saved=db.execute('SELECT 1 FROM invoices WHERE source_hash=? LIMIT 1',(candidate_hash,)).fetchone()
                             if saved:imported+=1
                             else:skipped+=1
                         except Exception:
+                            file_failed+=1
                             logger.exception('Invoice section import failed for %s pages=%s',path.name,section.page_indexes);failed+=1
+                    if split_batch and file_failed==0 and all_sections_resolved:
+                        try:
+                            path.unlink(missing_ok=True)
+                            logger.info('Split batch PDF %s into %d individual invoice PDF(s) in import/',path.name,len(candidates))
+                            log_activity('import','batch_pdf_split','completed',source=path.name,sections=len(candidates))
+                        except OSError:
+                            logger.exception('Could not remove original batch PDF after splitting: %s',path)
                 except Exception:
                     logger.exception('Import folder scan failed for %s',path.name);failed+=1
             logger.info('Import folder scan complete: automatic=%s imported=%d duplicates=%d paid_skipped=%d skipped=%d failed=%d',automatic,imported,duplicates,paid_skipped,skipped,failed)
@@ -5784,14 +6079,18 @@ class ReminderApp(tk.Tk):
         window.destroy()
         log_activity('ledger','receipt_history_opened','completed')
 
-    def show_ledger_receipt(self,source_name,report,result,plan):
+    def show_ledger_receipt(self,source_name,report,result,plan,archived_pdfs=None):
         """Show every applied paid change and explain an unchanged import."""
         actual_plan=result.plan or plan
+        if archived_pdfs is None:
+            archived_pdfs=int(getattr(self,'_last_archived_ledger_pdfs',0) or 0)
         win=self._new_toplevel(_('Reskontrakvitto'))
         win.geometry('900x560');win.minsize(650,400)
         form=ttk.Frame(win,padding=18);form.pack(fill='both',expand=True)
         commit=APP_RELEASE_COMMIT[:12] or _('källkörning')
         summary=_('Lista per {date} · {source}\nNya fakturor: {new} · Befintliga: {existing} · Betalmarkerade: {paid} · Uppdaterade betalbelopp: {updated}\nBuild: {commit}',date=report.list_date,source=source_name,new=result.imported,existing=result.existing,paid=result.marked_paid,updated=result.payment_updates,commit=commit)
+        if archived_pdfs:
+            summary+='\n'+_('Arkiverade faktura-PDF:er (ÅÅÅÅ/MM): {archived}',archived=archived_pdfs)
         ttk.Label(form,text=summary,style='Sub.TLabel',justify='left',wraplength=840).pack(anchor='w',pady=(0,12))
         body=ttk.Frame(form);body.pack(fill='both',expand=True)
         receipt_palette=window_palette(self)
@@ -5842,12 +6141,16 @@ class ReminderApp(tk.Tk):
             logger.exception('Customer ledger import failed: file=%s',source_name)
             messagebox.showerror(_('Reskontralistan kunde inte importeras'),_('Reskontralistan kunde inte importeras.\n\n{error}',error=exc),parent=self)
             return None
+        archived_pdfs=archive_ledger_paid_import_pdfs(archive_date=report.list_date)
+        self._last_archived_ledger_pdfs=archived_pdfs
         refresh_json_journal(parent=self)
         logger.info('Customer ledger imported: %s',_ledger_log_json({
             'source':source_name,'list_date':report.list_date,'new':result.imported,
             'existing':result.existing,'marked_paid':result.marked_paid,
             'payment_updates':result.payment_updates,
         }))
+        if archived_pdfs:
+            logger.info('Customer ledger archived %d paid invoice PDF(s) into year/month folders',archived_pdfs)
         previous_filter=getattr(self,'current_filter_key','current')
         self.select_invoice_filter('current')
         log_activity('ledger','active_invoice_list_restored','completed',previous_filter=previous_filter,marked_paid=result.marked_paid)
@@ -5883,6 +6186,10 @@ class ReminderApp(tk.Tk):
     def import_invoice(self):
         path=filedialog.askopenfilename(title=_('Välj faktura-PDF'),filetypes=[('PDF','*.pdf')])
         if not path:return
+        if is_archived_import_pdf(path,IMPORT_DIR):
+            logger.info('Blocked manual import of archived invoice PDF: %s',path)
+            messagebox.showinfo(_('Arkiverad faktura'),_('Den här PDF-filen ligger i en arkivmapp under importmappen och importeras inte på nytt.'),parent=self)
+            return
         try:
             candidates=read_invoice_candidates(path)
         except Exception as e:
@@ -6240,10 +6547,21 @@ class ReminderApp(tk.Tk):
             log_activity('invoice','paid_marking_undo_declined','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],source=source)
             return False
         with connect() as db:
-            db.execute(
-                "UPDATE invoices SET paid=?,paid_before_marking=NULL,paid_marked_at='',paid_marked_source='' WHERE id=?",
-                (previous,r['id']),
-            )
+            restored_source=None
+            raw_pdf_source=str(r['source'] or '').strip()
+            if raw_pdf_source and is_archived_import_pdf(raw_pdf_source,IMPORT_DIR):
+                try:restored_source=restore_archived_import_pdf(raw_pdf_source,IMPORT_DIR)
+                except OSError:logger.exception('Could not restore archived PDF on paid undo: %s',raw_pdf_source)
+            if restored_source is not None:
+                db.execute(
+                    "UPDATE invoices SET paid=?,paid_before_marking=NULL,paid_marked_at='',paid_marked_source='',source=? WHERE id=?",
+                    (previous,str(restored_source),r['id']),
+                )
+            else:
+                db.execute(
+                    "UPDATE invoices SET paid=?,paid_before_marking=NULL,paid_marked_at='',paid_marked_source='' WHERE id=?",
+                    (previous,r['id']),
+                )
         refresh_json_journal(parent=self)
         logger.info('Invoice paid marking undone: id=%s restored_paid=%s source=%s',r['id'],previous,source or 'legacy')
         log_activity('invoice','paid_marking_undone','completed',invoice_id=r['id'],invoice_no=r['invoice_no'],restored_paid=previous,source=source or 'legacy')

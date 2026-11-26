@@ -21,6 +21,8 @@ LABEL_ICONS = {
     "Återställ säkerhetskopia": "restore",
     "Importera JSON-journal": "journal",
     "Importera reskontralista": "ledger",
+    "Exportera reskontra": "ledger",
+    "Exportera…": "csv",
     "Exportera listan till CSV": "csv",
     "Öppna exportmapp": "folder_export",
     "Öppna importmapp": "folder_import",

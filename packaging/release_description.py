@@ -66,9 +66,9 @@ def replace_block(body: str, block: str) -> str:
 DEFAULT_NOTES = """## PayPamin Flow {version}
 
 ### Nyheter i denna version
-- **Svenska helg- och bankdagar för betalningsfrister**: Sista betalningsdag på P1/P2 och e-postutkast flyttas automatiskt fram till nästa svenska bankdag om fristen annars skulle infalla på helg, midsommarafton, julafton, nyårsafton eller röd dag.
-- **Tvåspråkig påminnelse-PDF och e-post på kundnivå**: Välj svenska eller engelska per kund i *Redigera kund* eller direkt i *Skapa P1/P2* så får utländska kunder engelska brev och mejlutkast medan appens eget gränssnitt behåller ditt valda språk.
-- **Skarpare HiDPI-gränssnitt, kolumnsortering/flytt och aktiv fellogg**: Responsiv arbetsyteanpassning, `@4x` HiDPI-ikoner, mörkt ordmärke, sortering (`▲`/`▼`) och omordning av tabellkolumner samt selektiv hantering av aktiva fel.
+- **Spara fakturor som klump-PDF eller enskilda PDF:er i `import/`**: En PDF med flera olika fakturor delas automatiskt upp (1 faktura per sida om inget annat anges som `Sida 1 av 2` / `2/2` / `Fortsättning` eller upprepat fakturanummer), varje faktura sparas som egen PDF i `import/` och totalimporteras direkt utan dialogrutor.
+- **Automatisk års-/månadsarkivering vid betalning via reskontran**: När en faktura markeras som betald via reskontran flyttas dess PDF automatiskt från `import/` till `import/ÅÅÅÅ/MM/` och arkiverade filer importeras aldrig igen.
+- **Exportera reskontra med antal påminnelser och datum**: Exportera kundreskontran till Excel-kompatibel `.csv` eller utskriftsklar liggande A4-`.pdf` inklusive antal påminnelser samt faktura-, förfallo-, P1-, P2-, senaste påminnelse-, betal- och reskontradatum.
 """
 
 

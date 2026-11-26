@@ -4,8 +4,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from import_watcher import ImportFolderMonitor, iter_import_pdfs
+from import_watcher import (
+    ImportFolderMonitor, archive_import_pdf, is_archived_import_pdf,
+    iter_import_pdfs, restore_archived_import_pdf,
+)
 from invoice_parser import InvoiceSection
+from ledger_import import apply_ledger_import, parse_ledger_pages
 from test_database import load_headless_app
 
 
@@ -63,22 +67,39 @@ class ImportFolderMonitorTests(unittest.TestCase):
         monitor = ImportFolderMonitor(self.folder / "missing")
         self.assertEqual(monitor.poll(), [])
 
-    def test_subfolders_inside_import_are_monitored_recursively(self):
-        sub_a = self.folder / "Tadega"
-        sub_b = self.folder / "2026-11" / "Bilrutan"
-        hidden = self.folder / ".hidden"
-        sub_a.mkdir(parents=True)
-        sub_b.mkdir(parents=True)
-        hidden.mkdir(parents=True)
-        pdf_a = sub_a / "faktura-101.pdf"
-        pdf_b = sub_b / "faktura-102.PDF"
-        (hidden / "ignored.pdf").write_bytes(b"hidden")
-        pdf_a.write_bytes(b"pdf-a")
-        pdf_b.write_bytes(b"pdf-b")
-        self.assertEqual(iter_import_pdfs(self.folder), sorted([pdf_a, pdf_b]))
+    def test_archived_year_month_subfolders_are_never_polled_or_listed(self):
+        active_pdf = self.folder / "faktura-aktiv.pdf"
+        archived_dir = self.folder / "2026" / "11"
+        archived_dir.mkdir(parents=True)
+        archived_pdf = archived_dir / "faktura-betald.pdf"
+        active_pdf.write_bytes(b"active")
+        archived_pdf.write_bytes(b"archived")
+
+        self.assertFalse(is_archived_import_pdf(active_pdf, self.folder))
+        self.assertTrue(is_archived_import_pdf(archived_pdf, self.folder))
+        self.assertEqual(iter_import_pdfs(self.folder), [active_pdf])
         self.assertEqual(self.monitor.poll(), [])
-        self.assertEqual(self.monitor.poll(), sorted([pdf_a, pdf_b]))
+        self.assertEqual(self.monitor.poll(), [active_pdf])
         self.assertEqual(self.monitor.poll(), [])
+
+    def test_archive_import_pdf_moves_to_year_month_and_handles_collisions(self):
+        first = self.folder / "faktura.pdf"
+        first.write_bytes(b"pdf-1")
+        moved_first = archive_import_pdf(first, self.folder, archive_date="2026-11-25", invoice_no="5001")
+        self.assertEqual(moved_first, (self.folder / "2026" / "11" / "faktura.pdf").resolve())
+        self.assertFalse(first.exists())
+        self.assertTrue(moved_first.is_file())
+
+        second = self.folder / "faktura.pdf"
+        second.write_bytes(b"pdf-2")
+        moved_second = archive_import_pdf(second, self.folder, archive_date="2026-11-25", invoice_no="5002")
+        self.assertEqual(moved_second, (self.folder / "2026" / "11" / "faktura_5002.pdf").resolve())
+        self.assertEqual(moved_first.read_bytes(), b"pdf-1")
+        self.assertEqual(moved_second.read_bytes(), b"pdf-2")
+
+        restored = restore_archived_import_pdf(moved_second, self.folder)
+        self.assertEqual(restored, (self.folder / "faktura_5002.pdf").resolve())
+        self.assertTrue(restored.is_file())
 
 
 class AutomaticImportUiTests(unittest.TestCase):
@@ -152,21 +173,20 @@ class AutomaticImportUiTests(unittest.TestCase):
         with patch.object(self.app, "setting", return_value="1"):
             self.app.ReminderApp._run_scheduled_import_scan(fake)
 
-    def test_automatic_scan_imports_complete_subfolder_invoices_without_dialogs(self):
+    def test_automatic_scan_imports_from_import_folder_and_ledger_paid_archives_into_year_month(self):
         self.app.DB_PATH = Path(self.temporary.name) / "auto-import.sqlite3"
         self.app.JOURNAL_PATH = Path(self.temporary.name) / "journal.json"
         import_dir = Path(self.temporary.name) / "import"
-        nested = import_dir / "Kunder" / "2026"
-        nested.mkdir(parents=True)
+        import_dir.mkdir(parents=True, exist_ok=True)
         self.app.IMPORT_DIR = import_dir
         self.app.init_db()
 
-        pdf = nested / "faktura-5001.pdf"
+        pdf = import_dir / "faktura-5001.pdf"
         pdf.write_bytes(b"complete invoice pdf bytes")
         text = (
             "Fakturanummer: 5001\n"
-            "Fakturadatum: 2026-11-01\n"
-            "Förfallodatum: 2026-12-01\n"
+            "Fakturadatum: 2026-10-15\n"
+            "Förfallodatum: 2026-11-15\n"
             "Kund: Laxå Glasmästeri AB\n"
             "Avser: Glasbyte\n"
             "ATT BETALA 4 250,00 SEK\n"
@@ -188,17 +208,147 @@ class AutomaticImportUiTests(unittest.TestCase):
             self.app.ReminderApp.scan_import_folder(fake, automatic=True)
 
         info.assert_not_called()
-        self.assertEqual(refreshed, [True])
+        self.assertTrue(pdf.is_file(), "Unpaid invoice PDF must stay directly in import/")
         with self.app.connect() as db:
             row = db.execute("SELECT * FROM invoices WHERE invoice_no='5001'").fetchone()
         self.assertIsNotNone(row)
-        self.assertEqual(row["customer"], "Laxå Glasmästeri AB")
-        self.assertEqual(row["due_date"], "2026-12-01")
-        self.assertEqual(row["amount"], 4250.0)
-        self.assertEqual(row["currency"], "SEK")
-        self.assertEqual(row["template_vendor"], "Tadega AB")
-        self.assertEqual(row["customer_type"], "business")
-        self.assertEqual(row["reviewed"], 1)
+        self.assertEqual(Path(row["source"]), pdf.resolve())
+
+        # Ledger 1 sees invoice 5001 + 5002 as open; PDF stays in import/.
+        ledger_1 = parse_ledger_pages([
+            "Tadega AB\nKundreskontralista\nPer datum 2026-11-18\n"
+            "100 Laxå Glasmästeri AB\n"
+            "5001 2026-10-15 2026-11-15 SEK 4 250,00 4 250,00\n"
+            "5002 2026-10-20 2026-11-20 SEK 1 000,00 1 000,00\n"
+            "Antal fakturor 2\nTotalsumma i SEK 5 250,00\n1/1\n"
+        ])
+        apply_ledger_import(self.app.DB_PATH, ledger_1)
+        self.assertEqual(self.app.archive_ledger_paid_import_pdfs(archive_date=ledger_1.list_date), 0)
+        self.assertTrue(pdf.is_file())
+
+        # Ledger 2 (2026-11-25): 5001 is gone (paid!) -> archived into import/2026/11/.
+        ledger_2 = parse_ledger_pages([
+            "Tadega AB\nKundreskontralista\nPer datum 2026-11-25\n"
+            "100 Laxå Glasmästeri AB\n"
+            "5002 2026-10-20 2026-11-20 SEK 1 000,00 1 000,00\n"
+            "Antal fakturor 1\nTotalsumma i SEK 1 000,00\n1/1\n"
+        ])
+        apply_ledger_import(self.app.DB_PATH, ledger_2)
+        archived_count = self.app.archive_ledger_paid_import_pdfs(archive_date=ledger_2.list_date)
+        self.assertEqual(archived_count, 1)
+
+        expected_archive = (import_dir / "2026" / "11" / "faktura-5001.pdf").resolve()
+        self.assertFalse(pdf.exists())
+        self.assertTrue(expected_archive.is_file())
+        with self.app.connect() as db:
+            settled = db.execute("SELECT * FROM invoices WHERE invoice_no='5001'").fetchone()
+        self.assertEqual(Path(settled["source"]), expected_archive)
+
+        # Even if the database is completely wiped, archived PDFs are NEVER imported!
+        with self.app.connect() as db:
+            db.execute("DELETE FROM invoices")
+        with (
+            patch.object(self.app, "extract_invoice_sections", side_effect=AssertionError("Archived PDF must never be read")),
+            patch.object(self.app.messagebox, "showinfo", create=True),
+            patch.object(self.app, "show_due_reminder_dialog"),
+        ):
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True)
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True, paths=[expected_archive])
+        with (
+            patch.object(self.app.filedialog, "askopenfilename", create=True, return_value=str(expected_archive)),
+            patch.object(self.app.messagebox, "showinfo", create=True) as blocked_info,
+        ):
+            self.app.ReminderApp.import_invoice(fake)
+        blocked_info.assert_called_once()
+        with self.app.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM invoices").fetchone()[0], 0)
+
+    def test_batch_pdf_in_import_folder_auto_splits_imports_and_archives_per_invoice(self):
+        import fitz
+
+        self.app.DB_PATH = Path(self.temporary.name) / "batch-import.sqlite3"
+        self.app.JOURNAL_PATH = Path(self.temporary.name) / "journal-batch.json"
+        import_dir = Path(self.temporary.name) / "import"
+        import_dir.mkdir(parents=True, exist_ok=True)
+        self.app.IMPORT_DIR = import_dir
+        self.app.init_db()
+
+        batch_pdf = import_dir / "klump-november.pdf"
+        pages = [
+            "Sida 1 av 1\nFakturanummer: 6001\nFakturadatum: 2026-10-10\nFörfallodatum: 2026-11-10\nKund: Nordic Glas AB\nATT BETALA 1 200,00 SEK",
+            "Sida 1 av 2\nFakturanummer: 6002\nFakturadatum: 2026-10-12\nFörfallodatum: 2026-11-12\nKund: Svensk Åkeri AB\nDelpost 1",
+            "Sida 2 av 2\nDelpost 2\nATT BETALA 3 400,00 SEK",
+            "Fakturanummer: 6003\nFakturadatum: 2026-10-14\nFörfallodatum: 2026-11-14\nKund: Mälardalen Bygg AB\nATT BETALA 2 100,00 SEK",
+        ]
+        doc = fitz.open()
+        for page_text in pages:
+            page = doc.new_page(width=595, height=842)
+            page.insert_text((48, 64), page_text, fontname="helv", fontsize=11)
+        doc.save(str(batch_pdf))
+        doc.close()
+
+        monitor = ImportFolderMonitor(import_dir)
+        fake = SimpleNamespace(
+            _import_scan_running=False,
+            _import_monitor=monitor,
+            guess_supplier=lambda *args, **kwargs: "Tadega AB",
+            apply_saved_zones=lambda path, vendor, guess, page_indexes=None: guess,
+            preview_invoice=lambda *args, **kwargs: self.fail("Complete batch auto-import must not open preview"),
+            add_invoice=lambda **kwargs: self.fail("Complete batch auto-import must not open form"),
+            refresh=lambda: None,
+        )
+        with (
+            patch.object(self.app.messagebox, "showinfo", create=True) as info,
+            patch.object(self.app, "show_due_reminder_dialog"),
+        ):
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True)
+
+        info.assert_not_called()
+        self.assertFalse(batch_pdf.exists(), "Original batch PDF wrapper should be replaced by per-invoice PDFs")
+        split_6001 = import_dir / "faktura_6001.pdf"
+        split_6002 = import_dir / "faktura_6002.pdf"
+        split_6003 = import_dir / "faktura_6003.pdf"
+        for split_file, expected_pages in ((split_6001, 1), (split_6002, 2), (split_6003, 1)):
+            self.assertTrue(split_file.is_file())
+            with fitz.open(split_file) as check_doc:
+                self.assertEqual(check_doc.page_count, expected_pages)
+
+        # Monitor already marked the split files as handled, so next polls return empty.
+        self.assertEqual(monitor.poll(), [])
+        self.assertEqual(monitor.poll(), [])
+
+        with self.app.connect() as db:
+            rows = {r["invoice_no"]: r for r in db.execute("SELECT * FROM invoices").fetchall()}
+        self.assertEqual(set(rows), {"6001", "6002", "6003"})
+        self.assertEqual(rows["6002"]["amount"], 3400.0)
+
+        # Settle ONLY 6002 via the ledger -> ONLY faktura_6002.pdf moves to import/2026/11/!
+        ledger_open = parse_ledger_pages([
+            "Tadega AB\nKundreskontralista\nPer datum 2026-11-18\n"
+            "100 Nordic Glas AB\n"
+            "6001 2026-10-10 2026-11-10 SEK 1 200,00 1 200,00\n"
+            "200 Svensk Åkeri AB\n"
+            "6002 2026-10-12 2026-11-12 SEK 3 400,00 3 400,00\n"
+            "300 Mälardalen Bygg AB\n"
+            "6003 2026-10-14 2026-11-14 SEK 2 100,00 2 100,00\n"
+            "Antal fakturor 3\nTotalsumma i SEK 6 700,00\n1/1\n"
+        ])
+        apply_ledger_import(self.app.DB_PATH, ledger_open)
+        ledger_after = parse_ledger_pages([
+            "Tadega AB\nKundreskontralista\nPer datum 2026-11-25\n"
+            "100 Nordic Glas AB\n"
+            "6001 2026-10-10 2026-11-10 SEK 1 200,00 1 200,00\n"
+            "300 Mälardalen Bygg AB\n"
+            "6003 2026-10-14 2026-11-14 SEK 2 100,00 2 100,00\n"
+            "Antal fakturor 2\nTotalsumma i SEK 3 300,00\n1/1\n"
+        ])
+        apply_ledger_import(self.app.DB_PATH, ledger_after)
+        self.assertEqual(self.app.archive_ledger_paid_import_pdfs(archive_date="2026-11-25"), 1)
+
+        self.assertTrue(split_6001.is_file())
+        self.assertFalse(split_6002.exists())
+        self.assertTrue((import_dir / "2026" / "11" / "faktura_6002.pdf").is_file())
+        self.assertTrue(split_6003.is_file())
 
 
 if __name__ == "__main__":

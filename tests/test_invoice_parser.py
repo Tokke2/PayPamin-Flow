@@ -187,6 +187,16 @@ class MultiInvoicePdfTests(unittest.TestCase):
         ])
         self.assertEqual([section.page_indexes for section in sections], [(0, 1), (2,)])
 
+    def test_defaults_to_one_invoice_per_page_unless_multipage_is_stated(self):
+        sections = split_invoice_pages([
+            "Kund: Alfa AB\nATT BETALA 100,00 SEK",
+            "Kund: Beta AB\nATT BETALA 200,00 SEK",
+            "Sida 1(2)\nFakturanummer 8501\nKund: Gamma AB\nDelrad 1",
+            "2(2)\nSlutrad\nATT BETALA 300,00 SEK",
+            "1/1\nKund: Delta AB\nATT BETALA 400,00 SEK",
+        ])
+        self.assertEqual([section.page_indexes for section in sections], [(0,), (1,), (2, 3), (4,)])
+
     def test_pdf_extraction_keeps_page_boundaries_and_closes_document(self):
         page_texts = [
             "Fakturanummer 8301\nATT BETALA 700,00 SEK",
