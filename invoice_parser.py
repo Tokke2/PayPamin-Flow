@@ -372,14 +372,27 @@ def detect_invoice_currency(text,payable_labels=()):
 
 NOTE_PRIMARY_LABEL_PATTERN = re.compile(r'^\s*(?:fakturatext|avser)\b\s*[:#-]?\s*(.*)$', re.I)
 NOTE_GENERIC_LABEL_PATTERN = re.compile(r'^\s*(?:specifikation|description|service)\b\s*[:#-]?\s*(.*)$', re.I)
-NOTE_TABLE_HEADER_PATTERN = re.compile(r'\b(?:benämning|beskrivning|artikelbeskrivning|vara/tjänst|description)\b', re.I)
+NOTE_TABLE_HEADER_PATTERN = re.compile(
+    r'\b(?:benämning|beskrivning|artikelbeskrivning|artiklar/tjänster|vara/tjänst|utfört\s+arbete|description)\b',
+    re.I,
+)
+NOTE_BARE_COLUMN_HEADER_PATTERN = re.compile(
+    r'^(?:(?:art\.?\s*nr|artikelnr|artikelnummer|artikel|benämning|beskrivning|'
+    r'artikelbeskrivning|specifikation|levererat\s+antal|levererat|antal|enhet|'
+    r'à[- ]?pris|a[- ]?pris|pris|rabatt|moms|summa|totalt|belopp|radbelopp|'
+    r'qty|quantity|unit(?:\s+price)?|price|discount|vat|total|amount|%|kr|sek|eur|usd)\s*)+$',
+    re.I,
+)
 NOTE_STOP_PATTERN = re.compile(
     r'\b(?:summa|exkl\.?\s*moms|moms|att\s*betala|total\s*due|amount\s*due|'
     r'grand\s*total|totalt|totalbelopp|vat|subtotal|netto|net|öresavrundning|betalningsvillkor|'
-    r'bankgiro|plusgiro|iban|förfallodatum|due\s*date|payment\s*terms|fakturaadress)\b', re.I
+    r'bankgiro|plusgiro|iban|förfallodatum|due\s*date|payment\s*terms|fakturaadress|'
+    r'varan\s+f[öo]rblir\s+v[åa]r\s+egendom|eventuella\s+anm[äa]rkningar|dr[öo]jsm[åa]lsr[äa]nta|'
+    r'godk[äa]nd\s+f[öo]r\s+f-?skatt|innehar\s+f-?skatt|organisationsnummer|org\.?\s*nr|momsreg)\b',
+    re.I,
 )
 NOTE_NUMBER_ONLY_PATTERN = re.compile(
-    r'^[\d\s.,:;+%()/\\-]+(?:\s*(?:kr|sek|eur|usd|gbp|nok|dkk|jpy|chf|pln|czk|huf))?$', re.I
+    r'^[\d\s.,:;+%()/\\-]+(?:\s*(?:kr|sek|eur|usd|gbp|nok|dkk|jpy|chf|pln|czk|huf|st|stk|tim|timmar|pcs))?$', re.I
 )
 
 
@@ -391,7 +404,7 @@ def _clean_note_line(line):
     ).strip()
     if not line or NOTE_NUMBER_ONLY_PATTERN.fullmatch(line) or NOTE_TABLE_HEADER_PATTERN.fullmatch(line):
         return ''
-    if re.match(r'^(?:artikel|antal|enhet|à[- ]?pris|pris|summa)\b', line, re.I):
+    if re.match(r'^(?:artikel(?:nr|nummer)?|art\.?\s*nr|levererat\s+antal|antal|enhet|à[- ]?pris|a[- ]?pris|pris|rabatt|summa)\b', line, re.I):
         return ''
 
     # In a table row, retain the wording before the first decimal/currency amount.
@@ -423,9 +436,14 @@ def clean_invoice_note(text, max_lines=8):
     """Clean an invoice-text zone without inventing or completing missing text."""
     parts = []
     for raw_line in str(text or '').splitlines():
-        if NOTE_STOP_PATTERN.search(raw_line):
+        stripped = re.sub(r'\s+', ' ', str(raw_line or '')).strip()
+        if not stripped:
+            continue
+        if not parts and not re.search(r'\d', stripped) and NOTE_BARE_COLUMN_HEADER_PATTERN.fullmatch(stripped):
+            continue
+        if NOTE_STOP_PATTERN.search(stripped):
             break
-        line = _clean_note_line(raw_line)
+        line = _clean_note_line(stripped)
         if not line:
             continue
         parts.append(line)
@@ -439,20 +457,20 @@ def _description_from_lines(lines):
     for index, line in enumerate(lines):
         match = NOTE_PRIMARY_LABEL_PATTERN.match(line)
         if match:
-            note = clean_invoice_note('\n'.join([match.group(1)] + lines[index + 1:index + 7]))
+            note = clean_invoice_note('\n'.join([match.group(1)] + lines[index + 1:index + 10]))
             if note:
                 return note
 
     for index, line in enumerate(lines):
         if NOTE_TABLE_HEADER_PATTERN.search(line):
-            note = clean_invoice_note('\n'.join(lines[index + 1:index + 9]))
+            note = clean_invoice_note('\n'.join(lines[index + 1:index + 24]))
             if note:
                 return note
 
     for index, line in enumerate(lines):
         match = NOTE_GENERIC_LABEL_PATTERN.match(line)
         if match:
-            note = clean_invoice_note('\n'.join([match.group(1)] + lines[index + 1:index + 7]))
+            note = clean_invoice_note('\n'.join([match.group(1)] + lines[index + 1:index + 12]))
             if note:
                 return note
     return ''

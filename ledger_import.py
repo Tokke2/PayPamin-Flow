@@ -256,6 +256,18 @@ def read_ledger_report(path) -> LedgerReport:
     return parse_ledger_pages(_read_pdf(path))
 
 
+_LEDGER_BUSINESS_NAME_RE = re.compile(
+    r"(?i)(?:\b(?:ab|aktiebolag|hb|handelsbolag|kb|kommanditbolag|ek\.\s*för\.?|"
+    r"ekonomisk\s+förening|asa|as|oy|oyj|a/s|ltd\.?|limited|gmbh|inc\.?|corp\.?|"
+    r"llc|plc|b\.v\.|s\.a\.|kommun|region|myndighet|stiftelse|förening|"
+    r"försäkring(?:ar|sbolag)?|glasskador|filial|bank)\b)"
+)
+
+
+def _infer_ledger_customer_type(customer: str) -> str:
+    return "business" if _LEDGER_BUSINESS_NAME_RE.search(str(customer or "")) else "private"
+
+
 def ensure_ledger_schema(db: sqlite3.Connection) -> None:
     """Add persistent first/last-seen markers without altering reminder data."""
     columns = {row[1] for row in db.execute("PRAGMA table_info(invoices)").fetchall()}
@@ -391,6 +403,7 @@ def apply_ledger_import(database_path, report: LedgerReport) -> LedgerResult:
             rows = db.execute("SELECT * FROM invoices").fetchall()
             by_number = {_normalise_invoice_number(row["invoice_no"]): row for row in rows}
             created = datetime.now().isoformat(timespec="seconds")
+            has_ctype = "customer_type" in {r[1] for r in db.execute("PRAGMA table_info(invoices)").fetchall()}
             for entry in report.entries:
                 key = _normalise_invoice_number(entry.invoice_no)
                 existing = by_number.get(key)
@@ -401,17 +414,31 @@ def apply_ledger_import(database_path, report: LedgerReport) -> LedgerResult:
                         (first_seen, report.list_date, existing["id"]),
                     )
                     continue
-                db.execute(
-                    """INSERT INTO invoices(
-                    customer,invoice_no,invoice_date,due_date,template_vendor,amount,currency,paid,
-                    email,source,source_hash,note,reviewed,ledger_first_seen,ledger_last_seen,created
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        entry.customer, entry.invoice_no, entry.invoice_date, entry.due_date, "",
-                        entry.amount, entry.currency, entry.paid, "", "", "", entry.note, 1,
-                        report.list_date, report.list_date, created,
-                    ),
-                )
+                if has_ctype:
+                    db.execute(
+                        """INSERT INTO invoices(
+                        customer,invoice_no,invoice_date,due_date,template_vendor,amount,currency,paid,
+                        email,source,source_hash,note,reviewed,customer_type,ledger_first_seen,ledger_last_seen,created
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            entry.customer, entry.invoice_no, entry.invoice_date, entry.due_date, "",
+                            entry.amount, entry.currency, entry.paid, "", "", "", entry.note, 1,
+                            _infer_ledger_customer_type(entry.customer),
+                            report.list_date, report.list_date, created,
+                        ),
+                    )
+                else:
+                    db.execute(
+                        """INSERT INTO invoices(
+                        customer,invoice_no,invoice_date,due_date,template_vendor,amount,currency,paid,
+                        email,source,source_hash,note,reviewed,ledger_first_seen,ledger_last_seen,created
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            entry.customer, entry.invoice_no, entry.invoice_date, entry.due_date, "",
+                            entry.amount, entry.currency, entry.paid, "", "", "", entry.note, 1,
+                            report.list_date, report.list_date, created,
+                        ),
+                    )
             for update in plan.payment_updates:
                 if update.fully_paid:
                     db.execute(

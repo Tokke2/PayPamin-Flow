@@ -393,6 +393,40 @@ class MultiInvoicePdfTests(unittest.TestCase):
         self.assertEqual(parsed["payment_terms"], "20 dagar netto")
         self.assertEqual(parsed["due_date"], "2026-11-25")
 
+    def test_fortnox_stacked_column_headers_preserve_invoice_text(self):
+        fortnox_text = (
+            "Tadega AB\n"
+            "Faktura 6480\n"
+            "Kund:\n"
+            "Svenssons Åkeri AB\n"
+            "Storgatan 8\n"
+            "702 10 Örebro\n"
+            "Fakturadatum: 2026-11-10\n"
+            "Betalningsvillkor: 10 dagar netto\n"
+            "Artikelnr\n"
+            "Benämning\n"
+            "Levererat antal\n"
+            "À-pris\n"
+            "Enhet\n"
+            "Moms\n"
+            "Totalt\n"
+            "Byte av vindruta reg.nr ABC 123\n"
+            "1 st\n"
+            "1 951,20\n"
+            "25%\n"
+            "2 439,00\n"
+            "Kalibrering kamera\n"
+            "Summa exkl. moms 1 951,20\n"
+            "Moms 25% 487,80\n"
+            "Att betala 2 439,00 SEK\n"
+            "Varan förblir vår egendom tills full betalning erlagts.\n"
+        )
+        parsed = parse_invoice_text(fortnox_text)
+        self.assertEqual(parsed["customer"], "Svenssons Åkeri AB")
+        self.assertEqual(parsed["payment_terms"], "10 dagar netto")
+        self.assertEqual(parsed["due_date"], "2026-11-20")
+        self.assertEqual(parsed["note"], "Byte av vindruta reg.nr ABC 123 Kalibrering kamera")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1306,6 +1306,107 @@ def try_auto_save_imported_invoice(guess,source,source_hash):
     return True
 
 
+def enrich_ledger_invoice_from_pdf(row,guess,source,source_hash):
+    """Enrich an existing ledger-imported invoice from its original invoice PDF.
+
+    Updates customer name (correcting wrong/generic ledger customer names),
+    customer_type, payment_terms, invoice text (note), invoice_date, supplier
+    template, and linked PDF source/hash while preserving ledger amounts,
+    payments, and P1/P2 reminder history.
+    """
+    if row is None or not isinstance(guess,dict):
+        return False
+    existing=dict(row)
+    old_customer=str(existing.get('customer') or '').strip()
+    pdf_customer=str(guess.get('customer') or '').strip()
+    new_customer=pdf_customer or old_customer
+    customer_changed=bool(pdf_customer and pdf_customer.casefold()!=old_customer.casefold())
+
+    inv_date_raw=str(guess.get('invoice_date') or '').strip()
+    pdf_inv_date=normalize_date(inv_date_raw) or (inv_date_raw if dparse(inv_date_raw) else '')
+    new_inv_date=pdf_inv_date or str(existing.get('invoice_date') or '').strip()
+
+    pdf_terms=str(guess.get('payment_terms') or '').strip()[:80]
+    new_terms=pdf_terms or str(existing.get('payment_terms') or '').strip()[:80]
+
+    new_due=str(existing.get('due_date') or '').strip()
+    if not dparse(new_due):
+        due_raw=normalize_date(str(guess.get('due_date') or '').strip()) or str(guess.get('due_date') or '').strip()
+        if dparse(due_raw):
+            new_due=due_raw
+        elif new_inv_date and new_terms:
+            terms_days=parse_payment_terms_days(new_terms)
+            if terms_days is not None:
+                new_due=(date.fromisoformat(new_inv_date)+timedelta(days=terms_days)).isoformat()
+
+    pdf_note=clean_invoice_note(str(guess.get('note') or ''))
+    new_note=pdf_note or str(existing.get('note') or '').strip()
+
+    pdf_vendor=str(guess.get('template_vendor') or '').strip()
+    new_vendor=pdf_vendor or str(existing.get('template_vendor') or '').strip()
+
+    pdf_email=_sanitize_auto_emails(guess.get('email',''))
+    if customer_changed:
+        contact_probe=apply_saved_customer_contact({
+            'customer':new_customer,
+            'email':pdf_email,
+            'logo_file':guess.get('logo_file'),
+        })
+        new_email=_sanitize_auto_emails(contact_probe.get('email',''))
+        new_logo=contact_probe.get('logo_file') if contact_probe.get('logo_file') is not None else existing.get('logo_file')
+    else:
+        contact_probe=apply_saved_customer_contact({
+            'customer':new_customer,
+            'email':pdf_email or str(existing.get('email') or '').strip(),
+            'logo_file':guess.get('logo_file') if guess.get('logo_file') is not None else existing.get('logo_file'),
+        })
+        new_email=_sanitize_auto_emails(contact_probe.get('email',''))
+        new_logo=contact_probe.get('logo_file')
+
+    if not str(existing.get('p1_date') or '').strip():
+        if customer_changed or normalize_customer_type(existing.get('customer_type'))==CUSTOMER_PRIVATE:
+            new_ctype=infer_imported_customer_type(new_customer)
+        else:
+            new_ctype=normalize_customer_type(existing.get('customer_type'))
+    else:
+        new_ctype=normalize_customer_type(existing.get('customer_type'))
+
+    record=dict(existing)
+    record.update(
+        customer=new_customer,
+        invoice_date=new_inv_date,
+        due_date=new_due,
+        payment_terms=new_terms,
+        template_vendor=new_vendor,
+        email=new_email,
+        source=source or str(existing.get('source') or '').strip(),
+        source_hash=source_hash or str(existing.get('source_hash') or '').strip(),
+        note=new_note,
+        reviewed=1,
+        logo_file=new_logo,
+        customer_type=new_ctype,
+        fee_agreement=normalize_agreement(existing.get('fee_agreement')) or normalize_agreement(setting('fee_agreement')),
+    )
+    duplicate=save_invoice_record(record,existing['id'])
+    if duplicate is not None:
+        return False
+    try:
+        export_reminder_journal(DB_PATH,JOURNAL_PATH)
+    except Exception:
+        logger.exception('JSON journal refresh after ledger invoice PDF enrichment failed')
+    log_activity(
+        'import','ledger_invoice_enriched_from_pdf','completed',
+        invoice_id=existing['id'],invoice_no=existing['invoice_no'],
+        customer=new_customer,customer_changed=customer_changed,
+        has_note=bool(new_note),payment_terms=new_terms,
+    )
+    logger.info(
+        'Enriched ledger invoice from PDF: invoice=%s old_customer=%s new_customer=%s terms=%s has_note=%s file=%s',
+        existing['invoice_no'],old_customer,new_customer,new_terms,bool(new_note),source,
+    )
+    return True
+
+
 def is_ledger_paid_row(row):
     """Return True when ``row`` is fully paid and settled/tracked via the ledger."""
     if not is_fully_paid(row):
@@ -6007,21 +6108,27 @@ class ReminderApp(tk.Tk):
                                                 logger.exception('Could not archive split paid invoice PDF: %s',extracted_paid)
                                 continue
                             if duplicate:
-                                if has_ledger_import_basis(duplicate) and not str(duplicate['source'] or '').strip():
-                                    new_terms=str(row_value(duplicate,'payment_terms','') or '').strip() or str(guess.get('payment_terms') or '').strip()[:80]
-                                    if len(candidates)==1:
-                                        with connect() as db:
-                                            saved_hash=str(duplicate['source_hash'] or '').strip() or candidate_hash
-                                            db.execute('UPDATE invoices SET source=?,source_hash=?,payment_terms=? WHERE id=?',(source,saved_hash,new_terms,duplicate['id']))
-                                        logger.info('Linked import-folder PDF to existing ledger invoice: invoice=%s file=%s',duplicate['invoice_no'],path.name)
-                                    elif split_batch:
+                                saved_dup_hash=str(duplicate['source_hash'] or '').strip()
+                                if has_ledger_import_basis(duplicate) and saved_dup_hash!=candidate_hash:
+                                    guess_fn=getattr(self,'guess_supplier',None)
+                                    zones_fn=getattr(self,'apply_saved_zones',None)
+                                    vendor=guess_fn(section.text,path=str(path) if (len(candidates)==1 or split_batch) else None,page_indexes=section.page_indexes) if callable(guess_fn) else ''
+                                    guess=dict(guess)
+                                    if vendor:guess['template_vendor']=vendor
+                                    if callable(zones_fn):guess=zones_fn(str(path),vendor,guess,page_indexes=section.page_indexes)
+                                    link_source=source
+                                    link_hash=candidate_hash
+                                    if split_batch:
                                         extracted_link=extract_section_pdf_to_import(path,IMPORT_DIR,section.page_indexes,invoice_no=str(duplicate['invoice_no'] or ''))
                                         if extracted_link is not None:
                                             if callable(mark_handled):mark_handled(extracted_link)
-                                            with connect() as db:
-                                                saved_hash=str(duplicate['source_hash'] or '').strip() or file_sha256(extracted_link)
-                                                db.execute('UPDATE invoices SET source=?,source_hash=?,payment_terms=? WHERE id=?',(str(extracted_link),saved_hash,new_terms,duplicate['id']))
-                                            logger.info('Split and linked batch PDF section to existing ledger invoice: invoice=%s file=%s',duplicate['invoice_no'],extracted_link.name)
+                                            link_source=str(extracted_link.resolve())
+                                            link_hash=file_sha256(extracted_link)
+                                        else:
+                                            all_sections_resolved=False
+                                    if enrich_ledger_invoice_from_pdf(duplicate,guess,link_source,link_hash):
+                                        imported+=1
+                                        continue
                                 duplicates+=1
                                 logger.info('Duplicate import blocked: existing_id=%s file=%s pages=%s',duplicate['id'],path.name,','.join(str(index+1) for index in section.page_indexes))
                                 continue
@@ -6034,6 +6141,19 @@ class ReminderApp(tk.Tk):
                                     paid_skipped+=1
                                     continue
                                 if post_zone_dup:
+                                    if has_ledger_import_basis(post_zone_dup) and str(post_zone_dup['source_hash'] or '').strip()!=candidate_hash:
+                                        extracted_link=extract_section_pdf_to_import(path,IMPORT_DIR,section.page_indexes,invoice_no=str(post_zone_dup['invoice_no'] or ''))
+                                        link_source=source
+                                        link_hash=candidate_hash
+                                        if extracted_link is not None:
+                                            if callable(mark_handled):mark_handled(extracted_link)
+                                            link_source=str(extracted_link.resolve())
+                                            link_hash=file_sha256(extracted_link)
+                                        else:
+                                            all_sections_resolved=False
+                                        if enrich_ledger_invoice_from_pdf(post_zone_dup,guess,link_source,link_hash):
+                                            imported+=1
+                                            continue
                                     duplicates+=1
                                     continue
                             preview_path=str(path)
@@ -6241,6 +6361,38 @@ class ReminderApp(tk.Tk):
                         return
                     continue
                 if duplicate:
+                    saved_dup_hash=str(duplicate['source_hash'] or '').strip()
+                    if has_ledger_import_basis(duplicate) and saved_dup_hash!=candidate_hash:
+                        guess_fn=getattr(self,'guess_supplier',None)
+                        zones_fn=getattr(self,'apply_saved_zones',None)
+                        vendor=str(duplicate['template_vendor'] or '').strip()
+                        if not vendor and callable(guess_fn):
+                            vendor=guess_fn(section.text,path=path if len(candidates)==1 else None,page_indexes=section.page_indexes)
+                        guess=dict(guess)
+                        if vendor:guess['template_vendor']=vendor
+                        if callable(zones_fn):guess=zones_fn(path,vendor,guess,page_indexes=section.page_indexes)
+                        resolved_source=str(Path(path).resolve())
+                        if multiple:
+                            if enrich_ledger_invoice_from_pdf(duplicate,guess,resolved_source,candidate_hash):
+                                imported+=1
+                                continue
+                        else:
+                            guess=self.preview_invoice(path,guess,vendor,page_indexes=section.page_indexes)
+                            if normalize_invoice_number(guess.get('invoice_no'))==normalize_invoice_number(duplicate['invoice_no']):
+                                saved_enrich=self.invoice_dialog(
+                                    'Komplettera faktura från original-PDF',
+                                    row=duplicate,source=resolved_source,guess=guess,
+                                    source_hash=candidate_hash,enrich_original=True,
+                                )
+                                if saved_enrich:
+                                    self.refresh()
+                            else:
+                                messagebox.showerror(
+                                    _('Originalfakturan matchar inte'),
+                                    _('Fakturanumret i originalfakturan måste vara {invoice_no} innan informationen kan sparas.',invoice_no=duplicate['invoice_no']),
+                                    parent=self,
+                                )
+                            return
                     duplicates+=1
                     logger.info('Duplicate import blocked: existing_id=%s pages=%s',duplicate['id'],section.page_indexes)
                     if not multiple:
@@ -6267,14 +6419,10 @@ class ReminderApp(tk.Tk):
             messagebox.showinfo(_('Skanning klar'),_('Importerade: {imported}\nDubbletter som inte importerades: {duplicates}\nBetalda som hoppades över: {paid}\nAvbrutna: {skipped}\nFel: {failed}',imported=imported,duplicates=duplicates,paid=paid_skipped,skipped=skipped,failed=failed),parent=self)
 
     def import_original_invoice(self):
-        """Enrich one ledger-imported row from its reviewed original invoice PDF."""
+        """Enrich one existing invoice row from its reviewed original invoice PDF."""
 
         row=self.selected()
         if row is None:return None
-        if not has_ledger_import_basis(row):
-            logger.warning('Original invoice enrichment requires a ledger-imported row: invoice=%s',row['id'])
-            messagebox.showinfo(_('Inte en reskontrafaktura'),_('Välj en faktura som har importerats från kundreskontran.'),parent=self)
-            return None
         path=filedialog.askopenfilename(title=_('Välj originalfaktura-PDF'),filetypes=[('PDF','*.pdf')])
         if not path:return None
         try:
@@ -6395,7 +6543,17 @@ class ReminderApp(tk.Tk):
             ttk.Label(form,text=_(lab)).grid(row=i,column=0,sticky='w',pady=5,padx=(0,12));e=ttk.Entry(form,width=43);e.grid(row=i,column=1,pady=5);e.insert(0,str(vals.get(k,'') or ''));entries[k]=e
             if enrich_original and k in ORIGINAL_INVOICE_PROTECTED_FIELDS:e.configure(state='readonly')
         type_row=len(fields)
-        saved_type=invoice_customer_type(row) if row is not None else CUSTOMER_PRIVATE
+        if row is None:
+            saved_type=infer_imported_customer_type(vals.get('customer',''))
+        elif enrich_original and not str(row_value(row,'p1_date','') or '').strip():
+            old_cust=str(row_value(row,'customer','') or '').strip()
+            new_cust=str(vals.get('customer','') or '').strip()
+            if new_cust and (new_cust.casefold()!=old_cust.casefold() or invoice_customer_type(row)==CUSTOMER_PRIVATE):
+                saved_type=infer_imported_customer_type(new_cust)
+            else:
+                saved_type=invoice_customer_type(row)
+        else:
+            saved_type=invoice_customer_type(row)
         saved_agreement=normalize_agreement(
             row_value(row,'fee_agreement','') if row is not None else ''
         ) or normalize_agreement(setting('fee_agreement'))

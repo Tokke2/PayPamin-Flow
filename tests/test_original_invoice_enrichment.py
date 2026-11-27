@@ -190,6 +190,113 @@ class OriginalInvoiceEnrichmentTests(unittest.TestCase):
         self.assertEqual(merged["logo_file"], "supplier.svg")
         self.assertEqual(self.history(merged), self.history(row))
 
+    def test_import_folder_pdf_corrects_wrong_ledger_customer_and_adds_terms_and_invoice_text(self):
+        import fitz
+        from ledger_import import apply_ledger_import, parse_ledger_pages
+
+        ledger = parse_ledger_pages([
+            "Tadega AB\nKundreskontralista\nPer datum 2026-11-27\n"
+            "105 Andreas Andersson\n"
+            "6480 2026-11-10 2026-11-20 B 671 SEK 2 439,00 2 439,00\n"
+            "Antal fakturor 1\nTotalsumma i SEK 2 439,00\n1/1\n"
+        ])
+        apply_ledger_import(self.app.DB_PATH, ledger)
+
+        import_dir = self.workspace / "import"
+        import_dir.mkdir(exist_ok=True)
+        self.app.IMPORT_DIR = import_dir
+        pdf_path = import_dir / "faktura_6480.pdf"
+        doc = fitz.open()
+        try:
+            page = doc.new_page(width=595, height=842)
+            page.insert_text((40, 60), "Tadega AB")
+            page.insert_text((40, 90), "Fakturanummer: 6480")
+            page.insert_text((40, 110), "Fakturadatum: 2026-11-10")
+            page.insert_text((40, 130), "Förfallodatum: 2026-11-20")
+            page.insert_text((40, 150), "Betalningsvillkor: 10 dagar netto")
+            page.insert_text((320, 110), "Fakturaadress:")
+            page.insert_text((320, 130), "Svenssons Åkeri AB")
+            page.insert_text((320, 148), "Industrivägen 9")
+            page.insert_text((320, 166), "702 10 Örebro")
+            page.insert_text((40, 240), "Benämning")
+            page.insert_text((40, 258), "Moms")
+            page.insert_text((40, 276), "Totalt")
+            page.insert_text((40, 296), "Byte av vindruta reg.nr ABC 123")
+            page.insert_text((40, 420), "Att betala 2 439,00 SEK")
+            pdf_path.write_bytes(doc.tobytes())
+        finally:
+            doc.close()
+
+        fake = SimpleNamespace(
+            _import_scan_running=False,
+            refresh=Mock(),
+            guess_supplier=Mock(return_value="Tadega AB"),
+            apply_saved_zones=Mock(side_effect=lambda _p, _v, g, page_indexes=None: g),
+        )
+        with patch.object(self.app, "show_due_reminder_dialog"):
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True, paths=[pdf_path])
+
+        with self.app.connect() as db:
+            updated = db.execute("SELECT * FROM invoices WHERE invoice_no='6480'").fetchone()
+        self.assertEqual(updated["customer"], "Svenssons Åkeri AB")
+        self.assertEqual(updated["customer_type"], "business")
+        self.assertEqual(updated["payment_terms"], "10 dagar netto")
+        self.assertEqual(updated["note"], "Byte av vindruta reg.nr ABC 123")
+        self.assertEqual(updated["amount"], 2439.0)
+
+    def test_add_invoice_pdf_button_enriches_ledger_row_instead_of_duplicate_warning(self):
+        from ledger_import import apply_ledger_import, parse_ledger_pages
+
+        ledger = parse_ledger_pages([
+            "Tadega AB\nKundreskontralista\nPer datum 2026-11-27\n"
+            "105 Andreas Andersson\n"
+            "6479 2026-11-12 2026-11-22 B 672 SEK 15 875,00 15 875,00\n"
+            "Antal fakturor 1\nTotalsumma i SEK 15 875,00\n1/1\n"
+        ])
+        apply_ledger_import(self.app.DB_PATH, ledger)
+
+        def save_dialog(title, **kwargs):
+            self.assertEqual(title, "Komplettera faktura från original-PDF")
+            self.assertTrue(kwargs["enrich_original"])
+            merged = self.app.merge_original_invoice_values(kwargs["row"], kwargs["guess"])
+            merged.update(source=kwargs["source"], source_hash=kwargs["source_hash"], reviewed=1)
+            self.assertIsNone(self.app.save_invoice_record(merged, kwargs["row"]["id"]))
+            return True
+
+        fake = SimpleNamespace(
+            guess_supplier=Mock(return_value="Tadega AB"),
+            apply_saved_zones=Mock(side_effect=lambda _p, _v, g, page_indexes=None: g),
+            preview_invoice=Mock(side_effect=lambda _p, g, _v, page_indexes=None: g),
+            invoice_dialog=Mock(side_effect=save_dialog),
+            refresh=Mock(),
+        )
+        candidate = (
+            SimpleNamespace(text="Faktura 6479", page_indexes=(0,)),
+            {
+                "invoice_no": "6479",
+                "customer": "Kista Transport AB",
+                "invoice_date": "2026-11-12",
+                "due_date": "2026-11-22",
+                "payment_terms": "10 dagar netto",
+                "amount": 15875.0,
+                "currency": "SEK",
+                "note": "Specialglas limousin",
+            },
+            "hash-6479",
+        )
+        with (
+            patch.object(self.app.filedialog, "askopenfilename", create=True, return_value=str(self.original)),
+            patch.object(self.app, "read_invoice_candidates", return_value=[candidate]),
+            patch.object(self.app.messagebox, "showwarning", create=True) as dup_warn,
+        ):
+            self.app.ReminderApp.import_invoice(fake)
+        dup_warn.assert_not_called()
+        with self.app.connect() as db:
+            saved = db.execute("SELECT * FROM invoices WHERE invoice_no='6479'").fetchone()
+        self.assertEqual(saved["customer"], "Kista Transport AB")
+        self.assertEqual(saved["payment_terms"], "10 dagar netto")
+        self.assertEqual(saved["note"], "Specialglas limousin")
+
 
 if __name__ == "__main__":
     unittest.main()
