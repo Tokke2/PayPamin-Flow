@@ -377,7 +377,7 @@ _ENGLISH = {
     "Uppdateringen kunde inte installeras": "The update could not be installed",
     "{error}\n\nDu kan ladda ner uppdateringen manuellt:\n{url}": "{error}\n\nYou can download the update manually:\n{url}",
     "Ett oväntat fel uppstod vid installationen.": "An unexpected error occurred during installation.",
-    "Sök efter och installera uppdateringar automatiskt två gånger per dygn": "Check for and install updates automatically twice a day",
+    "Sök efter och installera uppdateringar automatiskt kl. 00:00 varje dag": "Check for and install updates automatically at 00:00 every day",
     "Automatiska uppdateringar stöds inte på det här operativsystemet.": "Automatic updates are not supported on this operating system.",
     "Kunde inte hitta den installerade macOS-appen.": "Could not find the installed macOS app.",
     "Uppdateringspaketet har en osäker nedladdningsadress.": "The update package has an unsafe download URL.",

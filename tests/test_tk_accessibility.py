@@ -98,6 +98,13 @@ class RealTkAccessibilityTests(unittest.TestCase):
         self._dialogs.append(dialog)
         return dialog
 
+    def test_raw_ppm_preview_is_accepted_by_native_tk_without_base64(self):
+        pixels = b"P6\n2 1\n255\n" + bytes((255, 0, 0, 0, 255, 0))
+        photo = tk.PhotoImage(master=self.root, data=pixels, format="PPM")
+        self.assertEqual((photo.width(), photo.height()), (2, 1))
+        self.assertEqual(photo.get(0, 0), (255, 0, 0))
+        self.assertEqual(photo.get(1, 0), (0, 255, 0))
+
     def test_real_widgets_follow_visual_tab_order_and_show_focus(self):
         dialog = self.track(tk.Toplevel(self.root))
         frame = ttk.Frame(dialog)

@@ -339,8 +339,8 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertTrue(is_update_available(changed, "0.6.0", "100"))
         self.assertEqual(update_change_kind(changed, "0.6.0"), "files")
 
-    def test_automatic_checks_run_twice_per_day(self):
-        self.assertEqual(UPDATE_CHECK_INTERVAL_MS, 12 * 60 * 60 * 1000)
+    def test_automatic_checks_have_a_daily_interval(self):
+        self.assertEqual(UPDATE_CHECK_INTERVAL_MS, 24 * 60 * 60 * 1000)
 
     def test_missing_release_has_translated_error(self):
         set_language("en")

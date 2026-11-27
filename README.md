@@ -39,7 +39,7 @@ Lokal Python-skrivbordsapp för **Windows, macOS och Linux** som läser Fortnox-
 - **Lokal säkerhetskopiering och återställning** av inställningar, fakturor, påminnelser och logotyper via Arkiv-menyn.
 - **Alltid minimerad start och autostart:** appen startar i systemfältet vid autostart, manuell start, direktstart och uppdateringsomstart – utan undantag och utan inställning. Öppna fönstret via systemfältet eller genom att starta appen igen; en ny start visar och fokuserar då den befintliga instansen. Autostart vid inloggning finns på Windows, macOS och Linux och är aktiverad som standard och kan ändras under **Inställningar**. Inget konsolfönster öppnas någonstans i kedjan.
 - **Svenska och engelska** med direkt språkbyte, sparat språkval och översatta meddelanden, statusar, belopp, datum och påminnelse-PDF:er.
-- **Automatiska Python-uppdateringar mot GitHub Releases** två gånger per dygn, med commit- och filjämförelse, SHA-256-verifiering och tyst omstart. Både nyare versioner och verkligt ändrade release-byggen med samma versionsnummer upptäcks. Manuell sökning och installation finns via den tydliga **Uppdatera appen**-knappen, **Hjälp → Uppdatera appen** eller systemfältets högerklicksmeny.
+- **Automatiska Python-uppdateringar mot GitHub Releases** kl. 00:00 varje dag, med commit- och filjämförelse, SHA-256-verifiering och tyst omstart. Både nyare versioner och verkligt ändrade release-byggen med samma versionsnummer upptäcks. Manuell sökning och installation finns via den tydliga **Uppdatera appen**-knappen, **Hjälp → Uppdatera appen** eller systemfältets högerklicksmeny.
 - PDF sparas lokalt och öppnas i datorns standardprogram. **Öppna exportmapp** i knappraden eller under **Arkiv** öppnar mappen med skapade påminnelser i datorns filhanterare. Den samlade felloggen öppnas via **Visa samlad fellogg** eller **Hjälp → Visa samlad fellogg**.
 - **Automatiskt påminnelsearkiv i kundmappar:** vid appstart och därefter regelbundet flyttas igenkända P1/P2-PDF:er från och med dagen efter sitt ursprungliga påminnelsedatum från `export/` till `export/arkiv/<kund>/`. Kundmappen bestäms från fakturans sparade P1/P2-data, inte genom att gissa ett delat filnamn; en fil utan entydig kundkoppling lämnas kvar och loggas. Även filer i det tidigare platta `export/arkiv/` flyttas till rätt kundmapp när kopplingen finns. Fakturor och påminnelsehistorik ändras inte, arkiverad P1/P2 kan fortfarande öppnas och redigeras och befintliga arkivfiler skrivs aldrig över.
 
@@ -518,6 +518,12 @@ xvfb-run -a -s "-screen 0 1280x900x24" python -m unittest discover -s tests -v
 - **Inget låses upp.** Donationer är helt frivilliga och ger inga fler funktioner. Appen fungerar precis likadant utan, och dialogen säger det.
 
 Numret visas också i klartext (`0721-817 177`) med en **Kopiera nummer**-knapp, för den som hellre swishar manuellt. Ingen betalning sker i appen — den visar bara koden och öppnar dina egna sidor. Val av belopp, kopiering och att dialogen öppnas loggas som vanliga aktiviteter (`donation`), aldrig med betaluppgifter.
+
+## Daglig uppdatering och resurssnål PDF-visning
+
+Automatisk uppdateringskontroll sker **kl. 00:00 i datorns lokala tid** när appen körs och automatiken är aktiverad. Om körningen missades görs en uppsamlingskontroll vid nästa start. Dagens försök sparas så omstarter inte ger upprepade nätverksanrop. En lokal klockkontroll (högst 15 minuters mellanrum) hanterar vila och tidszonsbyte; den hämtar ingen release om dagens kontroll redan har körts. Datorn behöver inte och kommer inte att väckas av appen. Vid nätverksfel loggas felet; manuell kontroll finns kvar.
+
+PDF-granskningen renderar om från original-PDF:en när visningsytan ändras. Snabba storleksändringar samlas till en rendering efter 120 ms; oförändrad sida/upplösning renderas inte igen. En sida begränsas till **12 megapixel och 8192 pixlar per axel** för att begränsa minnesanvändningen. Det är en gräns för rasterbilden, inte en total minnesgaranti för PDF-motorn. Bara den aktuella bilden behålls, och bild/timer frigörs när granskningen stängs. Extremt stora sidor eller zoomnivåer får lägre detaljupplösning när gränsen nås.
 
 ## Begränsningar
 

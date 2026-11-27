@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, time as day_time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -30,7 +31,24 @@ from app_info import (
 from build_info import APP_PACKAGE_FINGERPRINT, APP_RELEASE_COMMIT, APP_RELEASE_ID
 from i18n import _
 
-UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
+UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+# A local-clock watchdog, not a network poll. Re-evaluate after sleep or a time
+# zone change without waiting a full day on a monotonic UI timer.
+UPDATE_CLOCK_WATCHDOG_MS = 15 * 60 * 1000
+
+
+def next_midnight_delay_ms(now=None):
+    """Milliseconds to the next local midnight, including 23/25-hour DST days.
+
+    Naive datetimes use the OS local timezone via timestamp(); aware test inputs
+    retain their zone's daylight-saving rules rather than assuming 24 hours.
+    """
+    now = datetime.now() if now is None else now
+    tomorrow = now.date() + timedelta(days=1)
+    midnight = datetime.combine(tomorrow, day_time.min, tzinfo=now.tzinfo)
+    return max(1, int(round((midnight.timestamp() - now.timestamp()) * 1000)))
+
+
 MAX_MANIFEST_BYTES = 1_000_000
 MAX_CHECKSUM_BYTES = 65_536
 # The tag and commit lookups return a few hundred bytes each.

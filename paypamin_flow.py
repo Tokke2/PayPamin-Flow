@@ -7,7 +7,7 @@ OCR för skannade PDF: se README.
 Copyright © 2026 Rickard Längkvist. Skapare: Rickard Längkvist.
 """
 from __future__ import annotations
-import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, base64, hashlib, tempfile, json, time, platform
+import os, re, sqlite3, sys, webbrowser, subprocess, threading, queue, importlib.util, logging, statistics, hashlib, tempfile, json, time, platform
 from logging.handlers import RotatingFileHandler
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -116,7 +116,8 @@ from update_checker import (
     CONTENT_CURRENT,
     CONTENT_STALE,
     CONTENT_UNAVAILABLE,
-    UPDATE_CHECK_INTERVAL_MS,
+    UPDATE_CLOCK_WATCHDOG_MS,
+    next_midnight_delay_ms,
     UpdateCheckError,
     fetch_latest_release,
     is_update_available,
@@ -149,6 +150,7 @@ from accessibility import (
     FONT_SCALE_CHOICES,
     FONT_SCALE_SETTING,
     SYSTEM_CONTRAST_POLL_INTERVAL_MS,
+    preview_raster_scale,
     ResponsiveGrid,
     ScrollableForm,
     apply_widget_contrast,
@@ -3041,6 +3043,7 @@ class ReminderApp(tk.Tk):
         self.after(100,self.sync_autostart)
         # Startup only recovers missing dependencies; upgrades are user-confirmed.
         self.after(250,self.check_python_addons)
+        # One catch-up check if today's midnight run was missed while closed.
         self.after(2000,self._run_scheduled_update_check)
         self.after(1500,self._run_scheduled_import_scan)
         self.after(2500,self._run_scheduled_error_log_refresh)
@@ -3969,11 +3972,21 @@ class ReminderApp(tk.Tk):
     def _run_scheduled_update_check(self):
         if not ui_is_alive(self):return
         try:
-            if setting('update_auto')=='1':self.check_for_updates(manual=False)
+            today=date.today().isoformat()
+            busy=getattr(self,'_update_check_running',False) or getattr(self,'_update_install_running',False)
+            if setting('update_auto')=='1' and setting('update_last_auto_check_date')!=today and not busy:
+                self.check_for_updates(manual=False)
+                # Persist only a launched check, so repeated starts do not each
+                # hit GitHub and a busy manual install never consumes today's run.
+                set_setting('update_last_auto_check_date',today)
+                logger.info('Daily automatic update check launched: local_date=%s',today)
         except tk.TclError:
             logger.info('Scheduled update check stopped because the window closed')
             return
-        try:self.after(UPDATE_CHECK_INTERVAL_MS,self._run_scheduled_update_check)
+        except Exception:
+            logger.exception('Daily automatic update scheduling failed')
+        delay=min(next_midnight_delay_ms(),UPDATE_CLOCK_WATCHDOG_MS)
+        try:self.after(delay,self._run_scheduled_update_check)
         except tk.TclError:report_fault()
 
     def _update_button_idle_text(self):
@@ -5946,10 +5959,14 @@ class ReminderApp(tk.Tk):
             lab=ttk.Label(right,text=str(guess.get(key,'') or '—'),wraplength=right_wrap_w,style='Sub.TLabel');lab.pack(anchor='w')
             result_labels[key]=lab
         ttk.Label(right,textvariable=status,wraplength=right_wrap_w,style='Sub.TLabel').pack(anchor='w',pady=8)
-        pending={};state={'page':available_pages[0],'scale':1.0,'zoom':1.0,'photo':None,'start':None,'rect':None,'image_w':1,'image_h':1,'closed':False}
+        pending={};state={'page':available_pages[0],'scale':1.0,'zoom':1.0,'photo':None,'start':None,'rect':None,'image_w':1,'image_h':1,'closed':False,'render_job':None,'render_key':None}
         def close_preview():
             if state['closed']:return
             state['closed']=True
+            if state['render_job'] is not None:
+                try:win.after_cancel(state['render_job'])
+                except tk.TclError:report_fault()
+                state['render_job']=None
             try:canvas.delete('all')
             except Exception:report_fault()
             state['photo']=None
@@ -5974,21 +5991,35 @@ class ReminderApp(tk.Tk):
                 canvas.create_text(x0+3,y0+3,text=field_labels.get(field,field),anchor='nw',fill='#1d8c66',tags='zone')
         def render_page():
             if state['closed']:return
+            if state['render_job'] is not None:
+                win.after_cancel(state['render_job']);state['render_job']=None
             page=doc[state['page']]
             try:
-                avail_cw=max(self._px(520),int(canvas.winfo_width())-12)
-                avail_ch=max(self._px(520),int(canvas.winfo_height())-12)
-            except Exception:
+                avail_cw=max(1,int(canvas.winfo_width())-12)
+                avail_ch=max(1,int(canvas.winfo_height())-12)
+            except (tk.TclError,TypeError,ValueError):
                 avail_cw,avail_ch=self._px(640),self._px(640)
-            base_scale=min(avail_cw/max(1.0,page.rect.width),avail_ch/max(1.0,page.rect.height))
-            state['scale']=max(0.4,min(4.0,base_scale*state['zoom']))
+            state['scale']=preview_raster_scale(page.rect.width,page.rect.height,avail_cw,avail_ch,state['zoom'])
             zoom_var.set(f"{int(round(state['zoom']*100))} %")
+            render_key=(state['page'],round(state['scale'],10))
+            if state['render_key']==render_key:
+                draw_saved();return
+            # Release the previous Tk image before allocating another large page.
+            canvas.delete('all');state['photo']=None;state['render_key']=None
             pix=page.get_pixmap(matrix=fitz.Matrix(state['scale'],state['scale']),alpha=False)
             state['image_w'],state['image_h']=pix.width,pix.height
-            state['photo']=tk.PhotoImage(data=base64.b64encode(pix.tobytes('png')).decode('ascii'))
-            canvas.delete('all');canvas.config(scrollregion=(0,0,pix.width,pix.height))
+            # Raw PPM avoids PNG compression and a redundant base64 copy.
+            image_data=pix.tobytes('ppm');del pix
+            state['photo']=tk.PhotoImage(data=image_data,format='PPM');del image_data
+            canvas.config(scrollregion=(0,0,state['image_w'],state['image_h']))
             canvas.create_image(0,0,image=state['photo'],anchor='nw',tags='page')
+            state['render_key']=render_key
             page_var.set(_('Sida {page} av {pages}',page=state['page']+1,pages=len(doc)));draw_saved()
+        def queue_render(event=None):
+            if state['closed']:return
+            if state['render_job'] is not None:win.after_cancel(state['render_job'])
+            state['render_job']=win.after(120,render_page)
+        canvas.bind('<Configure>',queue_render)
         def change_zoom(delta):
             state['zoom']=max(0.5,min(3.0,round(state['zoom']+delta,2)))
             render_page()
@@ -6107,6 +6138,7 @@ class ReminderApp(tk.Tk):
         ttk.Button(buttons,text=_('Spara leverantörsmall och fortsätt'),command=lambda:finish(True),style='Accent.TButton').pack(fill='x',pady=3)
         win.protocol('WM_DELETE_WINDOW',lambda:finish(False))
         try:
+            win.update_idletasks()
             render_page()
             # Grab only after the complete preview has rendered successfully.
             win.grab_set()
@@ -7968,7 +8000,7 @@ class ReminderApp(tk.Tk):
         check('Starta {app_name} automatiskt när jag loggar in',autostart_var,app_name=APP_NAME)
         hint('Autostart för din användare · {platforms}',platforms=SUPPORTED_PLATFORMS)
         automatic_updates_var=tk.BooleanVar(value=setting('update_auto')=='1')
-        check('Sök efter och installera uppdateringar automatiskt två gånger per dygn',automatic_updates_var)
+        check('Sök efter och installera uppdateringar automatiskt kl. 00:00 varje dag',automatic_updates_var)
         # Starting in the tray is not a choice any more, so there is no
         # checkbox for it - only a line that says what will happen.
         hint('PayPamin Flow startar alltid minimerad i systemfältet. Klicka på ikonen, eller starta appen igen, för att öppna fönstret.')

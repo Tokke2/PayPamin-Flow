@@ -317,7 +317,7 @@ class SettingsDialogTests(unittest.TestCase):
         texts = [widget.options.get("text") for widget in self.widgets("Checkbutton")]
         for expected in (
             "Starta PayPamin Flow automatiskt när jag loggar in",
-            "Sök efter och installera uppdateringar automatiskt två gånger per dygn",
+            "Sök efter och installera uppdateringar automatiskt kl. 00:00 varje dag",
             "Bevaka importmappen och importera nya PDF:er automatiskt",
             "Påminn om att importera kundreskontralista varje fredag",
             "Rensa appcache automatiskt en gång per dygn samt vid avslut",

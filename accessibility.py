@@ -13,6 +13,32 @@ import subprocess
 import sys
 from quiet_faults import report_fault
 
+# One PDF raster at a time: at most 36 MB of RGB pixels, with bounded axes.
+MAX_PREVIEW_PIXELS = 12_000_000
+MAX_PREVIEW_AXIS = 8192
+
+
+def preview_raster_scale(page_width, page_height, viewport_width, viewport_height, zoom=1.0):
+    """Fit in real canvas pixels, with zoom and a strict raster memory budget.
+
+    Never enforce a minimum width/height: that would force scrolling on small
+    displays. Render directly from the PDF instead of enlarging a soft bitmap.
+    The quadratic bound allows for rounding both raster dimensions upwards.
+    """
+    width, height, available_w, available_h, zoom = map(
+        float, (page_width, page_height, viewport_width, viewport_height, zoom)
+    )
+    if not all(math.isfinite(value) and value > 0 for value in (width, height, available_w, available_h, zoom)):
+        raise ValueError("Preview dimensions and zoom must be finite and positive")
+    fit = min(available_w / width, available_h / height) * zoom
+    area = width * height
+    total = width + height
+    budget_scale = 2 * (MAX_PREVIEW_PIXELS - 1) / (
+        total + math.sqrt(total * total + 4 * area * (MAX_PREVIEW_PIXELS - 1))
+    )
+    return min(fit, budget_scale, (MAX_PREVIEW_AXIS - 1) / width, (MAX_PREVIEW_AXIS - 1) / height)
+
+
 FONT_SCALE_SETTING = "ui_font_scale"
 FONT_SCALE_MIN = 0.8
 FONT_SCALE_MAX = 2.0

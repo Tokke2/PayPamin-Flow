@@ -1,8 +1,38 @@
-# PayPamin Flow — Förslagsbank (Unika funktioner som konkurrenter saknar)
+# PayPamin Flow — Förslagsbank och spärrlista
 
-> Alla förslag i den aktiva listan är helt nya och har aldrig presenterats i tidigare sessioner. Tidigare presenterade förslag bevaras längst ned som spärrlista så att 10-meddelanderegeln och 25-förslagsregeln aldrig återanvänder ett förslag.
+> Förslagen är kandidater utifrån praktiska användarbehov, inte verifierade påståenden om konkurrenter eller uppmätt efterfrågan. Listorna har skrivits direkt i chatten. Presenterade förslag sparas här som spärrlista för kommande 10-/25-förslagslistor.
 
-## Aktiva nya förslag (25 st — 2026-11-25)
+## Senast presenterat i chatten (25 st — v0.7.9-arbetet)
+
+1. **Avtalsbevis för avgift och ränta** — koppla offert/avtal, datum och kontrollsumma till fakturan.
+2. **Varning för ändrat betalningskonto** — jämför påminnelsens betalningsuppgifter med originalfakturan.
+3. **Diskret skärmläge** — maskera kundnamn och belopp vid skärmdelning.
+4. **Mottagarundantag per faktura** — ändra ärendets mottagare utan att ändra kundens standard.
+5. **Kontroll av exakt mejlbilaga** — visa bifogad PDF:s filnamn, fakturanummer och kontrollsumma.
+6. **Låsning av pågående utskicksärende** — varna vid samtidig behandling i flera appinstanser mot samma databas.
+7. **Spårbar avgiftseftergift** — efterskänk avgift helt/delvis med orsak och historik.
+8. **Särskilt dödsboläge** — separat mottagarhantering och manuell granskning före åtgärder.
+9. **Separat saldo för kapital och avgift** — särskilj obetalda avgifter efter betald huvudfaktura.
+10. **Återställ osparat fakturautkast** — återuppta inmatning efter krasch utan en skarp fakturarad.
+11. **Skydd mot fel systemdatum** — upptäck stora klockhopp före eskalering.
+12. **Bevisrad för tolkade belopp** — visa summeringsrutan/texten som ligger bakom valt belopp.
+13. **Versionsjämförelse av ersatta original** — visa skillnader mellan två PDF-versioner av samma faktura.
+14. **Studsad e-post som egen status** — registrera leveransproblem och begär adressrättning före nästa utkast.
+15. **Öresavvikelsekontroll** — förklara differenser mellan ursprungsbelopp, delbetalningar och saldo.
+16. **Beställarreferensstyrd fakturarouting** — föreslå kundavdelning utifrån ordernummer/kostnadsställe.
+17. **Tidsbegränsad ersättningskontakt** — reservmottagare under semester med automatisk återgång.
+18. **Extra granskningssteg för stora krav** — dokumenterad andragranskning över en beloppsgräns.
+19. **Avidentifierat supportpaket** — tekniska uppgifter utan kunddata och dokument.
+20. **Diskutrymmesbudget före masskanning** — uppskatta arbetsutrymme och stoppa säkert före full disk.
+21. **Utskriftsmanifest** — kontrollista för fakturor, sidor och antal exemplar.
+22. **Stortryck för enskilda kunder** — kundspecifik PDF-typografi utan att ändra alla brev.
+23. **Karantän för riskabla PDF:er** — avskilj skadade eller resurskrävande dokument med felorsak.
+24. **Giltighetstid för leverantörsvillkor** — datumsätt villkor och betalningsuppgifter för historiskt riktiga brev.
+25. **Simulera nästa åtgärd** — torrkör brev, betalningsfrist och belopp utan status-/historikändring.
+
+---
+
+## Tidigare presenterad lista (25 st — före v0.7.9)
 
 1. **Lokal SIE-4-bokföringsexport för påminnelseavgifter och kundbetalningar** — Generera färdiga `.se`-verifikationsfiler (SIE 4) direkt på datorn när en faktura slutbetalas inklusive lagstadgad påminnelseavgift (60 kr) eller förseningsersättning (450 kr), så bokföringen i Visma, Fortnox eller Bokio uppdateras utan manuell kontering.
 2. **Interaktiv betalningsplan / avbetalningsöverenskommelse (PDF + bevakning)** — Skapa en juridiskt tydlig avbetalningsplan på 2–6 delbetalningar med egna förfallodatum, där PayPamin Flow bevakar varje delbetalning lokalt och pausar P2/Kronofogden så länge kunden följer planen.

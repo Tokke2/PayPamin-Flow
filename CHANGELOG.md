@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.9
+
+- Automatic updates are checked once per local calendar day at midnight, with one catch-up check after a missed run. A persisted check date avoids repeated startup requests, and a local clock watchdog handles sleep/time-zone changes without network polling. Disabled checks and running installations are respected.
+- PDF preview now fits the actual canvas on small screens, debounces resize redraws, skips identical rasters, and renders directly from the PDF at the required display pixels. A 12-megapixel/8192-pixel-axis bound prevents unbounded page allocations. Previous images and resize timers are released on replacement/close. Raw PPM avoids PNG compression and base64 duplication.
+- Consolidated repository rules in AGENTS.md, including branch discipline, explicit daily scheduling, resource limits and app-specific profile/project exclusions.
+
 ## 0.7.8
 
 - Choose private or business customer directly below the customer name when creating an invoice. The selected customer type is saved as a reusable customer default, matched regardless of case and repeated whitespace. Typing another saved customer refreshes the selection without undoing a manual override for the same customer.

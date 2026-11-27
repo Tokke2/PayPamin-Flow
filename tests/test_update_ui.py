@@ -7,7 +7,7 @@ from unittest.mock import Mock, call, patch
 
 from app_info import PYTHON_RELEASE_ASSET
 from test_database import load_headless_app
-from update_checker import UPDATE_CHECK_INTERVAL_MS, ReleaseAsset, ReleaseInfo
+from update_checker import UPDATE_CLOCK_WATCHDOG_MS, ReleaseAsset, ReleaseInfo
 
 
 PACKAGE_URL = f"https://github.com/Tokke2/PayPamin-Flow/releases/download/v0.8.0/{PYTHON_RELEASE_ASSET}"
@@ -302,14 +302,14 @@ class UpdateUiTests(unittest.TestCase):
 
     def test_same_version_release_build_uses_release_comparison(self):
         fake = self.fake_app()
-        release = ReleaseInfo("0.7.8", "v0.7.8", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.8", release_id="200")
+        release = ReleaseInfo("0.7.9", "v0.7.9", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.9", release_id="200")
         calls = []
         fake.show_update_available = lambda value: calls.append(value.release_id)
         results = queue.Queue()
         results.put(("ok", True, release))
         with patch.object(self.app, "is_update_available", return_value=True) as compare:
             self.app.ReminderApp._poll_update_check(fake, results)
-        compare.assert_called_once_with(release, "0.7.8")
+        compare.assert_called_once_with(release, "0.7.9")
         self.assertEqual(calls, ["200"])
 
     def test_install_cannot_start_without_a_release_archive(self):
@@ -335,24 +335,49 @@ class UpdateUiTests(unittest.TestCase):
         self.assertEqual(len(scheduled), 1)
         self.assertTrue(fake._update_install_running)
 
-    def test_scheduler_respects_twice_daily_interval_and_setting(self):
-        fake = SimpleNamespace()
+    def test_scheduler_respects_midnight_and_setting_without_network_polling(self):
+        fake = SimpleNamespace(_update_check_running=False, _update_install_running=False)
         fake._run_scheduled_update_check = "next-scheduled-check"
         scheduled = []
-        checks = []
         fake.after = lambda delay, callback: scheduled.append((delay, callback))
-        fake.check_for_updates = lambda manual: checks.append(manual)
-        with patch.object(self.app, "setting", return_value="1"):
+        fake.check_for_updates = Mock()
+        values = {"update_auto": "1"}
+        def save(key, value):
+            values[key] = value
+        with (patch.object(self.app, "setting", side_effect=values.get),
+              patch.object(self.app, "set_setting", side_effect=save),
+              patch.object(self.app, "next_midnight_delay_ms", return_value=450)):
             self.app.ReminderApp._run_scheduled_update_check(fake)
-        self.assertEqual(checks, [False])
-        self.assertEqual(scheduled, [(UPDATE_CHECK_INTERVAL_MS, "next-scheduled-check")])
+            fake.check_for_updates.assert_called_once_with(manual=False)
+            self.assertEqual(scheduled, [(450, "next-scheduled-check")])
+            # Watchdog and same-day restart do not fetch again.
+            self.app.ReminderApp._run_scheduled_update_check(fake)
+            fake.check_for_updates.assert_called_once()
+            values["update_auto"] = "0"
+            values["update_last_auto_check_date"] = ""
+            self.app.ReminderApp._run_scheduled_update_check(fake)
+            fake.check_for_updates.assert_called_once()
 
-        scheduled.clear()
-        checks.clear()
-        with patch.object(self.app, "setting", return_value="0"):
+    def test_scheduler_catches_up_a_missed_day_but_not_during_an_install(self):
+        fake = SimpleNamespace(_update_check_running=False, _update_install_running=True,
+                               _run_scheduled_update_check="next", check_for_updates=Mock(), after=Mock())
+        values = {"update_auto": "1", "update_last_auto_check_date": "2000-01-01"}
+        with (patch.object(self.app, "setting", side_effect=values.get),
+              patch.object(self.app, "set_setting", side_effect=values.__setitem__),
+              patch.object(self.app, "next_midnight_delay_ms", return_value=24*60*60*1000)):
             self.app.ReminderApp._run_scheduled_update_check(fake)
-        self.assertEqual(checks, [])
-        self.assertEqual(scheduled, [(UPDATE_CHECK_INTERVAL_MS, "next-scheduled-check")])
+            fake.check_for_updates.assert_not_called()
+            self.assertEqual(values["update_last_auto_check_date"], "2000-01-01")
+            fake._update_install_running = False
+            self.app.ReminderApp._run_scheduled_update_check(fake)
+            fake.check_for_updates.assert_called_once_with(manual=False)
+        fake.after.assert_called_with(UPDATE_CLOCK_WATCHDOG_MS, "next")
+
+    def test_scheduler_stops_when_window_closes(self):
+        fake = SimpleNamespace(_quitting=True, after=Mock(), check_for_updates=Mock())
+        self.app.ReminderApp._run_scheduled_update_check(fake)
+        fake.after.assert_not_called()
+        fake.check_for_updates.assert_not_called()
 
     def test_successful_python_install_waits_for_ready_then_closes(self):
         installed = object()
