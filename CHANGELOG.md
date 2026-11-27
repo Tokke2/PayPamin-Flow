@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.8
+
+- Choose private or business customer directly below the customer name when creating an invoice. The selected customer type is saved as a reusable customer default, matched regardless of case and repeated whitespace. Typing another saved customer refreshes the selection without undoing a manual override for the same customer.
+- New invoices and PDF imports prefer the saved customer type over company-name guesses or older invoice rows. Existing invoices and P1/P2 snapshots are not reclassified. Customer type survives JSON journal export/restore and email, logo or language edits.
+
 ## 0.7.7
 
 - New default payment terms: 60 SEK reminder fee for private customers, 450 SEK statutory late-payment compensation for business customers, and a contractual annual interest clause of 23 %. Existing installations switch to the statutory model once; invoice data and historical reminders remain untouched.

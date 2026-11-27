@@ -305,6 +305,10 @@ PDF-importen föreslår valuta när en kod finns vid **ATT BETALA**, efter **Val
 
 **Appen gör ingen valutaomräkning.** Att ändra valuta ändrar märkningen, inte de inmatade siffrorna. Svensk visning blir exempelvis `1 234,50 EUR`; engelsk visning blir `EUR 1,234.50`.
 
+## Kundtyp sparas för nästa faktura
+
+När du skapar eller redigerar en faktura finns **Kundtyp (sparas på kunden)** direkt under kundnamnet. Välj **Privatperson** eller **Företag** (även Myndighet stöds). Valet sparas när fakturan sparas och förväljs nästa gång samma kund anges, även vid PDF-import. Skillnader i stora/små bokstäver och extra mellanslag påverkar inte matchningen. Du kan alltid ändra valet på den nya fakturan; det uppdaterar kundens standard för framtida fakturor utan att ändra tidigare fakturor eller deras påminnelser.
+
 ## Påminnelseavgift och förseningsersättning
 
 Appen har **två fasta avgiftsmodeller**, och du väljer mellan dem i **Inställningar → Avgiftsmodell**. Inget belopp skrivs in för hand i någon av dem.

@@ -24,6 +24,7 @@ from customer_contacts import (
     EmailAddressError, ensure_customer_contact_schema, normalize_customer_key,
     normalize_email_addresses,
 )
+from fee_rules import CUSTOMER_TYPES
 from i18n import _
 from quiet_faults import report_fault
 
@@ -514,14 +515,22 @@ def _import_customer_contacts(db, payload):
         except EmailAddressError as exc:
             raise JournalError(_("JSON-journalen innehåller en ogiltig kundkontakt.")) from exc
         logo_file = Path(str(row.get("logo_file"))).name if row.get("logo_file") else ""
+        customer_type = str(row.get("customer_type") or "").strip().lower()
+        if customer_type not in CUSTOMER_TYPES:
+            customer_type = ""
         existing = db.execute(
-            "SELECT logo_file FROM customer_contacts WHERE customer_key=?", (key,)
+            "SELECT logo_file,customer_type FROM customer_contacts WHERE customer_key=?", (key,)
         ).fetchone()
         db.execute(
             """INSERT OR IGNORE INTO customer_contacts
-            (customer_key,customer_name,emails,logo_file,updated) VALUES(?,?,?,?,?)""",
-            (key, name, emails, logo_file, str(row.get("updated") or "")),
+            (customer_key,customer_name,emails,logo_file,customer_type,updated) VALUES(?,?,?,?,?,?)""",
+            (key, name, emails, logo_file, customer_type, str(row.get("updated") or "")),
         )
+        if existing is not None and not existing["customer_type"] and customer_type:
+            db.execute(
+                "UPDATE customer_contacts SET customer_type=? WHERE customer_key=?",
+                (customer_type, key),
+            )
         if existing is not None and not existing["logo_file"] and logo_file:
             db.execute(
                 "UPDATE customer_contacts SET logo_file=? WHERE customer_key=?",

@@ -61,7 +61,7 @@ from bankdays import (
 )
 from customer_contacts import (
     EmailAddressError, ensure_customer_contact_schema, get_customer_contact,
-    get_customer_language, normalize_customer_language,
+    get_customer_language, normalize_customer_language, get_customer_type, normalize_customer_key,
     normalize_email_addresses, parse_email_addresses, save_customer_contact,
 )
 from i18n import (
@@ -1163,6 +1163,12 @@ def save_invoice_record(values,row_id=None):
                 if saved_logo and values.get('logo_file') is None:
                     values['logo_file']=saved_logo;reused.append('logo')
                 if reused:logger.info('Reused customer details while saving new invoice: customer=%s fields=%s',values.get('customer',''),','.join(reused))
+        if not values.get('customer_type'):
+            if row_id is None:
+                values['customer_type']=get_customer_type(db,values.get('customer','')) or CUSTOMER_PRIVATE
+            else:
+                original=db.execute('SELECT customer_type FROM invoices WHERE id=?',(row_id,)).fetchone()
+                values['customer_type']=original['customer_type'] if original is not None else CUSTOMER_PRIVATE
         values['email']=normalize_email_addresses(values.get('email',''))
         duplicate=find_duplicate_invoice(values['invoice_no'],values.get('source_hash',''),row_id,db)
         if duplicate is None:
@@ -1184,7 +1190,7 @@ def save_invoice_record(values,row_id=None):
                     template_vendor=?,amount=?,currency=?,paid=?,email=?,source=?,source_hash=?,note=?,reviewed=?,logo_file=?,
                     customer_type=?,fee_agreement=?
                     WHERE id=?''',params+(row_id,))
-            save_customer_contact(db,values['customer'],values['email'],values.get('logo_file'))
+            save_customer_contact(db,values['customer'],values['email'],values.get('logo_file'),customer_type=normalize_customer_type(values.get('customer_type')))
             try:record_invoice_learning_db(db,values)
             except Exception:logger.exception('Invoice learning update failed; the invoice is still saved')
     return duplicate
@@ -1214,12 +1220,14 @@ _BUSINESS_NAME_PATTERN=re.compile(
 
 
 def infer_imported_customer_type(customer,db=None):
-    """Infer business vs private customer safely from saved history or company suffix."""
+    """Prefer the customer's explicit choice, then history and company suffix."""
     name=str(customer or '').strip()
     if not name:return CUSTOMER_PRIVATE
     own_db=db is None
     conn=connect() if own_db else db
     try:
+        saved_type=get_customer_type(conn,name)
+        if saved_type:return saved_type
         prev=conn.execute(
             'SELECT customer_type FROM invoices WHERE lower(customer)=lower(?) ORDER BY id DESC LIMIT 1',
             (name,),
@@ -6643,9 +6651,10 @@ class ReminderApp(tk.Tk):
         reviewed_var=tk.BooleanVar(value=bool(row['reviewed']) if row else not bool(source))
         entries={};form=self._dialog_form(w,padding=18)
         for i,(lab,k) in enumerate(fields):
-            ttk.Label(form,text=_(lab)).grid(row=i,column=0,sticky='w',pady=5,padx=(0,12));e=ttk.Entry(form,width=43);e.grid(row=i,column=1,pady=5);e.insert(0,str(vals.get(k,'') or ''));entries[k]=e
+            field_row=i if i==0 else i+1
+            ttk.Label(form,text=_(lab)).grid(row=field_row,column=0,sticky='w',pady=5,padx=(0,12));e=ttk.Entry(form,width=43);e.grid(row=field_row,column=1,pady=5);e.insert(0,str(vals.get(k,'') or ''));entries[k]=e
             if enrich_original and k in ORIGINAL_INVOICE_PROTECTED_FIELDS:e.configure(state='readonly')
-        type_row=len(fields)
+        type_row=1
         if row is None:
             saved_type=infer_imported_customer_type(vals.get('customer',''))
         elif enrich_original and not str(row_value(row,'p1_date','') or '').strip():
@@ -6662,16 +6671,16 @@ class ReminderApp(tk.Tk):
         ) or normalize_agreement(setting('fee_agreement'))
         customer_type_var=tk.StringVar(value=_(CUSTOMER_TYPE_LABELS[saved_type]))
         agreement_var=tk.StringVar(value=_(AGREEMENT_LABELS[saved_agreement]))
-        ttk.Label(form,text=_('Kundtyp')).grid(row=type_row,column=0,sticky='w',pady=5,padx=(0,12))
+        ttk.Label(form,text=_('Kundtyp (sparas på kunden)'),wraplength=200).grid(row=type_row,column=0,sticky='w',pady=5,padx=(0,12))
         type_combo=ttk.Combobox(form,textvariable=customer_type_var,state='readonly',width=40,
             values=[_(CUSTOMER_TYPE_LABELS[code]) for code in CUSTOMER_TYPES])
         type_combo.grid(row=type_row,column=1,sticky='w',pady=5)
-        ttk.Label(form,text=_('Var avtalades påminnelseavgiften?')).grid(row=type_row+1,column=0,sticky='w',pady=5,padx=(0,12))
+        ttk.Label(form,text=_('Var avtalades påminnelseavgiften?')).grid(row=len(fields)+1,column=0,sticky='w',pady=5,padx=(0,12))
         agreement_combo=ttk.Combobox(form,textvariable=agreement_var,state='readonly',width=40,
             values=[_(label) for label in AGREEMENT_LABELS.values()])
-        agreement_combo.grid(row=type_row+1,column=1,sticky='w',pady=5)
+        agreement_combo.grid(row=len(fields)+1,column=1,sticky='w',pady=5)
         fee_hint=ttk.Label(form,text='',style='Sub.TLabel',wraplength=520,justify='left')
-        fee_hint.grid(row=type_row+2,column=0,columnspan=2,sticky='w',pady=(2,6))
+        fee_hint.grid(row=len(fields)+2,column=0,columnspan=2,sticky='w',pady=(2,6))
         def chosen_type():
             for code,label in CUSTOMER_TYPE_LABELS.items():
                 if _(label)==customer_type_var.get():return code
@@ -6694,6 +6703,20 @@ class ReminderApp(tk.Tk):
             else:
                 agreement_combo.configure(state='readonly')
                 fee_hint.configure(text=_('{label}: {fee}, högst 60 kr och en gång per fordran. Rätten till avgiften måste avtalas senast när skulden uppstod.',label=_(fee_label_key(ctype,fee,model)),fee=money(fee,currency)))
+        # A name can be typed after the dialog opens. Reload only when the
+        # normalized name changes, never on a repeated focus event after a
+        # manual type selection. Existing invoices keep their own saved type.
+        type_customer_key=normalize_customer_key(entries['customer'].get())
+        def update_customer_type(event=None):
+            nonlocal type_customer_key
+            customer=entries['customer'].get()
+            key=normalize_customer_key(customer)
+            if key==type_customer_key:return
+            type_customer_key=key
+            customer_type_var.set(_(CUSTOMER_TYPE_LABELS[infer_imported_customer_type(customer)]))
+            update_fee_hint()
+        entries['customer'].bind('<FocusOut>',update_customer_type)
+        entries['customer'].bind('<KeyRelease>',update_customer_type)
         type_combo.bind('<<ComboboxSelected>>',update_fee_hint)
         agreement_combo.bind('<<ComboboxSelected>>',update_fee_hint)
         entries['currency'].bind('<FocusOut>',update_fee_hint)
