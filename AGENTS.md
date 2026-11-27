@@ -12,10 +12,11 @@ Detta dokument samlar **alla hårda regler och arkitekturkrav** anpassade specif
 
 ## 2. Branch- och Git-disciplin (`- hård regel`)
 
-- **All koduppdatering till standardbranchen – skapa ALDRIG nya brancher (`- hård regel`)**: All koduppdatering ska alltid skrivas till den aktiva standardbranchen i sessionen och inga nya extra brancher får någonsin skapas manuellt. Ta bort övriga/inaktiva brancher på GitHub så att **endast en enda aktiv branch** finns kvar (sätt den aktiva branchen som `default_branch` i GitHub Settings innan en äldre standardbranch tas bort). *(Obs: I Arena Agent Mode är varje chatt-session tekniskt låst till sin tilldelade sessionsbranch `arena/<id>-paypamin-flow`; om en tidigare session lämnat `arena/b2c1cc99-paypamin-flow` som `default_branch` i GitHub Settings pekas `default_branch` om till den aktiva sessionsbranchen under Settings → General.)*
+- **All koduppdatering till standardbranchen – skapa ALDRIG nya brancher (`- hård regel`)**: All koduppdatering ska alltid skrivas till den aktiva standardbranchen i sessionen och inga nya extra brancher får någonsin skapas manuellt. Ta bort övriga/inaktiva brancher på GitHub så att **endast en enda aktiv branch** finns kvar (sätt den aktiva branchen som `default_branch` i GitHub Settings innan en äldre standardbranch tas bort). *(Obs: I Arena Agent Mode är varje chatt-session tekniskt låst till sin tilldelade sessionsbranch `arena/<id>-paypamin-flow`; repots standardbranch är `arena/8f4dd6f8-paypamin-flow`. Vid ny chatt ska standardbranchen och sessionens tilldelade branch kontrolleras innan ändringar görs. Om Arena har tilldelat en annan branch ska konflikten förklaras; byt inte branch eller arbeta mot `main` i smyg.)*
 - **Arbeta ALDRIG mot `main` (`- hård regel`)**: Skapa, pusha, bygg eller uppdatera aldrig mot `main` – särskilt inte vid appuppdateringar eller CI-flöden. All kod, alla tester och all release-publicering sker enbart från den aktiva branchen (`arena/*`).
 - **Merga ALDRIG (`- hård regel`)**: Kör aldrig `git merge`, `gh pr merge` eller motsvarande sammanslagning.
 - **Öppna ALDRIG Pull Requests från `arena/*`**: Arena spårar sessionen via branchen; att öppna eller stänga en temporär PR kan stänga branchen och avbryta sessionen. CI kör hela testmatrisen (`windows-latest`, `macos-latest`, `ubuntu-latest`) direkt vid `push` till `arena/**`.
+- **Endast en branch på GitHub**: Standardbranchen ska vara `arena/8f4dd6f8-paypamin-flow`. Ta endast bort andra brancher efter att standardbranchen pekats rätt och deras historik kontrollerats; radera aldrig den aktiva sessionsbranchen. Nya chattar ska läsa dessa regler före arbetet.
 - **Byt inte namn på den aktiva branchen**: Sessionens branchnamn är låst.
 
 ---
@@ -24,7 +25,7 @@ Detta dokument samlar **alla hårda regler och arkitekturkrav** anpassade specif
 
 - **Uppdatera ALLTID GitHub Release vid kodförändring och markera som `Latest` (`- hård regel`)**:
   - Varje kodförändring som pushas ska flytta releasetaggen (`v<APP_VERSION>`) till den nya commiten, uppdatera releasens beskrivning (`packaging/release_description.py`), säkerställa att releasen inte är utkast/förhandsrelease (`draft=false`, `prerelease=false`) och **uttryckligen markera releasen som `Latest` (`make_latest=true`)**.
-  - Releasen består av källkodsarkivet vid taggen (inga lösa uppladdade paketfiler som kan hamna i osynk med koden). `packaging/verify_release.py` verifierar taggens commit, releasebeskrivningen, att releasen är `Latest`, samt att källkodsarkivet matchar commiten byte för byte.
+  - Releasen består av källkodsarkivet vid taggen och det automatiskt byggda `PayPamin-Flow-Python.zip` med SHA-256-fil för äldre installationer. Alla nedladdningar måste komma från samma testade commit. `packaging/verify_release.py` verifierar taggens commit, releasebeskrivningen, att releasen är `Latest`, samt att källkodsarkivet matchar commiten byte för byte.
 - **Appen jämför filer vid uppdatering (`- hård regel`)**:
   - Uppdateraren (`update_checker.py`, `update_installer.py`, `update_state.py`) får aldrig lita blint på versionsnumret. För samma version jämförs releaseinnehållet och de faktiska programfilernas SHA-256-kontrollsummor (`evaluate_release`, `compare_package_files`).
   - En äldre release får aldrig skriva över nyare lokala filer (`CONTENT_STALE`).
@@ -35,7 +36,12 @@ Detta dokument samlar **alla hårda regler och arkitekturkrav** anpassade specif
 
 ---
 
-## 4. Konsolfri körning & minimerad start (`REQ-K4`)
+## 4. Daglig automatisk uppdatering, resurser och konsolfri körning
+
+- **Automatisk uppdateringskontroll kl. 00:00 varje dag (`- hård regel`)**: Använd datorns lokala tid. Installera automatiskt endast om en verifierad ny uppdatering finns och automatisk uppdatering är aktiverad. Appen kan inte köras när datorn är avstängd; efter vila eller missad körning görs en enda uppsamlingskontroll när appen åter kan köra. Behåll manuell uppdateringskontroll. Ingen tät nätverkspollning.
+- **Minnes- och energihushållning**: Undvik obegränsade bild-/PDF-cacher, återkommande omrendering utan ändringar och parallella dubblettjobb. Frigör dokument, bilder, filhandtag och timerjobb när fönster stängs. Mät och regressionstesta konkreta förbättringar; lova inte omätbara prestandavinster.
+
+### Konsolfri körning & minimerad start (`REQ-K4`)
 
 - ** visa ALDRIG ett terminalfönster**: Varken vid start (`start_paypamin_flow.vbs`, `paypamin_flow_launcher.py`, `paypamin_flow.pyw`), bakgrundskontroll av Python-tillägg (`python_maintenance.py`), PDF-/OCR-skanning (`pytesseract`, `pdf2image`), e-postutkast eller appuppdatering får ett konsol-/terminalfönster blinka förbi (`console_free.py` med `pythonw.exe`, `CREATE_NO_WINDOW` och dold `STARTUPINFO`).
 - **Starta alltid minimerad i systemfältet**: Appen döljs direkt vid initiering och startar alltid minimerad i systemfältet (`start_minimized()`), oavsett äldre inställningsvärden.
@@ -62,6 +68,7 @@ Detta dokument samlar **alla hårda regler och arkitekturkrav** anpassade specif
   - All nedskalning av logotyp och ikoner sker från högupplösta original i förmultiplicerad `RGBa` (`Image.LANCZOS`) för att eliminera grå kanthalo, med dedikerad ljus och mörk ordmärkesvariant.
   - PDF-förhandsvisningen (`preview_invoice`) renderas i skärmens faktiska upplösning med zoomstöd och exakt rektangelmarkering för fältzoner (inklusive OCR-reserv för skannade fakturor).
   - Alla logotyper och ikoner byggs deterministiskt från rena vektormastrar (`assets/*.svg`, `assets/print/*.svg` utan `<text>`- eller `<filter>`-beroenden, med redigerbara namngivna vektorgrupper för tryck) via `assets/build_icons.py` och verifieras med `assets/verify_branding.py`.
+- **Projekt- och rutval**: Återställ ett tidigare rutval i projektskaparen endast i appar där funktionen faktiskt fanns. PayPamin Flow har ingen projektskapare och ska inte få en konstgjord sådan.
 - **Anpassa funktioner efter varje app**:
   - **Kolumner**: PayPamin Flow har tabellkolumner (`ttk.Treeview`) – samtliga tabeller ska stödja både sortering (med tydlig riktningsindikator) och flytt/omordning av kolumner (`displaycolumns`, sparat i inställningar för huvudtabellen).
   - **Profiler**: Underflik för profiler i Inställningar läggs *endast* till i appar som faktiskt använder användarprofiler. PayPamin Flow är en enbolags- och kundreskontraapp utan användarprofiler och ska därför inte ha en konstgjord profilflik i Inställningar.
@@ -80,5 +87,6 @@ Detta dokument samlar **alla hårda regler och arkitekturkrav** anpassade specif
 
 ## 8. Förslagsregler i chatten (`- hård regel`)
 
-- **25 nya förslag vid efterfrågan**: Skriv 25 konkreta, genomtänkta nya funktionsförslag (funktioner som konkurrenter saknar och som användare efterfrågar) direkt i chatten.
+- **25 nya förslag vid efterfrågan**: Skriv alltid de 25 förslagen direkt i chatten, inte bara i en fil. Förslagen ska vara konkreta och relevanta för användarbehov. Påstå inte att konkurrenter saknar en funktion eller att efterfrågan är verifierad utan belägg.
+- **Spärra återbruk**: Läs `FORSLAG.md` före varje förslagslista och för in nya förslag där när de presenteras.
 - **10-meddelanderegeln (`- hård regel`)**: Var 10:e meddelande i konversationen ska en ny lista med **10 nya, aldrig tidigare använda förslag** visas direkt i chatten.
