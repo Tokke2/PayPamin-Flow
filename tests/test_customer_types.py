@@ -28,6 +28,14 @@ class CustomerTypeTests(unittest.TestCase):
         self.app.set_language("sv")
         self.app.set_setting("learning_enabled", "0")
         self.addCleanup(self.app.set_language, "sv")
+        # Windows cannot remove a temporary directory while its log is open.
+        # Cleanups run in reverse order: close handlers before removing files.
+        self.addCleanup(self.close_log_handlers)
+
+    def close_log_handlers(self):
+        for handler in self.app.logger.handlers[:]:
+            self.app.logger.removeHandler(handler)
+            handler.close()
 
     def record(self, number="TYPE-1", customer="Alex Svensson", customer_type=None):
         result = dict(customer=customer, invoice_no=number, invoice_date="2026-01-01",
