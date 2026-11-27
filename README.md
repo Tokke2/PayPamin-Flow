@@ -309,14 +309,14 @@ PDF-importen föreslår valuta när en kod finns vid **ATT BETALA**, efter **Val
 
 Appen har **två fasta avgiftsmodeller**, och du väljer mellan dem i **Inställningar → Avgiftsmodell**. Inget belopp skrivs in för hand i någon av dem.
 
-### 150 kr per påminnelse (förvald)
+### Tidigare modell: 150 kr per påminnelse (inte förvald)
 
-**150 kr** debiteras per påminnelse, samma belopp som fakturatexten anger. Det är den modell appen använder tills du väljer något annat.
+**150 kr** är en äldre valbar modell som behålls för bakåtkompatibilitet. Den debiteras högst en gång per fordran, inte en gång per brev. Från v0.7.7 är i stället den lagstadgade modellen standard även vid uppdatering av befintliga installationer.
 
 - Mot **företag och myndigheter** är 150 kr lagligt: det ligger under den lagstadgade förseningsersättningen 450 kr enligt 4 a §, och den lägre ersättningen får alltid krävas.
 - Mot en **privatperson** gäller 4 § med ett tak på **60 kr**. 6 § gör ett vidare villkor ogiltigt, så 150 kr **kan inte krävas in** av en privatperson. Appen stoppar dig inte — du har uttryckligen valt modellen — men varje påminnelse till en privatperson visar en varning om taket i bekräftelsedialogen, och **den lagstadgade modellen finns ett klick bort** för just de fakturorna.
 
-### Lagstadgad avgift enligt 4 § och 4 a § (val)
+### Lagstadgad avgift enligt 4 § och 4 a § (förvald)
 
 | Kundtyp på fakturan | Belopp | Vad det är | Krav |
 |---|---|---|---|
@@ -326,9 +326,15 @@ Appen har **två fasta avgiftsmodeller**, och du väljer mellan dem i **Inställ
 
 **Beloppen är fasta i båda modellerna.** De kan inte ändras i appen — det finns inga avgiftsfält i **Inställningar**, bara en väljare och en rad som visar det belopp som gäller. Ett avgiftsbelopp som en äldre version har sparat (till exempel 150 kr som *inställning*) läses aldrig och tas bort ur databasen vid start; modellvalet är det enda som sparas.
 
-**Fakturatexten sparas ordagrant, men upprepas aldrig med gamla villkor.** Texten på fakturan (**Avser**) behåller sin ursprungliga lydelse, till exempel *"Avgift per påminnelse: 150:-. Försenad betalning debiteras 23% ränta."* Påminnelsen skriver inte ut den meningen: den anger i stället den lagstadgade avgiften en gång med sin paragraf och ingen ränta alls. Allt annat i texten följer med — betalningsuppgifter, äganderättsförbehåll och anmärkningsfrist. Bekräftelsedialogen säger till när ett sådant villkor lämnas utanför, och fakturans egen text ändras aldrig.
+**Fakturatexten sparas ordagrant, men upprepas aldrig med gamla villkor.** Texten på fakturan (**Avser**) behåller sin ursprungliga lydelse, till exempel *"Avgift per påminnelse: 150:-. Försenad betalning debiteras 23% ränta."* Påminnelsen skriver inte ut den meningen: den anger i stället den valda avgiften med sin grund och det nya räntevillkoret separat. Allt annat i texten följer med — betalningsuppgifter, äganderättsförbehåll och anmärkningsfrist. Bekräftelsedialogen säger till när ett sådant villkor lämnas utanför, och fakturans egen text ändras aldrig.
 
-**Ränta ingår inte i appen.** Inget räntebelopp beräknas, ingen räntesats visas och påminnelse-PDF:en, e-postutkastet och dialogen nämner ingen dröjsmålsränta. Ett sparat räntevärde från en äldre version tas bort ur databasen vid start. Lagstadgad dröjsmålsränta gäller ändå mellan parterna enligt räntelagen — appen uttalar sig bara inte om den.
+**Betalningsvillkor från v0.7.7:**
+
+- **Privatkunder:** Vid försenad betalning debiteras påminnelseavgift om 60 kr.
+- **Företagskunder:** Vid försenad betalning debiteras lagstadgad förseningsersättning om 450 kr enligt lag (1981:739), 4 a §.
+- **Dröjsmålsränta:** 23 % per år vid försenad betalning.
+
+Villkoren visas under **Inställningar → Betalningsvillkor**. Påminnelseavgiften måste vara avtalad senast när skulden uppkom; 23 % är en **avtalsränta**, inte en lagstadgad räntesats. Bekräftelsen före nya påminnelser kräver att du kontrollerar avtalsgrunden. Nya villkor gäller inte äldre fakturor automatiskt. Räntevillkoret skrivs på nya PDF:er med förtydligandet att det bara gäller om avtalat. **Appen beräknar inte upplupen ränta och lägger inte till något räntebelopp i totalsumman.** Räntesatsen sparas i påminnelsens snapshot; äldre påminnelser får inte det nya räntevillkoret när logotypen ändras eller PDF:en återskapas. Ett gammalt redigerbart räntevärde används inte och tas bort vid start.
 
 Två regler styr hela modellen:
 
@@ -513,7 +519,7 @@ Numret visas också i klartext (`0721-817 177`) med en **Kopiera nummer**-knapp,
 
 - PDF-layout och OCR kan misstolka fält. Kontrollera fakturan före godkännande. Reskontraimporten kräver textbaserad PDF och stoppar vid oläsbara rader eller avvikande kontrollsummor.
 - Betalstatus hämtas inte direkt via Fortnox. Den kan avstämmas med bekräftade, kompletta reskontralistor; kontrollera alltid importsammanfattningen och verifiera betalningar före utskick.
-- Dagregler, avgifter och avtalsvillkor måste verifieras för verksamheten. Appen hanterar ingen ränta alls.
+- Dagregler, avgifter och avtalsvillkor måste verifieras för verksamheten. Appen visar ett avtalat räntevillkor om 23 % per år men beräknar inte upplupen ränta.
 - Automatisk e-post eller automatisk ansökan till Kronofogden ingår inte.
 
 ## Copyright och licens

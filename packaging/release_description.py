@@ -66,6 +66,8 @@ def replace_block(body: str, block: str) -> str:
 DEFAULT_NOTES = """## PayPamin Flow {version}
 
 ### Nyheter i denna version
+- **Nya standardvillkor**: 60 kr påminnelseavgift för privatkunder och 450 kr lagstadgad förseningsersättning för företagskunder. Befintliga installationer växlas automatiskt till den lagstadgade modellen en gång, utan att ändra sparad P1/P2-historik.
+- **23 % årlig dröjsmålsränta som avtalsvillkor**: Visas i inställningarna och på nya påminnelser. Avtal krävs; villkoret gäller inte retroaktivt. Appen beräknar inte upplupen ränta och lägger inte till något räntebelopp i totalsumman.
 - **Förbättrad avläsning av kundnamn vid PDF-import**: Läser automatiskt av kundnamn från svenska och engelska faktura-PDF:er (Fortnox, Cabas, Visma m.fl.) inklusive fönsterkuvert i tvåkolumnslayout, `Box`/`Postbox`/`FE`-adresser, `c/o`-rader, gårds-/byadresser utan gatunummer samt väljer `Fakturaadress` framför `Leveransadress` och avsändarens sidfot.
 - **Spara fakturor som klump-PDF eller enskilda PDF:er i `import/`**: En PDF med flera olika fakturor delas automatiskt upp (1 faktura per sida om inget annat anges) och totalimporteras direkt.
 - **Automatisk års-/månadsarkivering & reskontraexport**: Betalda reskontrafakturor flyttas till `import/ÅÅÅÅ/MM/` och reskontran kan exporteras till `.csv` och liggande A4-`.pdf`.

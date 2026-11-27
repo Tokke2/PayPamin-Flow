@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.7
+
+- New default payment terms: 60 SEK reminder fee for private customers, 450 SEK statutory late-payment compensation for business customers, and a contractual annual interest clause of 23 %. Existing installations switch to the statutory model once; invoice data and historical reminders remain untouched.
+- Settings show the full payment terms. New reminder PDFs print the 23 % annual rate separately from the amount due, conditional on agreement. Confirmation explains that agreement is required and the clause is not retroactive. No accrued interest is calculated or added to the total. Snapshots preserve the clause; older snapshots remain interest-free when regenerated.
+
 ## Unreleased — application version remains 0.6.0
 
 - **A reminder that is due now opens its own window instead of a message box.** When the workflow reaches P1 or P2 the app now shows the invoices that are ready as a working list: step, customer, how many days the reminder has waited, and what is left to pay, with a total for each step and the amount to collect. A row opens the normal reminder flow with one click, or jumps to the invoice in the main table; the list rebuilds itself afterwards, so an invoice cannot stay in a window that says it is due once the reminder exists. It is ordered by how long the reminder has waited - the invoice that has been forgotten longest costs the most - and a level whose e-mail draft was already opened is left out, because nagging about work already started is worse than silence. Mixed currencies are never added together.

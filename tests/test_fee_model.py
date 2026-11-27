@@ -82,16 +82,13 @@ class FeeModelTests(unittest.TestCase):
         self.app.set_setting("fee", "150")
         self.assertEqual(self.app.reminder_fee_for(row), 60.0)
 
-    def test_the_app_carries_no_interest_at_all(self):
-        """Interest is outside this app: no rate, no setting, no reminder term."""
-        self.assertFalse(hasattr(self.app, "LATE_PAYMENT_INTEREST"))
-        import fee_rules
-
-        self.assertFalse(hasattr(fee_rules, "assess_interest"))
-        self.assertFalse(any("INTEREST" in name for name in dir(fee_rules)))
+    def test_contractual_interest_rate_is_frozen_in_new_reminder_terms(self):
         terms = self.app.current_reminder_terms(60.0, "private", "SEK")
-        self.assertNotIn("interest", terms)
-        self.assertNotIn("ränta", " ".join(str(value) for value in terms.values()).casefold())
+        self.assertEqual(terms["interest_rate"], 23.0)
+        self.assertEqual(self.app.LATE_PAYMENT_INTEREST, 23.0)
+        # A stale editable setting must not override the fixed contractual rate.
+        self.app.set_setting("interest", "99")
+        self.assertEqual(self.app.current_reminder_terms(60.0)["interest_rate"], 23.0)
 
     def test_a_stored_interest_setting_is_removed_at_start(self):
         with self.app.connect() as db:
@@ -324,7 +321,7 @@ class FeeModelTests(unittest.TestCase):
 
 
 class FeeModelChoiceTests(unittest.TestCase):
-    """150 kr per reminder is the default, and 4 § stays one choice away."""
+    """Statutory terms are the default; legacy models remain compatible."""
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -357,11 +354,27 @@ class FeeModelChoiceTests(unittest.TestCase):
             )
             return db.execute("SELECT * FROM invoices WHERE invoice_no=?", (number,)).fetchone()
 
-    def test_per_reminder_is_the_default_model(self):
-        self.assertEqual(self.app.current_fee_model(), "per_reminder")
-        self.assertEqual(self.app.setting("fee_model"), "per_reminder")
-        self.assertEqual(self.app.reminder_fee_for(self.invoice()), 150.0)
-        self.assertEqual(self.app.reminder_fee_for(self.invoice("business", "MODEL-2")), 150.0)
+    def test_statutory_is_the_default_model(self):
+        self.assertEqual(self.app.current_fee_model(), "statutory")
+        self.assertEqual(self.app.setting("fee_model"), "statutory")
+        self.assertEqual(self.app.reminder_fee_for(self.invoice()), 60.0)
+        self.assertEqual(self.app.reminder_fee_for(self.invoice("business", "MODEL-2")), 450.0)
+
+    def test_existing_install_switches_once_without_changing_reminder_history(self):
+        self.app.set_setting("fee_model", "per_reminder")
+        row = self.invoice()
+        snapshot = self.app.capture_p1_snapshot(row, 150.0, "2026-02-01")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p1_date='2026-02-01',p1_snapshot=?,paid=100 WHERE id=?", (snapshot,row["id"]))
+            db.execute("DELETE FROM settings WHERE key='payment_terms_60_450_23'")
+        self.app.init_db()
+        self.assertEqual(self.app.current_fee_model(), "statutory")
+        with self.app.connect() as db:
+            saved = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+        self.assertEqual(saved["p1_snapshot"], snapshot)
+        self.assertEqual(saved["paid"], 100.0)
+        self.assertEqual(self.app.reminder_fee_for_level(saved,"P2"),150.0)
+        self.assertEqual(self.app.reminder_fee_model_for(saved,"P2"),"per_reminder")
 
     def test_the_statutory_model_is_still_selectable(self):
         self.app.set_setting("fee_model", "statutory")
@@ -379,7 +392,7 @@ class FeeModelChoiceTests(unittest.TestCase):
 
     def test_an_unknown_stored_model_falls_back_to_the_default(self):
         self.app.set_setting("fee_model", "free_amount")
-        self.assertEqual(self.app.current_fee_model(), "per_reminder")
+        self.assertEqual(self.app.current_fee_model(), "statutory")
 
     def test_a_per_reminder_fee_is_never_capped_to_sixty(self):
         row = self.invoice()
@@ -387,6 +400,7 @@ class FeeModelChoiceTests(unittest.TestCase):
         self.assertEqual(self.app.chargeable_fee(row["customer_type"], 150.0, "statutory"), 60.0)
 
     def test_a_private_invoice_is_warned_but_not_blocked_in_the_150_model(self):
+        self.app.set_setting("fee_model", "per_reminder")
         row = self.invoice()
         assessment = self.app.invoice_fee_assessment(row)
         self.assertFalse(assessment.blocked)
@@ -395,6 +409,7 @@ class FeeModelChoiceTests(unittest.TestCase):
         self.assertEqual(self.app.reminder_fee_note(row), "Avgift per påminnelse enligt avtal, 150 kr.")
 
     def test_a_business_invoice_is_lawful_in_the_150_model(self):
+        self.app.set_setting("fee_model", "per_reminder")
         row = self.invoice("business", "MODEL-B")
         assessment = self.app.invoice_fee_assessment(row)
         self.assertFalse(assessment.blocked)
@@ -409,6 +424,7 @@ class FeeModelChoiceTests(unittest.TestCase):
         self.assertEqual(self.app.reminder_fee_note(business), "Förseningsersättning enligt 4 a § lagen (1981:739).")
 
     def test_p2_repeats_the_amount_p1_fixed_even_after_a_model_change(self):
+        self.app.set_setting("fee_model", "per_reminder")
         row = self.invoice()
         snapshot = self.app.capture_p1_snapshot(row, 150.0, "2026-02-01")
         self.assertEqual(self.app.read_reminder_snapshot(snapshot)["terms"]["fee_model"], "per_reminder")

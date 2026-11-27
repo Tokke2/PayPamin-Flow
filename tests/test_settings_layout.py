@@ -260,8 +260,8 @@ class SettingsDialogTests(unittest.TestCase):
         self.build()
 
         labels = [widget.options.get("text") or "" for widget in self.widgets("Label")]
-        # 150 kr per reminder is the selected model.
-        self.assertIn("Avgift per påminnelse: 150,00 kr", labels)
+        # The statutory policy is selected for both new and upgraded installs.
+        self.assertIn("Påminnelseavgift: 60,00 kr · Förseningsersättning: 450,00 kr", labels)
         # The statutory model and its amounts stay one choice away.
         self.assertIn("Avgiftsmodell", labels)
         model_values = [
@@ -275,9 +275,9 @@ class SettingsDialogTests(unittest.TestCase):
         entries = self.widgets("Entry")
         for amount in ("60", "150", "450"):
             self.assertNotIn(amount, [entry.text for entry in entries])
-        # Interest is not part of this app at all, so there is no rate to show.
-        self.assertFalse([text for text in labels if "ränta" in text.casefold()])
-        self.assertFalse([text for text in labels if "interest" in text.casefold()])
+        self.assertIn(self.app.PRIVATE_PAYMENT_TERMS, labels)
+        self.assertIn(self.app.BUSINESS_PAYMENT_TERMS, labels)
+        self.assertIn(self.app.INTEREST_PAYMENT_TERMS, labels)
 
     def test_the_theme_is_chosen_from_three_named_options(self):
         self.build()

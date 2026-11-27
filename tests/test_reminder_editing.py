@@ -166,6 +166,7 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertEqual((level, fee), ("P1", 60.0))
         self.assertEqual(logo_path, str((self.app.SVG_DIR / "new.svg").resolve()))
         self.assertEqual(kwargs["reminder_date"], self.original_date)
+        self.assertNotIn("interest_rate", kwargs["reminder_terms"])
         self.assertEqual(kwargs["output_path"], original_path)
         with self.app.connect() as db:
             saved = db.execute("SELECT logo_file,p1_date,p2_date,sent_count FROM invoices WHERE id=?", (row["id"],)).fetchone()
@@ -174,6 +175,7 @@ class ReminderEditingTests(unittest.TestCase):
         with self.app.connect() as db:
             snapshot = db.execute("SELECT p1_snapshot FROM invoices WHERE id=?", (row["id"],)).fetchone()[0]
         self.assertIsNotNone(self.app.read_p1_snapshot(snapshot))
+        self.assertNotIn("interest_rate", self.app.read_p1_snapshot(snapshot)["terms"])
 
     def test_logo_edit_uses_original_snapshot_terms_row_and_language(self):
         row, original_path = self.save_p1()
@@ -437,12 +439,12 @@ class ReminderEditingTests(unittest.TestCase):
         self.assertIn("fakturanummret", text)
         self.assertIn("egendom tills full betalning", text)
         self.assertIn("anmärkningar på fakturan", text)
-        # The old 150 kr and 23 % do not follow the invoice into the reminder.
+        # Old invoice clauses are stripped; the new rate is printed separately.
         self.assertNotIn("150", text)
         self.assertNotIn("Avgift per påminnelse", text)
         self.assertNotIn("23%", text)
-        self.assertNotIn("23 %", text)
-        self.assertNotIn("ränta", text.casefold())
+        self.assertEqual(text.count("23 %"), 1)
+        self.assertIn("Dröjsmålsränta:", text)
         # The lawful fee is stated once, by the reminder itself.
         self.assertIn("60", text)
         self.assertIn("4 §", text)
@@ -462,7 +464,7 @@ class ReminderEditingTests(unittest.TestCase):
         text = self.pdf_text(path)
         self.assertNotIn("Avser:", text)
         self.assertNotIn("150", text)
-        self.assertNotIn("ränta", text.casefold())
+        self.assertIn("Dröjsmålsränta: 23 %", text)
 
     def test_the_stored_invoice_text_itself_is_never_rewritten(self):
         """Only reminders are cleaned; the invoice keeps its own wording."""
@@ -499,24 +501,42 @@ class ReminderEditingTests(unittest.TestCase):
         )
         self.assertEqual(self.app.reminder_note_text("Dröjsmålsränta 23 % debiteras."), "")
 
-    def test_reminder_pdf_states_no_interest_at_all(self):
-        """Interest is outside this app, so no reminder may mention a rate."""
+    def test_new_reminder_prints_contractual_rate_but_no_accrued_interest(self):
         row, _ = self.save_p1()
-        cases = (("fee", 60.0, "sv"), ("no-fee", 0.0, "sv"), ("english", 60.0, "en"))
-        for name, fee, language in cases:
-            with self.subTest(case=name):
-                self.app.set_language(language)
-                path = self.workspace / f"no-interest-{name}.pdf"
-                self.app.ReminderApp.write_pdf(
-                    self.owner, path, dict(row), "P1", fee, self.original_date,
-                    1000.0, 1000.0 + fee, "", "",
-                )
-                text = self.pdf_text(path).casefold()
-                self.assertNotIn("ränta", text)
-                self.assertNotIn("interest", text)
-                self.assertNotIn("dröjsmål", text)
-                self.assertNotIn("%", text)
+        for level in ("P1", "P2"):
+            for language in ("sv", "en"):
+                with self.subTest(level=level, language=language):
+                    self.app.set_language(language)
+                    path = self.workspace / f"interest-{level}-{language}.pdf"
+                    self.app.ReminderApp.write_pdf(
+                        self.owner, path, dict(row), level, 60.0, self.original_date,
+                        1000.0, 1060.0, "", "",
+                    )
+                    text = self.pdf_text(path)
+                    self.assertEqual(text.count("23 %"), 1)
+                    if language == "sv":
+                        self.assertIn("per år", text)
+                        self.assertIn("endast om det avtalats", text)
+                        self.assertIn("Ingen upplupen ränta", text)
+                        self.assertIn("1 060,00 kr", text)
+                    else:
+                        self.assertIn("per annum", text)
+                        self.assertIn("only if agreed", text)
+                        self.assertIn("No accrued interest", text)
         self.app.set_language("sv")
+
+    def test_historical_snapshot_without_rate_never_gains_interest_when_reprinted(self):
+        row, _ = self.save_p1()
+        terms = self.app.current_reminder_terms(60.0)
+        terms.pop("interest_rate")
+        path = self.workspace / "historical-no-interest.pdf"
+        self.app.ReminderApp.write_pdf(
+            self.owner, path, dict(row), "P1", 60.0, self.original_date,
+            1000.0, 1060.0, "", "", terms,
+        )
+        text = self.pdf_text(path).casefold()
+        self.assertNotIn("23 %", text)
+        self.assertNotIn("ränta", text)
 
     def test_write_letter_passes_snapshot_terms_to_pdf_writer(self):
         row, original_path = self.save_p1()

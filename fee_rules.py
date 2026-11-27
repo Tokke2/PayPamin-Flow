@@ -54,8 +54,17 @@ LATE_PAYMENT_COMPENSATION = 450.0
 FEE_MODEL_PER_REMINDER = "per_reminder"
 FEE_MODEL_STATUTORY = "statutory"
 FEE_MODELS = (FEE_MODEL_PER_REMINDER, FEE_MODEL_STATUTORY)
-DEFAULT_FEE_MODEL = FEE_MODEL_PER_REMINDER
+DEFAULT_FEE_MODEL = FEE_MODEL_STATUTORY
 PER_REMINDER_FEE = 150.0
+
+# Contractual annual rate, not a statutory rate. Displayed as a condition only;
+# accrued interest is not silently added to the amount due.
+LATE_PAYMENT_INTEREST = 23.0
+PRIVATE_PAYMENT_TERMS = "Privatkunder: Vid försenad betalning debiteras påminnelseavgift om 60 kr."
+BUSINESS_PAYMENT_TERMS = "Företagskunder: Vid försenad betalning debiteras lagstadgad förseningsersättning om 450 kr enligt lag (1981:739), 4 a §."
+INTEREST_PAYMENT_TERMS = "Dröjsmålsränta: 23 % per år vid försenad betalning."
+INTEREST_TERMS_NOTICE = "Räntevillkoret gäller endast om det avtalats. Ingen upplupen ränta ingår i beloppet att betala."
+INTEREST_CONFIRMATION = "Dröjsmålsränta: 23 % per år vid försenad betalning. Villkoret skrivs på påminnelsen, men appen lägger inte till något beräknat räntebelopp. Fortsätt endast om 23 % årsränta har avtalats för fakturan; nya villkor gäller inte retroaktivt."
 
 KIND_REMINDER_FEE = "reminder_fee"
 KIND_COMPENSATION = "compensation"
@@ -126,7 +135,7 @@ def is_business(customer_type) -> bool:
 
 
 def normalize_fee_model(value) -> str:
-    """Return a known fee model, defaulting to the per-reminder model."""
+    """Return a known fee model, defaulting to the statutory model."""
     text = str(value or "").strip().lower()
     return text if text in FEE_MODELS else DEFAULT_FEE_MODEL
 

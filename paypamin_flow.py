@@ -37,7 +37,9 @@ from fee_rules import (
     CUSTOMER_AUTHORITY, CUSTOMER_BUSINESS,
     CUSTOMER_PRIVATE, CUSTOMER_TYPES, DEFAULT_FEE_MODEL, FEE_MODELS,
     FEE_MODEL_PER_REMINDER, FEE_MODEL_STATUTORY, LATE_PAYMENT_COMPENSATION,
-    PER_REMINDER_FEE, REMINDER_FEE_CAP,
+    PER_REMINDER_FEE, REMINDER_FEE_CAP, LATE_PAYMENT_INTEREST,
+    PRIVATE_PAYMENT_TERMS, BUSINESS_PAYMENT_TERMS, INTEREST_PAYMENT_TERMS,
+    INTEREST_TERMS_NOTICE, INTEREST_CONFIRMATION,
     assess_fee, chargeable_fee, fee_for_model, fee_kind, fee_label_key, is_business,
     legal_basis_key, normalize_agreement, normalize_customer_type,
     normalize_fee_model,
@@ -691,6 +693,12 @@ def init_db():
         defaults={'p1_days':'5','p2_days':'5','p3_days':'5','fee_agreement':'','objection_days':'5','payment_deadline_days':'5','autostart':'1','learning_enabled':'1','update_auto':'1','auto_import':'1','tray_hint_shown':'0','cache_auto':'1','cache_last_cleanup':'','ledger_friday_reminder':'1','ledger_last_friday_prompt':'','ledger_last_list_date':'','language':'sv',FONT_SCALE_SETTING:'1.0','fee_model':DEFAULT_FEE_MODEL,'invoice_column_order':''}
         for k,v in defaults.items():
             db.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',(k,v))
+        # Adopt the requested 60/450 policy once, including existing installs.
+        # Never rewrite invoices, payments or historical P1/P2 snapshots.
+        if db.execute("SELECT 1 FROM settings WHERE key='payment_terms_60_450_23'").fetchone() is None:
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('fee_model',?)",(FEE_MODEL_STATUTORY,))
+            db.execute("INSERT INTO settings(key,value) VALUES('payment_terms_60_450_23','1')")
+            logger.info('Activated statutory payment terms: private=60 SEK business=450 SEK annual contractual interest=23 percent (text only)')
         # Remove only these obsolete keys; nothing else in the database is
         # touched. They were editable amounts or a rate, and keeping them would
         # let a stale 150 kr or 23 % travel on in journal exports as if it still
@@ -1657,7 +1665,7 @@ def invoice_currency(row):
 
 
 def current_fee_model():
-    """Return the selected fee model, defaulting to the per-reminder model."""
+    """Return the selected fee model, defaulting to the statutory model."""
     return normalize_fee_model(setting('fee_model') or DEFAULT_FEE_MODEL)
 
 
@@ -1787,6 +1795,7 @@ def current_reminder_terms(fee,customer_type=CUSTOMER_PRIVATE,currency='SEK',agr
     amount=float(fee or 0)
     return {
         'fee':amount,
+        'interest_rate':LATE_PAYMENT_INTEREST,
         'fee_kind':fee_kind(customer_type,amount,chosen),
         'fee_model':chosen,
         'customer_type':customer_type,
@@ -1951,8 +1960,8 @@ def reminder_email_company(row):
 # A reminder must never repeat a fee or interest clause from the invoice text.
 # The stored invoice keeps its own wording (it belongs to the original invoice),
 # but an old "Avgift per påminnelse: 150:-" or "23 % ränta" would contradict the
-# amount the app charges today and the fact that this app states no interest at
-# all. Only the reminder is cleaned; nothing in the invoice record changes.
+# current terms. Only the reminder is cleaned; the new contractual interest
+# clause is printed separately and the original invoice record is untouched.
 REMINDER_INTEREST_WORDS=re.compile(
     r'\b(?:dröjsmålsränt\w*|ränta|räntan|räntor|räntesats\w*|räntekostnad\w*|interest(?:\s+rate)?)\b',re.I)
 REMINDER_FEE_WORDS=re.compile(
@@ -7368,6 +7377,7 @@ class ReminderApp(tk.Tk):
                 deadline_line=_('Sista betalningsdag: {date}',date=deadline_bday.isoformat())
             confirmation=_('Skapa {level} för {invoice_no}?\n\n{label}: {fee}\n{note}\nMall: {template}\nSVG-logotyp: {logo}\n\nEn e-postförhandsgranskning visas om kunden har adresser. E-postappen öppnas först efter ditt godkännande. När Thunderbird är standardapp i Windows bifogas PDF:en automatiskt; annars bifogas den manuellt. Inget mejl skickas automatiskt.',level=level,invoice_no=r['invoice_no'],label=_(fee_label_key(invoice_customer_type(r),fee,fee_model)),fee=money(fee,r['currency']),note=reminder_fee_note(r),template=template_name,logo=logo_name)
             confirmation+='\n'+deadline_line
+            confirmation+='\n\n'+_(INTEREST_CONFIRMATION)
             if doc_language!=get_language():
                 doc_lang_label=SUPPORTED_LANGUAGES.get(doc_language,doc_language)
                 confirmation+='\n'+_('Påminnelsespråk: {language}',language=doc_lang_label)
@@ -7381,7 +7391,7 @@ class ReminderApp(tk.Tk):
                 # Transparency: the user sees why the reminder text differs from
                 # the invoice text, before anything is created.
                 confirmation+='\n\n'+_(
-                    'Fakturatexten innehåller ett avgifts- eller räntevillkor. Det skrivs inte ut på påminnelsen, som i stället anger den lagstadgade avgiften och ingen ränta. Fakturatexten på fakturan ändras inte.'
+                    'Fakturatexten innehåller ett avgifts- eller räntevillkor. Det ersätts på påminnelsen av appens valda villkor. Fakturatexten på fakturan ändras inte.'
                 )
                 logger.info('Reminder note contains %d fee/interest clauses that the reminder omits: invoice=%s',len(omitted_terms),r['invoice_no'])
             if ledger_fallback_used and level=='P1':
@@ -7522,6 +7532,9 @@ class ReminderApp(tk.Tk):
         snapshot=read_reminder_snapshot(row[snapshot_column] if snapshot_column in row.keys() else '')
         updated=dict(row)
         reminder_terms=current_reminder_terms(reminder_fee_for(row),invoice_customer_type(row),invoice_currency(row),invoice_fee_agreement(row))
+        # Without a snapshot, this is still an existing reminder, not consent
+        # to new contractual terms. Preserve its pre-policy interest-free text.
+        reminder_terms.pop('interest_rate',None)
         snapshot_language=''
         if snapshot:
             updated.update(snapshot['row'])
@@ -7555,7 +7568,9 @@ class ReminderApp(tk.Tk):
             else:
                 # Older reminders have no snapshot. Freeze the values used for
                 # this successful regeneration before any later edit.
-                snapshot_text=capture_reminder_snapshot(updated,fee,original_date.isoformat(),level)
+                snapshot_payload=json.loads(capture_reminder_snapshot(updated,fee,original_date.isoformat(),level))
+                snapshot_payload['terms']=reminder_terms
+                snapshot_text=json.dumps(snapshot_payload,ensure_ascii=False,sort_keys=True)
                 db.execute(
                     f'UPDATE invoices SET logo_file=?,reminder_message=?,{snapshot_column}=? WHERE id=?',
                     (logo_file,updated['reminder_message'],snapshot_text,row['id']),
@@ -7698,6 +7713,11 @@ class ReminderApp(tk.Tk):
             story.append(Paragraph(escape(_(legal_basis_key(customer_type,fee,fee_model))),styles['SmallText']))
         else:
             story.append(Paragraph(_('Ingen avgift debiteras för den här fakturan.'),styles['SmallText']))
+        # No key means a historical snapshot: never add a new condition when
+        # reprinting an old reminder. This is a rate clause, not accrued money.
+        if effective_terms.get('interest_rate') == LATE_PAYMENT_INTEREST:
+            story.append(Paragraph(escape(_(INTEREST_PAYMENT_TERMS)),styles['SmallText']))
+            story.append(Paragraph(escape(_(INTEREST_TERMS_NOTICE)),styles['SmallText']))
         payment_text=f"<b>{_('Betalning')}</b><br/>Bankgiro: 5660-4200 · Swish: 123 188 42 87<br/>{_('Betalningsmottagare')}: Tadega AB. {_('Ange fakturanumret vid betalning.')}<br/>IBAN: SE26 6000 0000 0005 3862 3322 · BIC: HANDSESS"
         story.append(Paragraph(payment_text,styles['SmallText']))
         if fee>0:
@@ -7915,6 +7935,11 @@ class ReminderApp(tk.Tk):
         hint('Påminnelseavgiften kräver att rätten till den avtalades senast när skulden uppstod. Företag och myndigheter får förseningsersättning i stället, utan avtal.')
         hint('Modellen gäller nya påminnelser. Redan skapade påminnelser behåller sitt belopp och sin grund.')
         hint('Taket gäller i SEK. På en faktura i annan valuta kontrollerar appen inte beloppet automatiskt.')
+        heading('Betalningsvillkor')
+        hint(PRIVATE_PAYMENT_TERMS)
+        hint(BUSINESS_PAYMENT_TERMS)
+        hint(INTEREST_PAYMENT_TERMS)
+        hint('Påminnelseavgiften för privatkunder måste vara avtalad senast när skulden uppkom. Räntan 23 % måste vara avtalad och gäller inte äldre fakturor automatiskt. Appen visar räntevillkoret men beräknar inte upplupen ränta.')
         heading('Start och uppdateringar')
         autostart_var=tk.BooleanVar(value=setting('autostart')=='1')
         check('Starta {app_name} automatiskt när jag loggar in',autostart_var,app_name=APP_NAME)
