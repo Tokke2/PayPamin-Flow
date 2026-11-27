@@ -817,6 +817,7 @@ _ENGLISH = {
     "Företag": "Business",
     "Myndighet": "Authority",
     "Kundtyp (sparas på kunden)": "Customer type (remembered for this customer)",
+    "Företagskund (avmarkerad = privatperson)": "Business customer (unchecked = private individual)",
     "Kundtyp": "Customer type",
     "Var avtalades påminnelseavgiften?": "Where was the reminder fee agreed?",
     "(Inget avtal)": "(No agreement)",

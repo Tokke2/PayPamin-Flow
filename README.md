@@ -309,6 +309,8 @@ PDF-importen föreslår valuta när en kod finns vid **ATT BETALA**, efter **Val
 
 När du skapar eller redigerar en faktura finns **Kundtyp (sparas på kunden)** direkt under kundnamnet. Välj **Privatperson** eller **Företag** (även Myndighet stöds). Valet sparas när fakturan sparas och förväljs nästa gång samma kund anges, även vid PDF-import. Skillnader i stora/små bokstäver och extra mellanslag påverkar inte matchningen. Du kan alltid ändra valet på den nya fakturan; det uppdaterar kundens standard för framtida fakturor utan att ändra tidigare fakturor eller deras påminnelser.
 
+Även **Redigera kund** har kryssrutan **Företagskund (avmarkerad = privatperson)**. Det sparade kundvalet är förvalt. När du sparar uppdateras den valda fakturan och kundens standard för framtida fakturor/importer; andra fakturor och redan skapade påminnelser ändras inte.
+
 ## Påminnelseavgift och förseningsersättning
 
 Appen har **två fasta avgiftsmodeller**, och du väljer mellan dem i **Inställningar → Avgiftsmodell**. Inget belopp skrivs in för hand i någon av dem.

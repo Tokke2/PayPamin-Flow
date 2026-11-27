@@ -302,14 +302,14 @@ class UpdateUiTests(unittest.TestCase):
 
     def test_same_version_release_build_uses_release_comparison(self):
         fake = self.fake_app()
-        release = ReleaseInfo("0.7.9", "v0.7.9", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.9", release_id="200")
+        release = ReleaseInfo("0.7.10", "v0.7.10", "https://github.com/Tokke2/PayPamin-Flow/releases/tag/v0.7.10", release_id="200")
         calls = []
         fake.show_update_available = lambda value: calls.append(value.release_id)
         results = queue.Queue()
         results.put(("ok", True, release))
         with patch.object(self.app, "is_update_available", return_value=True) as compare:
             self.app.ReminderApp._poll_update_check(fake, results)
-        compare.assert_called_once_with(release, "0.7.9")
+        compare.assert_called_once_with(release, "0.7.10")
         self.assertEqual(calls, ["200"])
 
     def test_install_cannot_start_without_a_release_archive(self):

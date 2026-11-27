@@ -125,7 +125,7 @@ class CustomerTypeTests(unittest.TestCase):
         with self.app.connect() as db:
             self.assertEqual(get_customer_type(db, "Alex Svensson"), "private")
 
-    def dialog(self, interaction, row=None, guess=None):
+    def dialog(self, interaction, row=None, guess=None, edit_customer=False):
         """Build and interact with the real invoice dialog using recording widgets."""
         registry = []
         window = FakeWindow("Invoice", registry, 1920)
@@ -156,6 +156,9 @@ class CustomerTypeTests(unittest.TestCase):
             for kind in ("Entry", "Label", "Frame", "Combobox", "Button", "Checkbutton"):
                 factory = lambda master=None, _kind=kind, **opts: Widget(_kind, master, **opts)
                 stack.enter_context(patch.object(self.app.ttk, kind, factory, create=True))
+            if edit_customer:
+                owner.selected=lambda: row
+                return self.app.ReminderApp.edit_customer(owner)
             return self.app.ReminderApp.invoice_dialog(owner, "Ny faktura", row=row, guess=guess)
 
     def test_dialog_reuses_typed_customer_and_preserves_manual_override_until_customer_changes(self):
@@ -202,3 +205,96 @@ class CustomerTypeTests(unittest.TestCase):
             window.destroy()
 
         self.assertFalse(self.dialog(check_default, guess=self.record("TYPE-2")))
+
+    def customer_edit_row(self, customer_type="private"):
+        self.app.save_invoice_record(self.record(customer_type=customer_type))
+        with self.app.connect() as db:
+            return db.execute("SELECT * FROM invoices WHERE invoice_no='TYPE-1'").fetchone()
+
+    def test_edit_customer_checkbox_saves_business_and_reuses_on_future_invoice(self):
+        row = self.customer_edit_row()
+
+        def choose_business(widgets, window):
+            checkbox = next(w for w in widgets if w.kind == "Checkbutton")
+            self.assertIn("avmarkerad = privatperson", checkbox.options["text"])
+            self.assertFalse(checkbox.options["variable"].get())
+            checkbox.options["variable"].set(True)
+            next(w for w in widgets if w.kind == "Button" and w.options.get("text") == "Spara").options["command"]()
+            self.assertTrue(window.destroyed)
+
+        self.dialog(choose_business, row=row, edit_customer=True)
+        with self.app.connect() as db:
+            self.assertEqual(get_customer_type(db, row["customer"]), "business")
+            self.assertEqual(db.execute("SELECT customer_type FROM invoices WHERE id=?", (row["id"],)).fetchone()[0], "business")
+        self.app.save_invoice_record(self.record("TYPE-2"))
+        with self.app.connect() as db:
+            self.assertEqual(db.execute("SELECT customer_type FROM invoices WHERE invoice_no='TYPE-2'").fetchone()[0], "business")
+
+        def reopen(widgets, window):
+            self.assertTrue(next(w for w in widgets if w.kind == "Checkbutton").options["variable"].get())
+            window.destroy()
+
+        self.dialog(reopen, row=row, edit_customer=True)
+
+    def test_edit_customer_unchecked_saves_private_and_keeps_other_invoice_history(self):
+        row = self.customer_edit_row("business")
+        self.app.save_invoice_record(self.record("TYPE-2", customer_type="business"))
+        snapshot = self.app.capture_p1_snapshot(row, 450.0, "2026-02-01")
+        with self.app.connect() as db:
+            db.execute("UPDATE invoices SET p1_date='2026-02-01',p1_snapshot=?,paid=100 WHERE id=?", (snapshot, row["id"]))
+            row = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+
+        def choose_private(widgets, window):
+            checkbox = next(w for w in widgets if w.kind == "Checkbutton")
+            self.assertTrue(checkbox.options["variable"].get())
+            checkbox.options["variable"].set(False)
+            next(w for w in widgets if w.kind == "Button" and w.options.get("text") == "Spara").options["command"]()
+
+        self.dialog(choose_private, row=row, edit_customer=True)
+        with self.app.connect() as db:
+            edited = db.execute("SELECT * FROM invoices WHERE id=?", (row["id"],)).fetchone()
+            self.assertEqual(edited["customer_type"], "private")
+            self.assertEqual(edited["p1_snapshot"], snapshot)
+            self.assertEqual(edited["paid"], 100.0)
+            self.assertEqual(get_customer_type(db, row["customer"]), "private")
+            self.assertEqual(db.execute("SELECT customer_type FROM invoices WHERE invoice_no='TYPE-2'").fetchone()[0], "business")
+        self.assertEqual(self.app.infer_imported_customer_type(row["customer"]), "private")
+
+    def test_edit_customer_checkbox_falls_back_to_invoice_type_for_legacy_contact(self):
+        row = self.customer_edit_row("business")
+        with self.app.connect() as db:
+            db.execute("UPDATE customer_contacts SET customer_type=''")
+
+        def inspect(widgets, window):
+            self.assertTrue(next(w for w in widgets if w.kind == "Checkbutton").options["variable"].get())
+            window.destroy()
+
+        self.dialog(inspect, row=row, edit_customer=True)
+
+    def test_cancel_customer_checkbox_change_does_not_save(self):
+        row = self.customer_edit_row("business")
+
+        def cancel(widgets, window):
+            next(w for w in widgets if w.kind == "Checkbutton").options["variable"].set(False)
+            next(w for w in widgets if w.kind == "Button" and w.options.get("text") == "Stäng").options["command"]()
+
+        self.dialog(cancel, row=row, edit_customer=True)
+        with self.app.connect() as db:
+            self.assertEqual(get_customer_type(db, row["customer"]), "business")
+            self.assertEqual(db.execute("SELECT customer_type FROM invoices WHERE id=?", (row["id"],)).fetchone()[0], "business")
+
+    def test_customer_checkbox_preserves_authority_on_unchanged_save(self):
+        row = self.customer_edit_row("authority")
+
+        def save_without_changing_type(widgets, window):
+            self.assertTrue(next(w for w in widgets if w.kind == "Checkbutton").options["variable"].get())
+            next(w for w in widgets if w.kind == "Entry" and w.grid_calls[0]["row"] == 1).insert(0, "changed@example.com")
+            next(w for w in widgets if w.kind == "Combobox").options["textvariable"].set("Engelska (English)")
+            next(w for w in widgets if w.kind == "Button" and w.options.get("text") == "Spara").options["command"]()
+
+        self.dialog(save_without_changing_type, row=row, edit_customer=True)
+        with self.app.connect() as db:
+            contact = self.app.get_customer_contact(db, row["customer"])
+            self.assertEqual(contact["customer_type"], "authority")
+            self.assertEqual(contact["emails"], "changed@example.com")
+            self.assertEqual(contact["language"], "en")

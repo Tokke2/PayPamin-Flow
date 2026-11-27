@@ -6620,10 +6620,12 @@ class ReminderApp(tk.Tk):
         if r:self.invoice_dialog('Redigera faktura',row=r)
 
     def edit_customer(self):
-        """Edit the selected invoice's customer, reusable recipients and reminder language."""
+        """Edit customer details, remembered customer type and reminder language."""
         r=self.selected()
         if not r:return
         values=apply_saved_customer_contact(dict(r))
+        with connect() as db:
+            initial_customer_type=get_customer_type(db,r['customer']) or invoice_customer_type(r)
         saved_cust_lang=customer_reminder_language(r)
         lang_labels=[_(label) for _code,label in CUSTOMER_LANGUAGE_CHOICES]
         initial_lang_label=next((_(label) for code,label in CUSTOMER_LANGUAGE_CHOICES if code==saved_cust_lang),lang_labels[0])
@@ -6633,14 +6635,17 @@ class ReminderApp(tk.Tk):
         customer_entry=ttk.Entry(form,width=52);customer_entry.grid(row=0,column=1,pady=5);customer_entry.insert(0,r['customer'])
         ttk.Label(form,text=_('E-postadresser')).grid(row=1,column=0,sticky='w',padx=(0,12),pady=5)
         email_entry=ttk.Entry(form,width=52);email_entry.grid(row=1,column=1,pady=5);email_entry.insert(0,values.get('email',''))
-        ttk.Label(form,text=_('Språk för påminnelser')).grid(row=2,column=0,sticky='w',padx=(0,12),pady=5)
+        ttk.Label(form,text=_('Kundtyp')).grid(row=2,column=0,sticky='w',padx=(0,12),pady=5)
+        business_customer_var=tk.BooleanVar(value=is_business(initial_customer_type))
+        ttk.Checkbutton(form,text=_('Företagskund (avmarkerad = privatperson)'),variable=business_customer_var).grid(row=2,column=1,sticky='w',pady=5)
+        ttk.Label(form,text=_('Språk för påminnelser')).grid(row=3,column=0,sticky='w',padx=(0,12),pady=5)
         cust_lang_var=tk.StringVar(value=initial_lang_label)
         cust_lang_combo=ttk.Combobox(form,textvariable=cust_lang_var,state='readonly',values=lang_labels,width=49)
-        cust_lang_combo.grid(row=2,column=1,sticky='w',pady=5)
+        cust_lang_combo.grid(row=3,column=1,sticky='w',pady=5)
         ttk.Label(
             form,text=_('Flera adresser: separera med kommatecken (,). Kundens adresser återanvänds på nästa faktura till samma kund.'),
             wraplength=470,
-        ).grid(row=3,column=0,columnspan=2,sticky='w',pady=(5,12))
+        ).grid(row=4,column=0,columnspan=2,sticky='w',pady=(5,12))
         def save():
             customer=customer_entry.get().strip()
             if not customer:
@@ -6649,16 +6654,20 @@ class ReminderApp(tk.Tk):
             except EmailAddressError as exc:
                 messagebox.showerror(_('Ogiltig e-postadress'),_('Kontrollera adressen: {email}',email=exc.address),parent=w);return
             chosen_lang=next((code for code,label in CUSTOMER_LANGUAGE_CHOICES if _(label)==cust_lang_var.get()),'')
+            # A saved authority remains an authority while checked; merely
+            # editing an address must not silently change that classification.
+            customer_type=(CUSTOMER_AUTHORITY if initial_customer_type==CUSTOMER_AUTHORITY else CUSTOMER_BUSINESS) if business_customer_var.get() else CUSTOMER_PRIVATE
             record=dict(r);record['customer']=customer;record['email']=emails
+            record['customer_type']=customer_type
             duplicate=save_invoice_record(record,r['id'])
             if duplicate:
                 show_duplicate_invoice(duplicate,parent=w);return
             with connect() as db:
                 save_customer_contact(db,customer,emails,record.get('logo_file'),language=chosen_lang)
             refresh_json_journal(parent=w)
-            logger.info('Customer contact updated: invoice=%s recipients=%d language=%s',r['id'],len(parse_email_addresses(emails)),chosen_lang or 'default')
+            logger.info('Customer contact updated: invoice=%s recipients=%d language=%s customer_type=%s',r['id'],len(parse_email_addresses(emails)),chosen_lang or 'default',customer_type)
             w.destroy();self.refresh()
-        buttons=ttk.Frame(form);buttons.grid(row=4,column=0,columnspan=2,sticky='e')
+        buttons=ttk.Frame(form);buttons.grid(row=5,column=0,columnspan=2,sticky='e')
         ttk.Button(buttons,text=_('Spara'),command=save,style='Accent.TButton').pack(side='left',padx=(0,7))
         ttk.Button(buttons,text=_('Stäng'),command=w.destroy).pack(side='left')
         prep=getattr(self,'_prepare_modal_toplevel',None)

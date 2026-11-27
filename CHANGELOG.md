@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.10
+
+- Edit customer now includes a remembered Business customer checkbox: checked means business, unchecked means private individual. The stored customer default is preselected, with fallback to the selected invoice. Saving updates the selected invoice and the customer default for future invoices/imports; other invoices and existing reminder snapshots are untouched. Existing authority classifications survive an unchanged checked box.
+
 ## 0.7.9
 
 - Automatic updates are checked once per local calendar day at midnight, with one catch-up check after a missed run. A persisted check date avoids repeated startup requests, and a local clock watchdog handles sleep/time-zone changes without network polling. Disabled checks and running installations are respected.
