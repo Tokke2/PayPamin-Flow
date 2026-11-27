@@ -427,6 +427,97 @@ class MultiInvoicePdfTests(unittest.TestCase):
         self.assertEqual(parsed["due_date"], "2026-11-20")
         self.assertEqual(parsed["note"], "Byte av vindruta reg.nr ABC 123 Kalibrering kamera")
 
+    def test_fortnox_horizontal_summary_boxes_pick_att_betala_incl_vat_and_strip_lev_ant(self):
+        # Exact Fortnox layout (e.g. LimoEurope faktura 6479): PyMuPDF plain text
+        # emits all four summary box headers first and then all four amounts, and
+        # table headers use "Benämning | Lev ant | Enh | À-pris | Summa".
+        limoeurope_text = (
+            "LimoEurope\n"
+            "FAKTURA\n"
+            "Fakturanummer\n"
+            "6479\n"
+            "Fakturadatum\n"
+            "2026-11-12\n"
+            "Förfallodatum\n"
+            "2026-11-22\n"
+            "Betalningsvillkor\n"
+            "10 dagar netto\n"
+            "Faktureringsadress\n"
+            "Andreas Andersson\n"
+            "Sveavägen 10\n"
+            "111 57 Stockholm\n"
+            "Benämning\n"
+            "Lev ant\n"
+            "Enh\n"
+            "À-pris\n"
+            "Summa\n"
+            "Exkl. moms\n"
+            "Moms\n"
+            "Öresavrundning\n"
+            "Att betala\n"
+            "12 700,00\n"
+            "3 175,00\n"
+            "0,00\n"
+            "15 875,00\n"
+        )
+        parsed = parse_invoice_text(limoeurope_text)
+        self.assertEqual(parsed["invoice_no"], "6479")
+        self.assertEqual(parsed["customer"], "Andreas Andersson")
+        self.assertEqual(parsed["payment_terms"], "10 dagar netto")
+        self.assertEqual(parsed["amount"], 15875.0)
+        self.assertEqual(parsed["note"], "")
+
+    def test_fortnox_pdf_spatial_boxes_and_lev_ant_with_real_fitz_coordinates(self):
+        import fitz
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = Path(tmp) / "faktura_6479.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=595, height=842)
+            page.insert_text((45, 55), "LimoEurope", fontsize=14)
+            page.insert_text((380, 55), "FAKTURA", fontsize=14)
+            page.insert_text((380, 80), "Fakturanummer: 6479", fontsize=10)
+            page.insert_text((380, 96), "Fakturadatum: 2026-11-12", fontsize=10)
+            page.insert_text((380, 112), "Förfallodatum: 2026-11-22", fontsize=10)
+            page.insert_text((380, 128), "Betalningsvillkor: 10 dagar netto", fontsize=10)
+            page.insert_text((380, 155), "Kund:", fontsize=10)
+            page.insert_text((380, 170), "Andreas Andersson", fontsize=10)
+            page.insert_text((380, 184), "Sveavägen 10", fontsize=10)
+            page.insert_text((380, 198), "111 57 Stockholm", fontsize=10)
+            # Table headers side-by-side
+            page.insert_text((45, 290), "Benämning", fontsize=9)
+            page.insert_text((280, 290), "Lev ant", fontsize=9)
+            page.insert_text((340, 290), "Enh", fontsize=9)
+            page.insert_text((390, 290), "À-pris", fontsize=9)
+            page.insert_text((490, 290), "Summa", fontsize=9)
+            # Invoice row description
+            page.insert_text((45, 310), "Chaufförstjänst VIP Arlanda", fontsize=10)
+            page.insert_text((285, 310), "1", fontsize=10)
+            page.insert_text((340, 310), "st", fontsize=10)
+            page.insert_text((390, 310), "12 700,00", fontsize=10)
+            page.insert_text((490, 310), "12 700,00", fontsize=10)
+            # Bottom 4 summary boxes side-by-side at identical Y
+            page.insert_text((45, 700), "Exkl. moms", fontsize=9)
+            page.insert_text((180, 700), "Moms", fontsize=9)
+            page.insert_text((310, 700), "Öresavrundning", fontsize=9)
+            page.insert_text((455, 700), "Att betala SEK", fontsize=9)
+            page.insert_text((45, 718), "12 700,00", fontsize=11)
+            page.insert_text((180, 718), "3 175,00", fontsize=11)
+            page.insert_text((310, 718), "0,00", fontsize=11)
+            page.insert_text((455, 718), "15 875,00", fontsize=11)
+            doc.save(str(pdf_path))
+            doc.close()
+
+            sections = extract_invoice_sections(pdf_path)
+            self.assertEqual(len(sections), 1)
+            guessed = parse_invoice_text(sections[0].text)
+            self.assertEqual(guessed["invoice_no"], "6479")
+            self.assertEqual(guessed["customer"], "Andreas Andersson")
+            self.assertEqual(guessed["payment_terms"], "10 dagar netto")
+            self.assertEqual(guessed["amount"], 15875.0)
+            self.assertEqual(guessed["currency"], "SEK")
+            self.assertEqual(guessed["note"], "Chaufförstjänst VIP Arlanda")
+
 
 if __name__ == "__main__":
     unittest.main()

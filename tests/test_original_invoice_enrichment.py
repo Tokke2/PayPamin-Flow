@@ -297,6 +297,178 @@ class OriginalInvoiceEnrichmentTests(unittest.TestCase):
         self.assertEqual(saved["payment_terms"], "10 dagar netto")
         self.assertEqual(saved["note"], "Specialglas limousin")
 
+    def test_import_scan_replaces_ledger_row_even_when_source_hash_already_matched_earlier_version(self):
+        from invoice_parser import InvoiceSection
+        from ledger_import import apply_ledger_import, parse_ledger_pages
+
+        import_dir = self.workspace / "import"
+        import_dir.mkdir(parents=True, exist_ok=True)
+        self.app.IMPORT_DIR = import_dir
+
+        pdf = import_dir / "faktura_6479.pdf"
+        pdf.write_bytes(b"limoeurope-6479-bytes")
+        existing_hash = self.app.file_sha256(pdf)
+
+        ledger = parse_ledger_pages([
+            "LimoEurope\nKundreskontralista\nPer datum 2026-11-26\n"
+            "105 Andreas Andersson\n"
+            "6479 2026-11-12 2026-11-22 SEK 15 875,00 15 875,00\n"
+            "Antal fakturor 1\nTotalsumma i SEK 15 875,00\n1/1\n"
+        ])
+        apply_ledger_import(self.app.DB_PATH, ledger)
+        # Simulate v0.7.3 state: source + source_hash already linked, but payment_terms/note missing!
+        with self.app.connect() as db:
+            db.execute(
+                "UPDATE invoices SET source=?, source_hash=?, note='Lev ant' WHERE invoice_no='6479'",
+                (str(pdf.resolve()), existing_hash),
+            )
+
+        pdf_text = (
+            "LimoEurope\n"
+            "FAKTURA\n"
+            "Fakturanummer: 6479\n"
+            "Fakturadatum: 2026-11-12\n"
+            "Förfallodatum: 2026-11-22\n"
+            "Betalningsvillkor: 10 dagar netto\n"
+            "Kund:\n"
+            "Andreas Andersson\n"
+            "Sveavägen 10\n"
+            "111 57 Stockholm\n"
+            "Benämning\n"
+            "Lev ant\n"
+            "Enh\n"
+            "À-pris\n"
+            "Summa\n"
+            "VIP-transport Arlanda\n"
+            "Exkl. moms\n"
+            "Moms\n"
+            "Öresavrundning\n"
+            "Att betala\n"
+            "12 700,00\n"
+            "3 175,00\n"
+            "0,00\n"
+            "15 875,00\n"
+        )
+        fake = SimpleNamespace(
+            _import_scan_running=False,
+            guess_supplier=Mock(return_value="LimoEurope"),
+            apply_saved_zones=Mock(side_effect=lambda _p, _v, g, page_indexes=None: g),
+            preview_invoice=Mock(side_effect=AssertionError("Must not open preview")),
+            add_invoice=Mock(side_effect=AssertionError("Must not open add dialog")),
+            refresh=Mock(),
+        )
+        with (
+            patch.object(self.app, "extract_invoice_sections", return_value=[InvoiceSection((0,), pdf_text)]),
+            patch.object(self.app.messagebox, "showinfo", create=True),
+            patch.object(self.app, "show_due_reminder_dialog"),
+        ):
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True)
+
+        with self.app.connect() as db:
+            updated = db.execute("SELECT * FROM invoices WHERE invoice_no='6479'").fetchone()
+        self.assertEqual(updated["customer"], "Andreas Andersson")
+        self.assertEqual(updated["payment_terms"], "10 dagar netto")
+        self.assertEqual(updated["note"], "VIP-transport Arlanda")
+        self.assertEqual(updated["amount"], 15875.0)
+        self.assertEqual(updated["template_vendor"], "LimoEurope")
+        # Verify P1 source check now finds ZERO differences!
+        with patch.object(self.app, "extract_invoice_sections", return_value=[InvoiceSection((0,), pdf_text)]):
+            self.assertEqual(self.app.verify_invoice_source(updated), [])
+
+        # Second scan immediately afterwards must detect zero changes and do no redundant update.
+        with (
+            patch.object(self.app, "extract_invoice_sections", return_value=[InvoiceSection((0,), pdf_text)]),
+            patch.object(self.app, "save_invoice_record", wraps=self.app.save_invoice_record) as save_spy,
+            patch.object(self.app.messagebox, "showinfo", create=True),
+            patch.object(self.app, "show_due_reminder_dialog"),
+        ):
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True)
+        save_spy.assert_not_called()
+
+    def test_batch_pdf_with_25_invoices_replaces_existing_ledger_rows_and_splits_per_invoice(self):
+        import fitz
+        from import_watcher import ImportFolderMonitor
+        from ledger_import import apply_ledger_import, parse_ledger_pages
+
+        import_dir = self.workspace / "import_batch25"
+        import_dir.mkdir(parents=True, exist_ok=True)
+        self.app.IMPORT_DIR = import_dir
+
+        # Step 1: Import 22 open invoices via Kundreskontralistan first (with generic/missing fields).
+        ledger_lines = ["Tadega AB", "Kundreskontralista", "Per datum 2026-11-25"]
+        total_sek = 0
+        for idx in range(1, 23):
+            inv_no = 7000 + idx
+            amt = 1000 + idx * 100
+            total_sek += amt
+            ledger_lines.append(f"{100 + idx} Reskontra Kund {idx}")
+            ledger_lines.append(f"{inv_no} 2026-11-01 2026-11-16 SEK {amt},00 {amt},00")
+        ledger_lines.append("Antal fakturor 22")
+        ledger_lines.append(f"Totalsumma i SEK {total_sek:,}".replace(",", " ") + ",00")
+        ledger_lines.append("1/1")
+        ledger = parse_ledger_pages(["\n".join(ledger_lines)])
+        apply_ledger_import(self.app.DB_PATH, ledger)
+
+        # Step 2: Drop a single batch PDF containing 25 invoices (the 22 ledger invoices + 3 brand-new ones) into import/.
+        batch_pdf = import_dir / "faktura_bunt_25st.pdf"
+        doc = fitz.open()
+        for idx in range(1, 26):
+            inv_no = 7000 + idx
+            amt = 1000 + idx * 100
+            page = doc.new_page(width=595, height=842)
+            page_text = (
+                f"Sida 1 av 1\n"
+                f"Fakturanummer: {inv_no}\n"
+                f"Fakturadatum: 2026-11-01\n"
+                f"Förfallodatum: 2026-11-16\n"
+                f"Betalningsvillkor: 15 dagar netto\n"
+                f"Kund: Riktig Kund {idx} AB\n"
+                f"Avser: Vindrutebyte order {idx}\n"
+                f"ATT BETALA {amt},00 SEK\n"
+            )
+            page.insert_text((45, 60), page_text, fontname="helv", fontsize=10)
+        doc.save(str(batch_pdf))
+        doc.close()
+
+        monitor = ImportFolderMonitor(import_dir)
+        fake = SimpleNamespace(
+            _import_scan_running=False,
+            _import_monitor=monitor,
+            guess_supplier=lambda *args, **kwargs: "Tadega AB",
+            apply_saved_zones=lambda _p, _v, g, page_indexes=None: g,
+            preview_invoice=lambda *args, **kwargs: self.fail("Batch of 25 must not open preview"),
+            add_invoice=lambda **kwargs: self.fail("Batch of 25 must not open form"),
+            refresh=lambda: None,
+        )
+        with (
+            patch.object(self.app.messagebox, "showinfo", create=True),
+            patch.object(self.app, "show_due_reminder_dialog"),
+        ):
+            self.app.ReminderApp.scan_import_folder(fake, automatic=True)
+
+        # Batch container PDF is split into 25 per-invoice PDFs and removed.
+        self.assertFalse(batch_pdf.exists())
+        for idx in range(1, 26):
+            inv_no = str(7000 + idx)
+            split_file = import_dir / f"faktura_{inv_no}.pdf"
+            self.assertTrue(split_file.is_file(), f"Missing split PDF for {inv_no}")
+
+        with self.app.connect() as db:
+            rows = {r["invoice_no"]: r for r in db.execute("SELECT * FROM invoices WHERE invoice_no >= '7001'").fetchall()}
+        self.assertEqual(len(rows), 25)
+        # Check that ALL 22 ledger-imported rows were replaced/enriched with the PDF's real data AND kept ledger markers!
+        for idx in range(1, 23):
+            inv_no = str(7000 + idx)
+            row = rows[inv_no]
+            self.assertEqual(row["customer"], f"Riktig Kund {idx} AB")
+            self.assertEqual(row["customer_type"], "business")
+            self.assertEqual(row["payment_terms"], "15 dagar netto")
+            self.assertEqual(row["note"], f"Vindrutebyte order {idx}")
+            self.assertEqual(row["template_vendor"], "Tadega AB")
+            self.assertEqual(Path(row["source"]), (import_dir / f"faktura_{inv_no}.pdf").resolve())
+            self.assertEqual(row["ledger_last_seen"], "2026-11-25")
+            self.assertEqual(self.app.verify_invoice_source(row), [])
+
 
 if __name__ == "__main__":
     unittest.main()

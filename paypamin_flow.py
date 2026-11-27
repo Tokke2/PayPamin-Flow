@@ -1306,17 +1306,45 @@ def try_auto_save_imported_invoice(guess,source,source_hash):
     return True
 
 
+def _extract_or_replace_import_section(batch_path,import_dir,page_indexes,*,invoice_no='',existing_source=''):
+    """Extract a batch PDF invoice section into ``import_dir``, replacing any existing per-invoice PDF cleanly."""
+    extracted=extract_section_pdf_to_import(batch_path,import_dir,page_indexes,invoice_no=invoice_no)
+    if extracted is None:
+        return None
+    old_raw=str(existing_source or '').strip()
+    if old_raw:
+        try:
+            old_path=Path(old_raw).expanduser().resolve()
+            root_path=Path(import_dir).expanduser().resolve()
+            batch_resolved=Path(batch_path).expanduser().resolve()
+            if (
+                old_path.is_file()
+                and old_path.parent==root_path
+                and old_path!=batch_resolved
+                and old_path!=extracted.resolve()
+            ):
+                extracted.replace(old_path)
+                return old_path
+        except OSError:
+            report_fault()
+    return extracted
+
+
 def enrich_ledger_invoice_from_pdf(row,guess,source,source_hash):
-    """Enrich an existing ledger-imported invoice from its original invoice PDF.
+    """Replace/enrich a ledger-imported invoice row from its invoice PDF in import/.
 
     Updates customer name (correcting wrong/generic ledger customer names),
-    customer_type, payment_terms, invoice text (note), invoice_date, supplier
-    template, and linked PDF source/hash while preserving ledger amounts,
-    payments, and P1/P2 reminder history.
+    customer_type, invoice_date, due_date, payment_terms, invoice text (note),
+    amount/currency (before payments or reminders exist), supplier template, and
+    linked PDF source/hash while preserving ledger tracking, payments, and P1/P2
+    reminder history. Returns True only when at least one field actually changed.
     """
     if row is None or not isinstance(guess,dict):
         return False
     existing=dict(row)
+    has_reminder=bool(str(existing.get('p1_date') or '').strip())
+    paid_val=float(existing.get('paid') or 0.0)
+
     old_customer=str(existing.get('customer') or '').strip()
     pdf_customer=str(guess.get('customer') or '').strip()
     new_customer=pdf_customer or old_customer
@@ -1329,18 +1357,39 @@ def enrich_ledger_invoice_from_pdf(row,guess,source,source_hash):
     pdf_terms=str(guess.get('payment_terms') or '').strip()[:80]
     new_terms=pdf_terms or str(existing.get('payment_terms') or '').strip()[:80]
 
-    new_due=str(existing.get('due_date') or '').strip()
-    if not dparse(new_due):
-        due_raw=normalize_date(str(guess.get('due_date') or '').strip()) or str(guess.get('due_date') or '').strip()
-        if dparse(due_raw):
-            new_due=due_raw
-        elif new_inv_date and new_terms:
-            terms_days=parse_payment_terms_days(new_terms)
-            if terms_days is not None:
-                new_due=(date.fromisoformat(new_inv_date)+timedelta(days=terms_days)).isoformat()
+    due_raw=normalize_date(str(guess.get('due_date') or '').strip()) or str(guess.get('due_date') or '').strip()
+    existing_due=str(existing.get('due_date') or '').strip()
+    if not has_reminder and dparse(due_raw):
+        new_due=due_raw
+    elif dparse(existing_due):
+        new_due=existing_due
+    elif new_inv_date and new_terms:
+        terms_days=parse_payment_terms_days(new_terms)
+        new_due=(date.fromisoformat(new_inv_date)+timedelta(days=terms_days)).isoformat() if terms_days is not None else existing_due
+    else:
+        new_due=existing_due
+
+    raw_amt=guess.get('amount')
+    if isinstance(raw_amt,(int,float)):
+        pdf_amount=float(raw_amt)
+    else:
+        parsed_amt=parse_amount_value(str(raw_amt or ''))
+        pdf_amount=float(parsed_amt) if parsed_amt is not None else 0.0
+    existing_amount=float(existing.get('amount') or 0.0)
+    existing_currency=normalize_currency(existing.get('currency') or 'SEK')
+    if not has_reminder and paid_val<=0.005 and pdf_amount>0:
+        new_amount=pdf_amount
+        curr_cand=str(guess.get('currency') or existing_currency).strip()
+        new_currency=normalize_currency(curr_cand) if is_valid_currency(curr_cand) else existing_currency
+    else:
+        new_amount=existing_amount
+        new_currency=existing_currency
 
     pdf_note=clean_invoice_note(str(guess.get('note') or ''))
-    new_note=pdf_note or str(existing.get('note') or '').strip()
+    existing_note=str(existing.get('note') or '').strip()
+    if existing_note.casefold()=='lev ant':
+        existing_note=''
+    new_note=pdf_note or existing_note
 
     pdf_vendor=str(guess.get('template_vendor') or '').strip()
     new_vendor=pdf_vendor or str(existing.get('template_vendor') or '').strip()
@@ -1363,7 +1412,7 @@ def enrich_ledger_invoice_from_pdf(row,guess,source,source_hash):
         new_email=_sanitize_auto_emails(contact_probe.get('email',''))
         new_logo=contact_probe.get('logo_file')
 
-    if not str(existing.get('p1_date') or '').strip():
+    if not has_reminder:
         if customer_changed or normalize_customer_type(existing.get('customer_type'))==CUSTOMER_PRIVATE:
             new_ctype=infer_imported_customer_type(new_customer)
         else:
@@ -1371,21 +1420,60 @@ def enrich_ledger_invoice_from_pdf(row,guess,source,source_hash):
     else:
         new_ctype=normalize_customer_type(existing.get('customer_type'))
 
+    new_source=source or str(existing.get('source') or '').strip()
+    new_hash=source_hash or str(existing.get('source_hash') or '').strip()
+    new_agreement=normalize_agreement(existing.get('fee_agreement')) or normalize_agreement(setting('fee_agreement'))
+
+    before_state=(
+        old_customer,
+        str(existing.get('invoice_date') or '').strip(),
+        existing_due,
+        str(existing.get('payment_terms') or '').strip()[:80],
+        str(existing.get('note') or '').strip(),
+        round(existing_amount,2),
+        existing_currency,
+        str(existing.get('template_vendor') or '').strip(),
+        str(existing.get('email') or '').strip(),
+        str(existing.get('logo_file') or ''),
+        normalize_customer_type(existing.get('customer_type')),
+        str(existing.get('source') or '').strip(),
+        str(existing.get('source_hash') or '').strip(),
+    )
+    after_state=(
+        new_customer,
+        new_inv_date,
+        new_due,
+        new_terms,
+        new_note,
+        round(new_amount,2),
+        new_currency,
+        new_vendor,
+        new_email,
+        str(new_logo or ''),
+        new_ctype,
+        new_source,
+        new_hash,
+    )
+    if before_state==after_state:
+        return False
+
     record=dict(existing)
     record.update(
         customer=new_customer,
         invoice_date=new_inv_date,
         due_date=new_due,
         payment_terms=new_terms,
+        amount=new_amount,
+        currency=new_currency,
         template_vendor=new_vendor,
         email=new_email,
-        source=source or str(existing.get('source') or '').strip(),
-        source_hash=source_hash or str(existing.get('source_hash') or '').strip(),
+        source=new_source,
+        source_hash=new_hash,
         note=new_note,
         reviewed=1,
         logo_file=new_logo,
         customer_type=new_ctype,
-        fee_agreement=normalize_agreement(existing.get('fee_agreement')) or normalize_agreement(setting('fee_agreement')),
+        fee_agreement=new_agreement,
     )
     duplicate=save_invoice_record(record,existing['id'])
     if duplicate is not None:
@@ -1401,8 +1489,8 @@ def enrich_ledger_invoice_from_pdf(row,guess,source,source_hash):
         has_note=bool(new_note),payment_terms=new_terms,
     )
     logger.info(
-        'Enriched ledger invoice from PDF: invoice=%s old_customer=%s new_customer=%s terms=%s has_note=%s file=%s',
-        existing['invoice_no'],old_customer,new_customer,new_terms,bool(new_note),source,
+        'Replaced/enriched ledger invoice from PDF: invoice=%s old_customer=%s new_customer=%s terms=%s has_note=%s file=%s',
+        existing['invoice_no'],old_customer,new_customer,new_terms,bool(new_note),new_source,
     )
     return True
 
@@ -6108,8 +6196,7 @@ class ReminderApp(tk.Tk):
                                                 logger.exception('Could not archive split paid invoice PDF: %s',extracted_paid)
                                 continue
                             if duplicate:
-                                saved_dup_hash=str(duplicate['source_hash'] or '').strip()
-                                if has_ledger_import_basis(duplicate) and saved_dup_hash!=candidate_hash:
+                                if has_ledger_import_basis(duplicate):
                                     guess_fn=getattr(self,'guess_supplier',None)
                                     zones_fn=getattr(self,'apply_saved_zones',None)
                                     vendor=guess_fn(section.text,path=str(path) if (len(candidates)==1 or split_batch) else None,page_indexes=section.page_indexes) if callable(guess_fn) else ''
@@ -6119,7 +6206,11 @@ class ReminderApp(tk.Tk):
                                     link_source=source
                                     link_hash=candidate_hash
                                     if split_batch:
-                                        extracted_link=extract_section_pdf_to_import(path,IMPORT_DIR,section.page_indexes,invoice_no=str(duplicate['invoice_no'] or ''))
+                                        extracted_link=_extract_or_replace_import_section(
+                                            path,IMPORT_DIR,section.page_indexes,
+                                            invoice_no=str(duplicate['invoice_no'] or ''),
+                                            existing_source=str(duplicate['source'] or ''),
+                                        )
                                         if extracted_link is not None:
                                             if callable(mark_handled):mark_handled(extracted_link)
                                             link_source=str(extracted_link.resolve())
@@ -6141,8 +6232,12 @@ class ReminderApp(tk.Tk):
                                     paid_skipped+=1
                                     continue
                                 if post_zone_dup:
-                                    if has_ledger_import_basis(post_zone_dup) and str(post_zone_dup['source_hash'] or '').strip()!=candidate_hash:
-                                        extracted_link=extract_section_pdf_to_import(path,IMPORT_DIR,section.page_indexes,invoice_no=str(post_zone_dup['invoice_no'] or ''))
+                                    if has_ledger_import_basis(post_zone_dup):
+                                        extracted_link=_extract_or_replace_import_section(
+                                            path,IMPORT_DIR,section.page_indexes,
+                                            invoice_no=str(post_zone_dup['invoice_no'] or ''),
+                                            existing_source=str(post_zone_dup['source'] or ''),
+                                        )
                                         link_source=source
                                         link_hash=candidate_hash
                                         if extracted_link is not None:
@@ -6361,8 +6456,7 @@ class ReminderApp(tk.Tk):
                         return
                     continue
                 if duplicate:
-                    saved_dup_hash=str(duplicate['source_hash'] or '').strip()
-                    if has_ledger_import_basis(duplicate) and saved_dup_hash!=candidate_hash:
+                    if has_ledger_import_basis(duplicate):
                         guess_fn=getattr(self,'guess_supplier',None)
                         zones_fn=getattr(self,'apply_saved_zones',None)
                         vendor=str(duplicate['template_vendor'] or '').strip()

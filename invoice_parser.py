@@ -64,8 +64,80 @@ def _amount_from_fragment(fragment, *, last=False):
     return normalize_amount(match.group(0))
 
 
+_SUMMARY_BOX_TOKEN_RE = re.compile(
+    r"\b(?:summa\s+exkl\.?\s*moms|exkl\.?\s*moms|exklusive\s+moms|netto(?:belopp)?|"
+    r"subtotalt?|delsumma|excl\.?\s*vat|net\s+total|net\s+amount|\bnet\b|"
+    r"momsbelopp|moms(?:\s*\(?\s*\d{1,2}(?:[.,]\d+)?\s*%\s*\)?)?|"
+    r"vat(?:\s*\(?\s*\d{1,2}(?:[.,]\d+)?\s*%\s*\)?)?|"
+    r"[öo]resavrundning|avrundning|rounding|frakt|expeditionsavgift|fakturaavgift)\b",
+    re.I,
+)
+_SUMMARY_HEADER_LINE_ONLY_RE = re.compile(
+    r"^(?:summa\s+exkl\.?\s*moms|exkl\.?\s*moms|exklusive\s+moms|netto(?:belopp)?|"
+    r"subtotalt?|delsumma|excl\.?\s*vat|net(?:\s+total|\s+amount)?|"
+    r"momsbelopp|moms(?:\s*\(?\s*\d{1,2}(?:[.,]\d+)?\s*%\s*\)?)?(?:\s*kr|\s*sek)?|"
+    r"vat(?:\s*\(?\s*\d{1,2}(?:[.,]\d+)?\s*%\s*\)?)?|"
+    r"[öo]resavrundning|avrundning|rounding|frakt|expeditionsavgift|fakturaavgift)\s*:?$",
+    re.I,
+)
+
+
+def _summary_column_offset(text, label):
+    """Return how many preceding summary-box headers share the row with ``label``."""
+    line_end = text.find("\n", label.end())
+    same_line_after = (text[label.end():] if line_end < 0 else text[label.end():line_end]).strip()
+    if list(_amounts_in_line(same_line_after)):
+        return 0
+    line_start = text.rfind("\n", 0, label.start()) + 1
+    same_line_before = text[line_start:label.start()].strip()
+    if same_line_before:
+        if list(_amounts_in_line(same_line_before)):
+            return 0
+        return len(_SUMMARY_BOX_TOKEN_RE.findall(same_line_before))
+    prior_lines = [ln.strip() for ln in text[:line_start].splitlines() if ln.strip()]
+    count = 0
+    for prev in reversed(prior_lines[-6:]):
+        if list(_amounts_in_line(prev)):
+            break
+        if _SUMMARY_HEADER_LINE_ONLY_RE.fullmatch(prev):
+            count += 1
+        else:
+            break
+    return count
+
+
+def _amount_at_column_offset(tail, col_offset):
+    """Pick the ``col_offset``-th amount from consecutive amount-only summary lines."""
+    collected = []
+    for raw_line in tail.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if re.fullmatch(r"[:#-]?\s*(?:sek|eur|usd|gbp|nok|dkk|chf|kr)\b\.?", line, re.I):
+            continue
+        if AMOUNT_SKIP_PATTERN.search(line) or AMOUNT_STOP_PATTERN.search(line):
+            break
+        matches = list(_amounts_in_line(line))
+        if not matches:
+            break
+        # Reject lines that have long prose words unrelated to currency/amounts
+        stripped_nums = AMOUNT_NUMBER_PATTERN.sub("", line)
+        stripped_nums = re.sub(r"\b(?:sek|eur|usd|gbp|nok|dkk|chf|kr)\b|[€£:.,+-]", " ", stripped_nums, flags=re.I).strip()
+        if stripped_nums:
+            break
+        collected.extend(matches)
+        if len(collected) > col_offset:
+            return normalize_amount(collected[col_offset].group(0))
+    return None
+
+
 def _amount_near_label(text, label):
     tail = text[label.end():label.end() + 700]
+    col_offset = _summary_column_offset(text, label)
+    if col_offset > 0:
+        indexed = _amount_at_column_offset(tail, col_offset)
+        if indexed is not None:
+            return indexed
     amount = _amount_from_fragment(tail)
     if amount is not None:
         return amount
@@ -157,30 +229,102 @@ def _spatial_header_columns_from_fitz_page(page):
     )
 
 
+def _spatial_payable_amount_from_fitz_page(page):
+    """Find the numeric amount aligned with the 'Att betala' box using X/Y coordinates."""
+    if not hasattr(page, 'rect') or not hasattr(page, 'get_text'):
+        return None
+    data = page.get_text('dict')
+    if not isinstance(data, dict):
+        return None
+    all_lines = []
+    for block in data.get('blocks', ()):
+        if block.get('type', 0) != 0:
+            continue
+        for line in block.get('lines', ()):
+            bbox = line.get('bbox') or (0.0, 0.0, 0.0, 0.0)
+            text = re.sub(
+                r'\s+', ' ',
+                ''.join(span.get('text', '') for span in line.get('spans', ())),
+            ).strip()
+            if text:
+                all_lines.append((float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]), text))
+    label_candidates = []
+    for x0, y0, x1, y1, text in all_lines:
+        m = re.search(PAYABLE_LABEL_PATTERN, text, re.I)
+        if m:
+            label_candidates.append((y0, x0, x1, y1, text, m))
+    if not label_candidates:
+        return None
+    # Prefer the lowest payable box on the page (Fortnox summary bar is at the bottom).
+    label_candidates.sort(key=lambda item: (item[0], item[1]))
+    ly0, lx0, lx1, ly1, ltext, lmatch = label_candidates[-1]
+    after_label = ltext[lmatch.end():].strip()
+    if after_label and not AMOUNT_STOP_PATTERN.search(after_label):
+        inline_matches = list(_amounts_in_line(after_label))
+        if inline_matches:
+            return normalize_amount(inline_matches[0].group(0))
+    same_row = []
+    below_box = []
+    for nx0, ny0, nx1, ny1, ntext in all_lines:
+        if ntext == ltext and abs(nx0 - lx0) < 1 and abs(ny0 - ly0) < 1:
+            continue
+        if AMOUNT_SKIP_PATTERN.search(ntext) or AMOUNT_STOP_PATTERN.search(ntext):
+            continue
+        matches = list(_amounts_in_line(ntext))
+        if not matches:
+            continue
+        if abs(ny0 - ly0) <= 8.0 and nx0 >= lx1 - 8.0:
+            same_row.append((nx0 - lx1, normalize_amount(matches[0].group(0))))
+        elif 0.0 < (ny0 - ly0) <= 55.0 and nx1 >= lx0 - 20.0 and nx0 <= lx1 + 75.0:
+            l_cx = (lx0 + lx1) * 0.5
+            n_cx = (nx0 + nx1) * 0.5
+            below_box.append((ny0 - ly0 + abs(n_cx - l_cx) * 0.25, normalize_amount(matches[-1].group(0))))
+    if same_row:
+        same_row.sort(key=lambda item: item[0])
+        return same_row[0][1]
+    if below_box:
+        below_box.sort(key=lambda item: item[0])
+        return below_box[0][1]
+    return None
+
+
 def _extract_single_fitz_page(page):
     raw_text = page.get_text('text')
     if not raw_text.strip():
         return raw_text
     need_customer = not extract_customer_name(raw_text)
     need_terms = not extract_payment_terms(raw_text)
-    if not need_customer and not need_terms:
+    cleaned_raw = '\n'.join(re.sub(r'\s+', ' ', ln).strip() for ln in raw_text.splitlines())
+    raw_payable_labels = list(re.finditer(PAYABLE_LABEL_PATTERN, cleaned_raw, re.I))
+    raw_amount = _payable_amount(cleaned_raw, raw_payable_labels)
+    spatial_amount = _spatial_payable_amount_from_fitz_page(page)
+    need_amount = (
+        spatial_amount is not None
+        and spatial_amount > 0
+        and (raw_amount is None or abs(float(raw_amount) - float(spatial_amount)) > 0.005)
+    )
+    if not need_customer and not need_terms and not need_amount:
         return raw_text
-    right_col, left_col = _spatial_header_columns_from_fitz_page(page)
     extras = []
-    if need_customer:
-        for col_text in (right_col, left_col):
-            if col_text:
-                spatial_customer = extract_customer_name(col_text)
-                if spatial_customer:
-                    extras.append(f'Fakturaadress: {spatial_customer}')
-                    break
-    if need_terms:
-        for col_text in (left_col, right_col):
-            if col_text:
-                spatial_terms = extract_payment_terms(col_text)
-                if spatial_terms:
-                    extras.append(f'Betalningsvillkor: {spatial_terms}')
-                    break
+    if need_customer or need_terms:
+        right_col, left_col = _spatial_header_columns_from_fitz_page(page)
+        if need_customer:
+            for col_text in (right_col, left_col):
+                if col_text:
+                    spatial_customer = extract_customer_name(col_text)
+                    if spatial_customer:
+                        extras.append(f'Fakturaadress: {spatial_customer}')
+                        break
+        if need_terms:
+            for col_text in (left_col, right_col):
+                if col_text:
+                    spatial_terms = extract_payment_terms(col_text)
+                    if spatial_terms:
+                        extras.append(f'Betalningsvillkor: {spatial_terms}')
+                        break
+    if need_amount:
+        formatted_amt = f'{spatial_amount:.2f}'.replace('.', ',')
+        extras.append(f'Summa att betala: {formatted_amt}')
     if extras:
         return raw_text.rstrip() + '\n' + '\n'.join(extras) + '\n'
     return raw_text
@@ -377,10 +521,12 @@ NOTE_TABLE_HEADER_PATTERN = re.compile(
     re.I,
 )
 NOTE_BARE_COLUMN_HEADER_PATTERN = re.compile(
-    r'^(?:(?:art\.?\s*nr|artikelnr|artikelnummer|artikel|benämning|beskrivning|'
-    r'artikelbeskrivning|specifikation|levererat\s+antal|levererat|antal|enhet|'
-    r'à[- ]?pris|a[- ]?pris|pris|rabatt|moms|summa|totalt|belopp|radbelopp|'
-    r'qty|quantity|unit(?:\s+price)?|price|discount|vat|total|amount|%|kr|sek|eur|usd)\s*)+$',
+    r'^(?:(?:art\.?\s*nr\.?|artikelnr|artikelnummer|artikel|kod|benämning|beskrivning|'
+    r'artikelbeskrivning|specifikation|text|lev\.?\s*ant\.?|levererat\s+antal|levererat|'
+    r'best\.?\s*ant\.?|antal|ant\.?|enh\.?|enhet|'
+    r'[àaá][- ]?pris|styckpris|st[- ]?pris|pris(?:/enh\.?)?|rab\.?|rabatt|'
+    r'moms|momssats|summa|totalt|belopp|radbelopp|radtotal|exkl\.?\s*moms|inkl\.?\s*moms|'
+    r'qty|quantity|delivered|unit(?:\s+price)?|price|discount|vat|tax|total|amount|%|kr|sek|eur|usd)\s*)+$',
     re.I,
 )
 NOTE_STOP_PATTERN = re.compile(
@@ -394,6 +540,11 @@ NOTE_STOP_PATTERN = re.compile(
 NOTE_NUMBER_ONLY_PATTERN = re.compile(
     r'^[\d\s.,:;+%()/\\-]+(?:\s*(?:kr|sek|eur|usd|gbp|nok|dkk|jpy|chf|pln|czk|huf|st|stk|tim|timmar|pcs))?$', re.I
 )
+NOTE_BARE_UNIT_PATTERN = re.compile(
+    r'^(?:st\.?|stk\.?|styck(?:en)?|tim\.?|timme|timmar|h|pkt\.?|paket|kolli|f[öo]rp\.?|'
+    r'pcs\.?|hrs\.?|km|mil|dgr\.?|m[åa]n\.?)$',
+    re.I,
+)
 
 
 def _clean_note_line(line):
@@ -402,9 +553,20 @@ def _clean_note_line(line):
         r'^(?:fakturatext|avser|specifikation|description|service)\b\s*[:#-]?\s*',
         '', line, flags=re.I
     ).strip()
-    if not line or NOTE_NUMBER_ONLY_PATTERN.fullmatch(line) or NOTE_TABLE_HEADER_PATTERN.fullmatch(line):
+    if (
+        not line
+        or NOTE_NUMBER_ONLY_PATTERN.fullmatch(line)
+        or NOTE_BARE_UNIT_PATTERN.fullmatch(line)
+        or NOTE_TABLE_HEADER_PATTERN.fullmatch(line)
+    ):
         return ''
-    if re.match(r'^(?:artikel(?:nr|nummer)?|art\.?\s*nr|levererat\s+antal|antal|enhet|à[- ]?pris|a[- ]?pris|pris|rabatt|summa)\b', line, re.I):
+    if not re.search(r'\d', line) and NOTE_BARE_COLUMN_HEADER_PATTERN.fullmatch(line):
+        return ''
+    if re.match(
+        r'^(?:artikel(?:nr|nummer)?|art\.?\s*nr\.?|lev\.?\s*ant\.?|levererat\s+antal|'
+        r'best\.?\s*ant\.?|antal|enh\.?|enhet|[àaá][- ]?pris|styckpris|pris|rab\.?|rabatt|summa)\b',
+        line, re.I,
+    ):
         return ''
 
     # In a table row, retain the wording before the first decimal/currency amount.
@@ -463,7 +625,7 @@ def _description_from_lines(lines):
 
     for index, line in enumerate(lines):
         if NOTE_TABLE_HEADER_PATTERN.search(line):
-            note = clean_invoice_note('\n'.join(lines[index + 1:index + 24]))
+            note = clean_invoice_note('\n'.join(lines[index + 1:index + 32]))
             if note:
                 return note
 
